@@ -16,7 +16,7 @@ Everything model-facing happens outside this app. The app never calls an LLM. Da
 4. **Stack: market-deck's proven architecture.** FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL backend; Svelte 5 + Vite + TypeScript SPA built to `frontend/dist/` and served by the backend with SPA fallback; single Nixpacks container deployed via Coolify with a separate Coolify PostgreSQL resource. Not Streamlit (wrong tool for a public product with validated entry flows). Not SvelteKit (SSR buys nothing; the backend must be Python to reuse market-deck's Yahoo service).
 5. **No stored NAVs, no background jobs.** Portfolio value series are recomputed deterministically on request from immutable allocations + cached price/FX series. Adjusted closes change retroactively (dividends/splits), so recomputation is *more* correct than snapshotting. A Postgres price cache (per ticker, TTL ~1h during market hours) keeps it fast.
 6. **Base currency is USD; comparisons are total-return where possible.** Equities/ETFs use Yahoo **adjusted closes** (dividends included) for positions and for SPY.
-7. **Instrument scope: long/short equities & ETFs, indices, futures, multi-currency cash.** No options in v1. Manual entry only — no response parsing.
+7. **Instrument scope: long/short equities & ETFs (index exposure via ETFs like SPY/QQQ), futures with IBKR-style daily cash settlement, multi-currency cash.** Raw indices (`^GSPC`) are not investable and are rejected. No options in v1. Manual entry only — no response parsing.
 
 ## Experiment-integrity rules (the heart of the app)
 
@@ -28,7 +28,7 @@ These rules exist so results can be trusted. They are enforced in code, not by c
 - **Provenance.** Every allocation can store the raw model response verbatim (optional textarea) alongside the entered positions.
 - **Benchmarks are computed with the identical engine.** SPY (primary) and RSP (equal-weight S&P, secondary) are tracked as system portfolios: 100% single-ETF allocations created at the same inception dates, valued by the same code path — with zero cost, since holding SPY really is near-free.
 - **Blow-ups are permanent.** Shorts and futures make losses beyond −100% possible. If NAV closes at ≤ 0 on any day, the portfolio is frozen at −100% from that date and shown as **BUSTED** on the leaderboard forever. An arena needs visible corpses.
-- **Honesty labels.** The leaderboard shows age since inception and marks portfolios younger than 6 months as "too early to judge". Portfolios holding futures or raw indices carry data-quality labels (see instrument caveats). Sample size is displayed, never hidden.
+- **Honesty labels.** The leaderboard shows age since inception and marks portfolios younger than 6 months as "too early to judge". Portfolios holding futures carry a data-quality label (see instrument caveats). Sample size is displayed, never hidden.
 
 ## Instruments
 
@@ -37,15 +37,17 @@ Instrument type is **derived from Yahoo symbol syntax** — no dropdown needed:
 | Syntax                | Type     | Funding  | Return basis | Caveat label |
 | --------------------- | -------- | -------- | ------------ | ------------ |
 | `AAPL`, `SPY`, `BRK-B`| equity   | funded   | adjusted close (total return) | — |
-| `^GSPC`, `^NDX`       | index    | funded   | price return (indices pay no dividends) | "price-return only" |
-| `ES=F`, `GC=F`, `ZN=F`| future   | **unfunded overlay** | continuous-contract price return | "Yahoo continuous contracts have roll artifacts" |
+| `ES=F`, `GC=F`, `ZN=F`| future   | margined, settled daily to USD cash | continuous-contract price | "Yahoo continuous contracts have roll artifacts" |
 | `CASH:USD`, `CASH:EUR`| cash     | funded   | spot FX vs USD (via `EURUSD=X` etc.), 0% interest | — |
 
-- **Weight conventions.** Funded weights (equity + index + cash) must sum to **exactly 100**, with shorts as negative weights — e.g. a 130/30 book is +130 long, −30 short, 0 cash; short proceeds implicitly fund the longs. Futures weights are notional exposure as % of NAV and sit *on top of* the 100 (a future consumes no cash — that's what a future is). This models leverage naturally without margin machinery.
+Raw index symbols (`^GSPC`, `^NDX`) are rejected at validation with a hint: index exposure is expressed through investable ETFs (SPY, QQQ, IWM, …), which are ordinary equity positions with full total return. FX pair symbols (`=X`) are rejected: currency exposure is expressed via `CASH:CCY`.
+
+- **Weight conventions.** Funded weights (equity + cash) must sum to **exactly 100**, with shorts as negative weights — e.g. a 130/30 book is +130 long, −30 short, 0 cash; short proceeds implicitly fund the longs. Futures weights are **notional exposure as % of NAV** and sit outside the 100: like at a real broker, opening a future consumes no cash — it just requires margin headroom and thereafter settles P&L into cash daily.
+- **Futures, IBKR-style but simple.** A futures position is a fixed number of (fractional) contract units between rebalances. Each trading day, the day's price change × units is credited or debited to the portfolio's USD cash balance (variation margin), exactly as a real futures account experiences it. Opening or increasing a position requires initial margin: total cash weight after entry ≥ `margin_rate` × Σ|futures notional weights| (default 10%, configurable — roughly what IBKR asks for ES). A long losing streak therefore visibly drains cash — USD cash may go negative (implicit 0%-interest borrow) on the way to the blow-up rule. No forced liquidation before NAV ≤ 0 (documented simplification).
 - **Gross exposure cap.** `Σ|non-cash funded weights| + Σ|futures weights|` ≤ configurable limit (default 300%). Validation rejects allocations above it.
-- **Shorts** are allowed on equities, ETFs, indices, and futures. `CASH:*` weights must be ≥ 0.
-- **Multi-currency cash**: the weight is set in USD terms at the effective close, converted to a fixed foreign-currency amount at that day's spot rate, then floats with FX until the next rebalance. FX rates are Yahoo tickers (`EURUSD=X`) and flow through the same price cache.
-- **Known simplifications (documented in README and on the About page):** no borrow fees or short rebate, no interest on cash in any currency, no futures financing or roll-cost modeling, indices are price-return. These mostly flatter the contestants slightly; the benchmark is unaffected.
+- **Shorts** are allowed on equities, ETFs, and futures. `CASH:*` weights must be ≥ 0.
+- **Multi-currency cash**: the weight is set in USD terms at the effective close, converted to a fixed foreign-currency amount at that day's spot rate, then floats with FX until the next rebalance. FX rates are Yahoo tickers (`EURUSD=X`) and flow through the same price cache. Futures settlement flows into USD cash only (a `CASH:USD` bucket is implicit in every portfolio holding futures).
+- **Known simplifications (documented in README and on the About page):** no borrow fees or short rebate, no interest on cash in any currency, fractional contracts (no integer-contract rounding), no explicit roll simulation (Yahoo continuous-contract series absorbs rolls, with artifacts — hence the caveat label), no forced liquidation / margin calls before the blow-up rule. These mostly flatter the contestants slightly; the benchmark is unaffected.
 
 ## Domain model
 
@@ -69,10 +71,10 @@ allocations   one row per weekly decision (initial or rebalance), append-only
 
 positions     entered holdings of an allocation
   id, allocation_id → allocations, symbol (Yahoo symbol or CASH:CCY, uppercase),
-  instrument (equity | index | future | cash — derived from symbol, stored),
+  instrument (equity | future | cash — derived from symbol, stored),
   weight_pct (numeric(9,4), negative = short)
 
-price_cache   daily series per Yahoo symbol — equities (adjusted close), indices,
+price_cache   daily series per Yahoo symbol — equities (adjusted close),
               futures, FX pairs all share this table
   symbol, series JSONB [{date, close}], fetched_at
 
@@ -85,10 +87,10 @@ Seeding: create benchmark portfolios `SPY Buy & Hold` and `RSP Buy & Hold` (`is_
 
 Pure functions, fully unit-tested; this is the correctness core of the whole app.
 
-- **State per position:** funded equities/indices hold fractional shares (negative for shorts); cash positions hold fixed foreign-currency amounts; futures hold contract-units `u = NAV · w/100 / price` fixed between rebalances (negative for shorts).
-- **Initial allocation** at the effective close, `NAV₀ = 100` (all series base-100): equities/indices `shares = NAV₀ · w/100 / price`; `CASH:CCY` converts its USD value at spot; futures set units as above with no cash outlay. Entry cost `= NAV₀ · (Σ|non-cash funded w| + Σ|futures w|)/100 · bps/10⁴`, deducted from cash (most-positive cash bucket; USD cash may go negative as an implicit 0%-interest borrow).
-- **Daily NAV:** `NAV(d) = Σ shares·price(d) + Σ cash_ccy·fx(d) + Σ futures_units·(price(d) − price(entry))`. Weights drift; drift is real and intended.
-- **Rebalance** at the new allocation's effective close: compute drifted weights of the funded book and futures overlay, turnover `= ½ Σ|w_new − w_drift|` over funded non-cash positions + `½ Σ|w_new − w_drift|` over futures, cost `= NAV · 2 · turnover · bps/10⁴`, then reset all state from `w_new` on post-cost NAV.
+- **State per position:** equities hold fractional shares (negative for shorts); cash positions hold fixed foreign-currency amounts; futures hold fractional contract-units `u = NAV · w/100 / price` fixed between rebalances (negative for shorts), plus an implicit `CASH:USD` settlement bucket.
+- **Initial allocation** at the effective close, `NAV₀ = 100` (all series base-100): equities `shares = NAV₀ · w/100 / price`; `CASH:CCY` converts its USD value at spot; futures set units as above with no cash outlay (margin-rate validation already passed at entry). Entry cost `= NAV₀ · (Σ|non-cash funded w| + Σ|futures w|)/100 · bps/10⁴`, deducted from USD cash (may go negative as an implicit 0%-interest borrow).
+- **Daily mark:** for each trading day, futures variation margin `Σ units · (price(d) − price(d−1))` is added to the USD cash bucket, then `NAV(d) = Σ shares·price(d) + Σ cash_ccy·fx(d)`. Futures P&L accumulates in cash exactly as in a real futures account. Weights drift; drift is real and intended.
+- **Rebalance** at the new allocation's effective close: compute drifted weights of the funded book (futures P&L already sits in USD cash; futures exposure weight = current notional / NAV), turnover `= ½ Σ|w_new − w_drift|` over funded non-cash positions + `½ Σ|w_new − w_drift|` over futures notionals, cost `= NAV · 2 · turnover · bps/10⁴`, then reset all state from `w_new` on post-cost NAV.
 - **Blow-up:** first close with `NAV ≤ 0` freezes the series at 0 (−100%) permanently; portfolio flagged `busted`.
 - **Missing prices:** calendar = days SPY has a close. A symbol missing a price on a trading day carries its last known value and the portfolio gets a `stale_data` flag listing symbols and days. A symbol that stops returning data entirely (delisting) stays frozen at last price with a prominent warning; the operator resolves it via a corrective rebalance. No silent guessing.
 - **Metrics** (from the base-100 series): inception-to-date return, return vs SPY over the identical window, annualized volatility, max drawdown, Sharpe (rf = 0, labeled as such), cumulative cost drag, cumulative turnover, current gross/net exposure, age in days; 1M/3M/6M/1Y trailing returns when old enough.
@@ -97,16 +99,17 @@ Determinism requirement: same allocations + same cached series ⇒ identical out
 
 ## Yahoo price service
 
-Port `backend/app/services/yahoo.py` from `~/Projects/market-deck` (direct chart-endpoint fetching with `httpx` in a thread pool — yfinance was dropped there for being slow; see market-deck's `docs/bugs/slow-global-ticker-loading.md`). Strip everything except: chart fetching (`interval=1d`, adjusted closes for equities, plain closes for `^`/`=F`/`=X` symbols, `range` computed from earliest needed date), symbol search/validation, the unresolved-symbol cooldown, and the Postgres price cache with TTL. No fundamentals, no news, no crumb flow.
+Port `backend/app/services/yahoo.py` from `~/Projects/market-deck` (direct chart-endpoint fetching with `httpx` in a thread pool — yfinance was dropped there for being slow; see market-deck's `docs/bugs/slow-global-ticker-loading.md`). Strip everything except: chart fetching (`interval=1d`, adjusted closes for equities, plain closes for `=F`/`=X` symbols, `range` computed from earliest needed date), symbol search/validation, the unresolved-symbol cooldown, and the Postgres price cache with TTL. No fundamentals, no news, no crumb flow.
 
 ## Allocation entry (manual, no parsing)
 
 Admin form: a table of rows — symbol + weight — with add/remove/reorder. On symbol blur, the backend validates it (Yahoo lookup) and shows resolved name + derived instrument type inline. Submit-time validation (blocking):
 
-- funded weights sum to exactly 100 (UI shows a live running sum; one-click normalize)
+- funded weights (equity + cash) sum to exactly 100 (UI shows a live running sum; one-click normalize)
 - `CASH:*` weights ≥ 0; currency code must have a Yahoo FX pair (or be USD)
-- no duplicate symbols; every symbol resolves
+- no duplicate symbols; every symbol resolves; `^` index and `=X` FX symbols rejected with hints (use ETFs / `CASH:CCY`)
 - gross exposure within the configured cap
+- futures initial margin: total cash weight ≥ `margin_rate` × Σ|futures weights|
 
 Optional fields: raw model response (provenance textarea), note. A rebalance form pre-fills the previous allocation's *target* weights as the starting point.
 
@@ -143,19 +146,19 @@ Charting: lightweight SVG/canvas line charts, self-written or a tiny dependency 
 
 ## Deployment (Coolify + Nixpacks)
 
-Copy market-deck's pattern verbatim: `nixpacks.toml` (pip install + `cd frontend && npm ci && npm run build`; start = `python -m app.migrate && uvicorn app.main:app`), `.python-version`, `.nvmrc`, `requirements.txt`. Env vars: `DATABASE_URL`, `ARENA_JWT_SECRET`, `ARENA_ADMIN_EMAIL`, `ARENA_ADMIN_PASSWORD`, optional cache TTLs, `ARENA_DEFAULT_COST_BPS` (default 10), `ARENA_GROSS_EXPOSURE_CAP` (default 300). Health check: a public endpoint that touches the DB (e.g. `GET /api/leaderboard`). Single instance assumed (in-memory rate limits), same as market-deck.
+Copy market-deck's pattern verbatim: `nixpacks.toml` (pip install + `cd frontend && npm ci && npm run build`; start = `python -m app.migrate && uvicorn app.main:app`), `.python-version`, `.nvmrc`, `requirements.txt`. Env vars: `DATABASE_URL`, `ARENA_JWT_SECRET`, `ARENA_ADMIN_EMAIL`, `ARENA_ADMIN_PASSWORD`, optional cache TTLs, `ARENA_DEFAULT_COST_BPS` (default 10), `ARENA_GROSS_EXPOSURE_CAP` (default 300), `ARENA_FUTURES_MARGIN_RATE` (default 0.10). Health check: a public endpoint that touches the DB (e.g. `GET /api/leaderboard`). Single instance assumed (in-memory rate limits), same as market-deck.
 
 ## Testing
 
-- **Valuation engine (highest priority):** pytest with synthetic price/FX fixtures — initial allocation math; drift; rebalance turnover + two-sided costs; shorts (negative shares, funding convention, losses beyond −100%); blow-up freeze; futures overlays (no cash outlay, leveraged P&L, units fixed between rebalances); multi-currency cash (FX drift, conversion at effective close); next-close effectiveness (weekend/holiday entry); missing-price carry-forward and flags; base-100 SPY comparison over identical windows; determinism.
-- **Validation:** funded-sum-to-100 rule, gross exposure cap, negative cash rejection, symbol-type derivation from syntax.
+- **Valuation engine (highest priority):** pytest with synthetic price/FX fixtures — initial allocation math; drift; rebalance turnover + two-sided costs; shorts (negative shares, funding convention, losses beyond −100%); blow-up freeze; futures (no cash outlay at entry, daily variation-margin settlement into USD cash, leveraged P&L, units fixed between rebalances, margin-rate validation); multi-currency cash (FX drift, conversion at effective close); next-close effectiveness (weekend/holiday entry); missing-price carry-forward and flags; base-100 SPY comparison over identical windows; determinism.
+- **Validation:** funded-sum-to-100 rule, gross exposure cap, futures margin rule, negative cash rejection, `^`/`=X` symbol rejection, symbol-type derivation from syntax.
 - **API:** auth boundaries (public reads open, writes 401/403), allocation lock enforcement (edit after effective close → 403), prompt immutability (no update route).
 - **Frontend:** `svelte-check` + production build.
 
 ## Build order
 
 1. **Scaffold** — repo layout mirroring market-deck (`backend/` package, `frontend/` Vite app, Alembic baseline migration with full schema, auth port, settings).
-2. **Yahoo service + price cache** — port and strip from market-deck; symbol validation endpoint (incl. FX pairs, indices, futures).
+2. **Yahoo service + price cache** — port and strip from market-deck; symbol validation endpoint (incl. FX pairs and futures; rejects `^` indices and raw `=X` symbols).
 3. **Valuation engine + tests** — pure functions, fixtures first. *Nothing else matters if this is wrong.*
 4. **API routes** — public reads, admin writes, validation rules, lock enforcement, benchmark auto-seeding.
 5. **Frontend** — leaderboard → portfolio detail → admin entry flow → prompt/agent pages → compare chart.
