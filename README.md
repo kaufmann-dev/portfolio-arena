@@ -26,7 +26,7 @@ automation, not advice. The app never calls an LLM.
   close.
 - **Positions lock at the effective close.** Until then there is a typo-correction window
   (edit/delete allowed); afterwards positions and effective date are frozen — only prompt
-  reference, note, and raw response stay editable.
+  reference and note stay editable.
 - **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system
   portfolios whose single 100% allocation is auto-aligned to the earliest real portfolio
   inception, valued by the same code path at zero cost.

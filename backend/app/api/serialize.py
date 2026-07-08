@@ -48,7 +48,6 @@ def serialize_allocation(
         "applied_date": applied.applied_date if applied else None,
         "locked": is_locked(allocation.effective_date, now),
         "note": allocation.note,
-        "raw_response": allocation.raw_response,
         "turnover_pct": applied.turnover_pct if applied else None,
         "cost": applied.cost if applied else None,
         "positions": allocation_positions(allocation, admin),

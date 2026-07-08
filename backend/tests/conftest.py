@@ -217,21 +217,28 @@ def sample_agent(client, admin_headers) -> dict:
 
 @pytest.fixture
 def sample_portfolio(client, admin_headers, sample_agent, sample_prompt) -> dict:
-    response = client.post(
+    """A portfolio plus its first allocation. Portfolio creation and the first
+    allocation are separate calls (the allocation is entered from the Allocations
+    tab); the returned dict keeps an ``allocation`` key for dependent tests."""
+    created = client.post(
         "/api/portfolios",
+        json={"name": "Claude Weekly", "agent_id": sample_agent["id"]},
+        headers=admin_headers,
+    )
+    assert created.status_code == 201, created.text
+    portfolio = created.json()
+
+    allocation = client.post(
+        f"/api/portfolios/{portfolio['id']}/allocations",
         json={
-            "name": "Claude Weekly",
-            "agent_id": sample_agent["id"],
-            "allocation": {
-                "prompt_id": sample_prompt["id"],
-                "positions": [
-                    {"symbol": "AAPL", "weight_pct": 60},
-                    {"symbol": "CASH:USD", "weight_pct": 40},
-                ],
-                "note": "initial",
-            },
+            "prompt_id": sample_prompt["id"],
+            "positions": [
+                {"symbol": "AAPL", "weight_pct": 60},
+                {"symbol": "CASH:USD", "weight_pct": 40},
+            ],
+            "note": "initial",
         },
         headers=admin_headers,
     )
-    assert response.status_code == 201, response.text
-    return response.json()
+    assert allocation.status_code == 201, allocation.text
+    return {**portfolio, "allocation": allocation.json()}

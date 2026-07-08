@@ -50,7 +50,6 @@ class PositionIn(BaseModel):
 class AllocationCreate(BaseModel):
     prompt_id: int
     positions: list[PositionIn] = Field(min_length=1)
-    raw_response: str = ""
     note: str = ""
 
 
@@ -59,7 +58,6 @@ class AllocationUpdate(BaseModel):
 
     prompt_id: int | None = None
     positions: list[PositionIn] | None = Field(default=None, min_length=1)
-    raw_response: str | None = None
     note: str | None = None
 
 
@@ -68,7 +66,6 @@ class PortfolioCreate(BaseModel):
     slug: str | None = None
     agent_id: int
     cost_bps: int | None = Field(default=None, ge=0)
-    allocation: AllocationCreate
 
 
 class PortfolioPatch(BaseModel):

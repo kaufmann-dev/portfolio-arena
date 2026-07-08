@@ -110,8 +110,8 @@ class Allocation(Base):
     """One row per decision (initial or rebalance).
 
     Locked (= effective_date's close has passed) is derived, never stored;
-    once locked, positions and effective_date are frozen — prompt_id, note,
-    and raw_response remain editable.
+    once locked, positions and effective_date are frozen — prompt_id and note
+    remain editable.
     """
 
     __tablename__ = "allocations"
@@ -124,7 +124,6 @@ class Allocation(Base):
     prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
-    raw_response: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
