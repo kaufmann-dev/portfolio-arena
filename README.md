@@ -1,0 +1,108 @@
+# Portfolio Arena
+
+A self-hosted web app that runs a long-term experiment: **can LLMs pick portfolios that beat SPY?**
+
+On a recurring cadence the operator prompts AI agents (Claude, Codex, Gemini, …) with
+portfolio-management prompts, then enters each agent's proposed allocation here by hand. The app
+simulates it as a paper portfolio from Yahoo Finance data and tracks it live against SPY on a
+public leaderboard. It is an *arena*: honest, deterministic measurement — not trading, not
+automation, not advice. The app never calls an LLM.
+
+## Architecture
+
+- **Backend** — FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (`backend/`). Serves the built SPA
+  with fallback routing.
+- **Frontend** — Svelte 5 + Vite + TypeScript SPA (`frontend/`), built to `frontend/dist/`.
+- **Prices** — Yahoo Finance chart endpoint (daily adjusted closes; plain closes for FX), fetched
+  in parallel with httpx and cached in Postgres with a ~1h TTL.
+- **No stored NAVs, no background jobs.** Every NAV series is recomputed on request from the
+  entered allocations + cached price series. Adjusted closes change retroactively
+  (dividends/splits), so recomputation is *more* correct than snapshotting.
+
+## Experiment-integrity rules (enforced in code)
+
+- **No backdating / no lookahead.** An allocation entered at time T takes effect at the first
+  market close strictly after T (early closes honored). Entered Saturday → effective Monday's
+  close.
+- **Positions lock at the effective close.** Until then there is a typo-correction window
+  (edit/delete allowed); afterwards positions and effective date are frozen — only prompt
+  reference, note, and raw response stay editable.
+- **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system
+  portfolios whose single 100% allocation is auto-aligned to the earliest real portfolio
+  inception, valued by the same code path at zero cost.
+- **Costs on turnover.** Every trade pays a flat fee (default 10 bps of traded notional, frozen
+  per portfolio at creation). Initial deployment pays one side; rebalances pay both sides.
+- **Provenance.** Each allocation can store the raw model response verbatim and references the
+  prompt that produced it (that is also the regime-switching mechanism — any rebalance may attach
+  a different prompt).
+- **Honesty labels.** Portfolios younger than 6 months are badged "too early to judge"; stale or
+  frozen (possibly delisted) price data is flagged, never guessed.
+
+## Instruments
+
+Long-only equities & ETFs plus multi-currency cash; weights ≥ 0 and sum to exactly 100.
+
+| Syntax                 | Type   | Return basis                                  |
+| ---------------------- | ------ | --------------------------------------------- |
+| `AAPL`, `SPY`, `BRK-B` | equity | adjusted close (total return)                 |
+| `CASH:USD`, `CASH:EUR` | cash   | spot FX vs USD (via `EURUSD=X`), 0% interest  |
+
+Rejected at validation with hints: raw indices (`^GSPC` → use SPY/QQQ/IWM), FX pairs (`=X` →
+use `CASH:CCY`), futures (`=F` → use ETF equivalents such as SSO/GLD/TLT; Yahoo continuous
+contracts have roll artifacts that would corrupt long-horizon measurement).
+
+**Known simplification:** cash earns no interest in any currency. This slightly penalizes
+cash-heavy contestants; the benchmark is unaffected.
+
+## Development
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+
+# Backend (needs a PostgreSQL, e.g.:
+#   podman run -d --name arena-pg -e POSTGRES_PASSWORD=arena -e POSTGRES_DB=arena \
+#     -p 5432:5432 postgres:16-alpine)
+export DATABASE_URL=postgresql://postgres:arena@localhost:5432/arena
+export ARENA_JWT_SECRET=dev-secret ARENA_ADMIN_EMAIL=admin@example.com ARENA_ADMIN_PASSWORD=dev-password
+cd backend && ../.venv/bin/uvicorn app.main:app --reload
+
+# Frontend dev server (proxies /api to :8000)
+cd frontend && npm install && npm run dev
+```
+
+### Tests
+
+```sh
+cd backend && ../.venv/bin/python -m pytest        # valuation engine, calendar, API
+cd frontend && npm run check && npm run build      # svelte-check + production build
+```
+
+API tests use [testcontainers](https://testcontainers.com/) and start a throwaway Postgres via
+the podman user socket (`systemctl --user start podman.socket`), or set `TEST_DATABASE_URL` to
+reuse an existing database. Yahoo is stubbed in tests; nothing hits the network.
+
+## Deployment (Coolify + Nixpacks)
+
+Single Nixpacks container (`nixpacks.toml`): pip install + frontend build; start runs Alembic
+migrations then uvicorn, which serves both `/api` and the SPA. Attach a separate Coolify
+PostgreSQL resource. Single instance assumed (in-memory rate limits).
+
+Environment variables:
+
+| Variable                        | Required | Default | Purpose                                |
+| ------------------------------- | -------- | ------- | -------------------------------------- |
+| `DATABASE_URL`                  | yes      | —       | PostgreSQL URL (postgres:// accepted)   |
+| `ARENA_JWT_SECRET`              | yes      | —       | JWT signing secret                      |
+| `ARENA_ADMIN_EMAIL`             | yes      | —       | Admin login (seeded on first start)     |
+| `ARENA_ADMIN_PASSWORD`          | yes      | —       | Admin password (seeded on first start)  |
+| `ARENA_DEFAULT_COST_BPS`        | no       | `10`    | Default cost bps for new portfolios     |
+| `ARENA_PRICE_CACHE_TTL_SECONDS` | no       | `3600`  | Price cache TTL                         |
+| `PORT`                          | no       | `8000`  | Listen port                             |
+
+Health check: `GET /api/leaderboard` (touches the DB).
+
+## Non-goals (v1)
+
+No LLM API calls, no automation, no response parsing, no broker integration, no shorts or
+leverage, no options/futures, no intraday prices, no cash interest, no multi-user accounts, no
+notifications, no historical backtesting, no significance testing beyond the age badge.

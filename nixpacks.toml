@@ -1,0 +1,11 @@
+# Polyglot build: Python API (root requirements.txt) that serves a built
+# Vite/Svelte frontend. The Python provider installs requirements.txt; the Node
+# provider (pinned by .nvmrc) provides node/npm for the frontend build below.
+providers = ["python", "node"]
+
+[phases.build]
+cmds = ["cd frontend && npm ci && npm run build"]
+
+# Run pending Alembic migrations, then launch the API (which serves frontend/dist).
+[start]
+cmd = "cd backend && python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
