@@ -9,8 +9,8 @@ from ..models import Agent, Portfolio, Prompt
 from ..ratelimit import limiter
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import ensure_benchmark_allocations
+from ..services.serialize import serialize_detail, serialize_summary
 from ..services.valuation import rebase_series
-from .serialize import serialize_detail, serialize_summary
 
 router = APIRouter(prefix="/api")
 

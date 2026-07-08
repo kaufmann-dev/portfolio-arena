@@ -22,10 +22,19 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   no wall-clock reads (callers pass every date), same inputs → identical output. NAVs are
   never stored; every request recomputes from allocations + cached price series. Keep it pure.
 - API routers: `backend/app/api/public.py` (read-only, no auth, rate-limited),
-  `backend/app/api/admin.py` (writes, guarded by `Depends(require_admin)`), `auth.py`.
-  Response shaping is shared in `backend/app/api/serialize.py`.
+  `backend/app/api/admin.py` (writes, guarded by `Depends(require_admin)`), `auth.py`,
+  `keys.py` (API-key management, JWT-only). Response shaping is shared in
+  `backend/app/services/serialize.py`.
+- All write/integrity logic lives once in `backend/app/services/admin_ops.py` (raising
+  `AdminOpError`); the admin router and the MCP tools are thin callers of it. Put new write
+  rules there, not in a router.
 - Admin-only fields (per-position `note`, holding `entry_price`/`current_price`) are gated
-  behind the `admin=True` flag in `serialize.py`. Never expose them from `public.py`.
+  behind the `admin=True` flag in `services/serialize.py`. Never expose them from `public.py`.
+- MCP server: `backend/app/mcp_server/` (FastMCP, mounted at `/mcp` in `main.py`). It exposes
+  the full app surface as tools — everything an admin/visitor can do **except** API-key
+  management — authenticated by an API key (`Authorization: Bearer <key>` or `X-API-Key`, no
+  anonymous access). Tools always serialize with `admin=True` since the endpoint is key-gated.
+  Keys are stored as SHA-256 hashes in the `api_keys` table (`security.py` helpers).
 
 ## Database and Migrations
 

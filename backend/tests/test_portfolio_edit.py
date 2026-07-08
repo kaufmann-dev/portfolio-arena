@@ -29,9 +29,7 @@ class TestCreatePortfolioPrompt:
 
 class TestEditPortfolio:
     def test_patch_updates_name_agent_cost(self, client, admin_headers, sample_portfolio):
-        other = client.post(
-            "/api/agents", json={"name": "GPT-5 (Codex)"}, headers=admin_headers
-        ).json()
+        other = client.post("/api/agents", json={"name": "GPT-5 (Codex)"}, headers=admin_headers).json()
 
         resp = client.patch(
             f"/api/portfolios/{sample_portfolio['id']}",
@@ -90,7 +88,5 @@ class TestEditPortfolio:
 
     def test_patch_benchmark_forbidden(self, client, admin_headers):
         benchmark = next(p for p in client.get("/api/leaderboard").json()["portfolios"] if p["is_benchmark"])
-        resp = client.patch(
-            f"/api/portfolios/{benchmark['id']}", json={"name": "hax"}, headers=admin_headers
-        )
+        resp = client.patch(f"/api/portfolios/{benchmark['id']}", json={"name": "hax"}, headers=admin_headers)
         assert resp.status_code == 403
