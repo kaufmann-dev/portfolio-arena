@@ -123,13 +123,7 @@
     >
       <!-- grid + y labels -->
       {#each yTicks as tick (tick)}
-        <line
-          x1={PAD.left}
-          x2={width - PAD.right}
-          y1={y(tick)}
-          y2={y(tick)}
-          stroke="var(--chart-grid)"
-        />
+        <line x1={PAD.left} x2={width - PAD.right} y1={y(tick)} y2={y(tick)} stroke="var(--chart-grid)" />
         <text x={PAD.left - 8} y={y(tick) + 4} text-anchor="end" class="tick">
           {tick.toFixed(0)}
         </text>

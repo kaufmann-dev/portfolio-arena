@@ -74,8 +74,9 @@
         >
         {#if portfolio.prompt}
           · prompt
-          <a href="/prompt/{portfolio.prompt.slug}" onclick={(e) => link(e, `/prompt/${portfolio.prompt!.slug}`)}
-            >{portfolio.prompt.name}</a
+          <a
+            href="/prompt/{portfolio.prompt.slug}"
+            onclick={(e) => link(e, `/prompt/${portfolio.prompt!.slug}`)}>{portfolio.prompt.name}</a
           >
         {/if}
         · costs {portfolio.cost_bps} bps on turnover
@@ -98,8 +99,8 @@
   {#if portfolio.frozen_symbols.length}
     <div class="error-box">
       <strong>Frozen positions:</strong>
-      {portfolio.frozen_symbols.join(", ")} stopped returning prices (possible delisting). The
-      position is held at its last known price — resolve it with a corrective rebalance.
+      {portfolio.frozen_symbols.join(", ")} stopped returning prices (possible delisting). The position is held
+      at its last known price — resolve it with a corrective rebalance.
     </div>
   {/if}
 

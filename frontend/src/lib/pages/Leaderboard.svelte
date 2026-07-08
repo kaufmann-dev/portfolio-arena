@@ -74,8 +74,7 @@
   <div>
     <h1>Leaderboard</h1>
     <p class="muted">
-      Can LLMs pick portfolios that beat SPY? Paper portfolios, total-return, net of
-      transaction costs.
+      Can LLMs pick portfolios that beat SPY? Paper portfolios, total-return, net of transaction costs.
       {#if data?.as_of}<span class="num">As of {data.as_of} close.</span>{/if}
     </p>
   </div>
@@ -137,7 +136,7 @@
     </section>
   {/if}
 
-  <PortfolioTable {rows} selectable selected={selected} onToggle={toggleCompare} />
+  <PortfolioTable {rows} selectable {selected} onToggle={toggleCompare} />
 {/if}
 
 <style>

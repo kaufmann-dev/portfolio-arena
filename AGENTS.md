@@ -47,8 +47,28 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
 
 - API response types in `frontend/src/lib/api/types.ts` are hand-maintained to mirror the
   backend serializers; update them whenever a serializer's shape changes.
-- Use the `$state`/`$derived`/`$props` runes and the existing `apiJson`/`postJson`/`patchJson`/`del`
-  helpers in `frontend/src/lib/api/client.ts`.
+- Use the existing `apiJson`/`postJson`/`patchJson`/`del` helpers in
+  `frontend/src/lib/api/client.ts`; format with `lib/format.ts` helpers.
+- Format Svelte/TS with Prettier: `cd frontend && npm run format` (check-only: `npm run format:check`).
+- When writing or refactoring `.svelte`/`.svelte.ts` files, use the `svelte-code-writer` and
+  `svelte-core-bestpractices` skills and the `svelte` MCP (`list-sections`, `get-documentation`,
+  and `svelte-autofixer` — run the autofixer until clean before finishing).
+
+### Svelte 5 rune conventions
+
+This is a Svelte 5 runes project. Prefer fine-grained reactivity over effects.
+
+- `$props()` for inputs; `$state` only for values that drive the template/a `$derived`/an effect.
+  Use `$state.raw` for large objects or API responses that are reassigned wholesale, not mutated.
+- `$derived` (or `$derived.by` for multi-line) for anything computed — never an `$effect` that
+  writes derived state.
+- Avoid `$effect`. Reach for it only to sync with a genuinely external, non-Svelte concern
+  (e.g. writing `data-theme` to `document`). React to changes at the event boundary
+  (`onclick`, `onValueChange`) or with getter/setter `bind:value={() => ..., (v) => ...}` instead.
+- Reusable markup: snippets + `{@render ...}`. Keyed `{#each}` with stable ids — never the index.
+- New code only: no `export let`, `$:`, `<slot>`, `<svelte:component>`/`<svelte:self>`,
+  `use:action`, or `on:` event directives. Use `$props`, `$derived`, snippets, `{@render}`,
+  `<Self>` imports, `{@attach}`, and `onclick`-style handlers.
 
 ## Git
 

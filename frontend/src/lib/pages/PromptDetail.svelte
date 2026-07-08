@@ -40,7 +40,8 @@
   </nav>
   <h1>{data.prompt.name}</h1>
   <p class="muted">
-    <span class="num">{data.prompt.slug}</span> · updated <span class="num">{data.prompt.updated_at.slice(0, 10)}</span>
+    <span class="num">{data.prompt.slug}</span> · updated
+    <span class="num">{data.prompt.updated_at.slice(0, 10)}</span>
   </p>
 
   <section class="card prompt-card">

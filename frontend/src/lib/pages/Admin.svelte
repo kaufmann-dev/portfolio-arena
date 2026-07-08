@@ -494,14 +494,10 @@
                     {/if}
                   </td>
                   <td class="right muted">
-                    {allocation.positions
-                      .map((p) => `${p.symbol} ${pctPoints(p.weight_pct, 1)}`)
-                      .join(", ")}
+                    {allocation.positions.map((p) => `${p.symbol} ${pctPoints(p.weight_pct, 1)}`).join(", ")}
                   </td>
                   <td class="right actions">
-                    <button class="btn small" onclick={() => (editingAllocation = allocation)}>
-                      Edit
-                    </button>
+                    <button class="btn small" onclick={() => (editingAllocation = allocation)}> Edit </button>
                     {#if !allocation.locked}
                       <button class="btn small danger" onclick={() => deleteAllocation(allocation)}>
                         Delete
@@ -547,7 +543,9 @@
                   <tr>
                     <td class="num">{holding.symbol}</td>
                     <td class="right num">{holding.entry_price != null ? num(holding.entry_price) : "—"}</td>
-                    <td class="right num">{holding.current_price != null ? num(holding.current_price) : "—"}</td>
+                    <td class="right num"
+                      >{holding.current_price != null ? num(holding.current_price) : "—"}</td
+                    >
                     <td class="right num {signClass(chg)}">{chg != null ? pctPoints(chg, 2) : "—"}</td>
                     <td class="right num">{pctPoints(holding.weight_pct)}</td>
                     <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
@@ -669,7 +667,9 @@
           <div class="manage-row">
             <div>
               <strong>{portfolio.name}</strong>
-              <span class="muted"> · {portfolio.agent.name} · {portfolio.cost_bps} bps · {portfolio.status}</span>
+              <span class="muted">
+                · {portfolio.agent.name} · {portfolio.cost_bps} bps · {portfolio.status}</span
+              >
             </div>
             <div class="row-actions">
               <button
@@ -701,7 +701,12 @@
       <form onsubmit={createAgent}>
         <div class="field">
           <label for="na-name">Name <span class="muted">(model + harness)</span></label>
-          <input id="na-name" type="text" bind:value={newAgentName} placeholder="Claude Opus 4.8 (Claude Code)" />
+          <input
+            id="na-name"
+            type="text"
+            bind:value={newAgentName}
+            placeholder="Claude Opus 4.8 (Claude Code)"
+          />
         </div>
         <div class="field">
           <label for="na-notes">Notes <span class="muted">(optional)</span></label>
