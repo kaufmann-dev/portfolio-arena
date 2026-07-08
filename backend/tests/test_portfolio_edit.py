@@ -18,9 +18,8 @@ class TestEditPortfolio:
         assert body["agent_id"] == other["id"]
         assert body["cost_bps"] == 25
 
-        row = next(
-            p for p in client.get("/api/leaderboard").json()["portfolios"] if p["id"] == sample_portfolio["id"]
-        )
+        rows = client.get("/api/leaderboard").json()["portfolios"]
+        row = next(p for p in rows if p["id"] == sample_portfolio["id"])
         assert row["name"] == "Renamed Weekly"
         assert row["agent"]["id"] == other["id"]
         assert row["cost_bps"] == 25
