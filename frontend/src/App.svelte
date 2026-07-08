@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Landmark, Sun, Moon } from "@lucide/svelte";
+
   import { auth } from "./lib/stores/auth.svelte";
   import { link, router } from "./lib/stores/router.svelte";
   import { theme } from "./lib/stores/theme.svelte";
@@ -17,7 +19,7 @@
 <div class="shell">
   <header class="topbar">
     <a href="/" class="brand" onclick={(e) => link(e, "/")}>
-      <span class="brand-mark" aria-hidden="true">◮</span>
+      <span class="brand-mark" aria-hidden="true"><Landmark size={20} /></span>
       Portfolio Arena
     </a>
     <nav aria-label="Main">
@@ -40,7 +42,11 @@
         onclick={() => theme.toggle()}
         aria-label="Switch to {theme.theme === 'dark' ? 'light' : 'dark'} theme"
       >
-        {theme.theme === "dark" ? "☀ Light" : "☾ Dark"}
+        {#if theme.theme === "dark"}
+          <Sun size={16} aria-hidden="true" /> Light
+        {:else}
+          <Moon size={16} aria-hidden="true" /> Dark
+        {/if}
       </button>
     </div>
   </header>

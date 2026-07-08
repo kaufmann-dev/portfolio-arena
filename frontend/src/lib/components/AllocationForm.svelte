@@ -1,6 +1,7 @@
 <script lang="ts">
   import { apiJson, postJson } from "../api/client";
   import type { PromptOut, ResolvedSymbol } from "../api/types";
+  import { CircleCheck, ChevronUp, ChevronDown, X, Sigma } from "@lucide/svelte";
 
   export interface AllocationPayload {
     prompt_id: number;
@@ -203,7 +204,7 @@
                 {#if row.status === "checking"}
                   <span class="muted">checking…</span>
                 {:else if row.status === "ok" && row.resolved}
-                  <span class="ok">✓ {row.resolved.name} · {row.resolved.instrument}</span>
+                  <span class="ok"><CircleCheck size={14} /> {row.resolved.name} · {row.resolved.instrument}</span>
                 {:else if row.status === "error"}
                   <span class="neg">{row.error}</span>
                 {/if}
@@ -219,9 +220,9 @@
               aria-label="Weight percent for row {index + 1}"
             />
             <div class="row-actions">
-              <button type="button" class="btn small" onclick={() => move(index, -1)} aria-label="Move row {index + 1} up" disabled={index === 0}>↑</button>
-              <button type="button" class="btn small" onclick={() => move(index, 1)} aria-label="Move row {index + 1} down" disabled={index === rows.length - 1}>↓</button>
-              <button type="button" class="btn small danger" onclick={() => removeRow(index)} aria-label="Remove row {index + 1}">✕</button>
+              <button type="button" class="btn small" onclick={() => move(index, -1)} aria-label="Move row {index + 1} up" disabled={index === 0}><ChevronUp size={14} /></button>
+              <button type="button" class="btn small" onclick={() => move(index, 1)} aria-label="Move row {index + 1} down" disabled={index === rows.length - 1}><ChevronDown size={14} /></button>
+              <button type="button" class="btn small danger" onclick={() => removeRow(index)} aria-label="Remove row {index + 1}"><X size={14} /></button>
             </div>
           </div>
         {/each}
@@ -229,7 +230,7 @@
       <div class="rows-footer">
         <button type="button" class="btn small" onclick={addRow}>+ Add position</button>
         <span class="sum num" class:ok={sumOk} class:neg={!sumOk} aria-live="polite">
-          Σ {weightSum.toFixed(4).replace(/\.?0+$/, "")}%
+          <Sigma size={14} /> {weightSum.toFixed(4).replace(/\.?0+$/, "")}%
           {#if !sumOk}(must be exactly 100){/if}
         </span>
         <button type="button" class="btn small" onclick={normalize} disabled={weightSum <= 0}>
