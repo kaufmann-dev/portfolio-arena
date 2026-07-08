@@ -51,6 +51,7 @@ export interface PositionOut {
   symbol: string;
   instrument: "equity" | "cash";
   weight_pct: number;
+  note?: string;
 }
 
 export interface AllocationOut {
@@ -73,6 +74,9 @@ export interface Holding {
   instrument: "equity" | "cash";
   weight_pct: number;
   target_weight_pct: number;
+  entry_price?: number | null;
+  current_price?: number | null;
+  note?: string;
 }
 
 export interface PortfolioDetail extends PortfolioSummary {

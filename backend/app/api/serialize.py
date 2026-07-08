@@ -19,19 +19,24 @@ def prompt_ref(allocation: Allocation | None) -> dict | None:
     return {"id": prompt.id, "slug": prompt.slug, "name": prompt.name}
 
 
-def allocation_positions(allocation: Allocation) -> list[dict]:
+def allocation_positions(allocation: Allocation, admin: bool = False) -> list[dict]:
     return [
         {
             "symbol": position.symbol,
             "instrument": position.instrument,
             "weight_pct": float(position.weight_pct),
+            # Per-stock notes are admin-only — never exposed on public payloads.
+            **({"note": position.note} if admin else {}),
         }
         for position in allocation.positions
     ]
 
 
 def serialize_allocation(
-    allocation: Allocation, applied: AppliedAllocation | None = None, now: datetime | None = None
+    allocation: Allocation,
+    applied: AppliedAllocation | None = None,
+    now: datetime | None = None,
+    admin: bool = False,
 ) -> dict:
     now = now or datetime.now(UTC)
     return {
@@ -46,7 +51,7 @@ def serialize_allocation(
         "raw_response": allocation.raw_response,
         "turnover_pct": applied.turnover_pct if applied else None,
         "cost": applied.cost if applied else None,
-        "positions": allocation_positions(allocation),
+        "positions": allocation_positions(allocation, admin),
     }
 
 
@@ -85,7 +90,9 @@ def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations
     }
 
 
-def serialize_detail(valuation: PortfolioValuation, valuations: ArenaValuations) -> dict:
+def serialize_detail(
+    valuation: PortfolioValuation, valuations: ArenaValuations, admin: bool = False
+) -> dict:
     portfolio = valuation.portfolio
     result = valuation.result
     now = datetime.now(UTC)
@@ -110,12 +117,24 @@ def serialize_detail(valuation: PortfolioValuation, valuations: ArenaValuations)
                 "instrument": holding.instrument,
                 "weight_pct": holding.weight_pct,
                 "target_weight_pct": holding.target_weight_pct,
+                # Buy/current price and per-stock note are admin-only handoff fields.
+                **(
+                    {
+                        "entry_price": holding.entry_price,
+                        "current_price": holding.current_price,
+                        "note": holding.note,
+                    }
+                    if admin
+                    else {}
+                ),
             }
             for holding in (result.holdings if result else [])
         ],
         "stale_days": result.stale_days if result else {},
         "allocations": [
-            serialize_allocation(allocation, applied_by_date.get(allocation.effective_date.isoformat()), now)
+            serialize_allocation(
+                allocation, applied_by_date.get(allocation.effective_date.isoformat()), now, admin
+            )
             for allocation in reversed(portfolio.allocations)
         ],
     }

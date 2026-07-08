@@ -5,7 +5,7 @@
 
   export interface AllocationPayload {
     prompt_id: number;
-    positions: { symbol: string; weight_pct: number }[];
+    positions: { symbol: string; weight_pct: number; note: string }[];
     raw_response: string;
     note: string;
   }
@@ -13,6 +13,7 @@
   interface Row {
     symbol: string;
     weight: string;
+    note: string;
     status: "idle" | "checking" | "ok" | "error";
     resolved?: ResolvedSymbol;
     error?: string;
@@ -20,7 +21,7 @@
 
   interface Props {
     prompts: PromptOut[];
-    initialPositions?: { symbol: string; weight_pct: number }[];
+    initialPositions?: { symbol: string; weight_pct: number; note?: string }[];
     initialPromptId?: number | null;
     initialNote?: string;
     initialRawResponse?: string;
@@ -41,11 +42,16 @@
     onSubmit,
   }: Props = $props();
 
-  function toRows(positions: { symbol: string; weight_pct: number }[]): Row[] {
+  function toRows(positions: { symbol: string; weight_pct: number; note?: string }[]): Row[] {
     const rows = positions.map(
-      (position): Row => ({ symbol: position.symbol, weight: String(position.weight_pct), status: "idle" }),
+      (position): Row => ({
+        symbol: position.symbol,
+        weight: String(position.weight_pct),
+        note: position.note ?? "",
+        status: "idle",
+      }),
     );
-    return rows.length ? rows : [{ symbol: "", weight: "", status: "idle" }];
+    return rows.length ? rows : [{ symbol: "", weight: "", note: "", status: "idle" }];
   }
 
   // Initial-value props intentionally seed local state; parents re-mount the
@@ -74,7 +80,7 @@
   const sumOk = $derived(Math.abs(weightSum - 100) < 1e-6);
 
   function addRow() {
-    rows = [...rows, { symbol: "", weight: "", status: "idle" }];
+    rows = [...rows, { symbol: "", weight: "", note: "", status: "idle" }];
   }
 
   function removeRow(index: number) {
@@ -136,7 +142,11 @@
     }
     const positions = rows
       .filter((row) => row.symbol.trim())
-      .map((row) => ({ symbol: row.symbol.trim().toUpperCase(), weight_pct: parseFloat(row.weight) || 0 }));
+      .map((row) => ({
+        symbol: row.symbol.trim().toUpperCase(),
+        weight_pct: parseFloat(row.weight) || 0,
+        note: row.note.trim(),
+      }));
     if (!positions.length) {
       formError = "Enter at least one position.";
       return;
@@ -196,6 +206,13 @@
               <button type="button" class="btn small" onclick={() => move(index, 1)} aria-label="Move row {index + 1} down" disabled={index === rows.length - 1}><ChevronDown size={14} /></button>
               <button type="button" class="btn small danger" onclick={() => removeRow(index)} aria-label="Remove row {index + 1}"><X size={14} /></button>
             </div>
+            <input
+              class="pos-note"
+              type="text"
+              placeholder="Agent note for this position (passed to the next cycle)"
+              bind:value={row.note}
+              aria-label="Agent note for row {index + 1}"
+            />
           </div>
         {/each}
       </div>
@@ -294,6 +311,11 @@
   .weight {
     text-align: right;
     font-family: var(--font-mono);
+  }
+
+  .pos-note {
+    grid-column: 1 / -1;
+    font-size: 12.5px;
   }
 
   input.invalid {

@@ -25,6 +25,8 @@ from ..schemas import (
 from ..security import require_admin
 from ..seed import DEFAULT_COST_BPS_KEY
 from ..services import price_cache
+from ..services.arena import compute_valuations, load_portfolios
+from ..services.benchmarks import ensure_benchmark_allocations
 from ..services.symbols import (
     SymbolValidationError,
     derive_instrument,
@@ -35,7 +37,7 @@ from ..services.symbols import (
 )
 from ..services.trading_calendar import effective_date_for, is_locked
 from ..util import slugify
-from .serialize import serialize_allocation
+from .serialize import serialize_allocation, serialize_detail
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +199,10 @@ def _build_allocation(session: Session, portfolio: Portfolio, body: AllocationCr
     if prompt is None:
         raise HTTPException(422, "Prompt not found")
 
-    positions = [{"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct} for p in body.positions]
+    positions = [
+        {"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct, "note": p.note}
+        for p in body.positions
+    ]
     try:
         validate_positions(positions)
         for position in positions:
@@ -233,6 +238,7 @@ def _build_allocation(session: Session, portfolio: Portfolio, body: AllocationCr
                 symbol=position["symbol"],
                 instrument=derive_instrument(position["symbol"]),
                 weight_pct=position["weight_pct"],
+                note=position["note"],
             )
         )
     return allocation
@@ -266,7 +272,7 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
         "slug": portfolio.slug,
         "name": portfolio.name,
         "cost_bps": portfolio.cost_bps,
-        "allocation": serialize_allocation(_reload_allocation(session, allocation.id)),
+        "allocation": serialize_allocation(_reload_allocation(session, allocation.id), admin=True),
     }
 
 
@@ -294,6 +300,20 @@ def delete_portfolio(portfolio_id: int, session: Session = Depends(get_session))
     return {"ok": True}
 
 
+@router.get("/portfolios/{portfolio_id}/detail")
+def portfolio_admin_detail(portfolio_id: int, session: Session = Depends(get_session)):
+    """Admin view of a portfolio: same shape as the public detail plus the
+    admin-only handoff fields (per-position notes, holding entry/current prices)."""
+    ensure_benchmark_allocations(session)
+    portfolios = load_portfolios(session)
+    valuations = compute_valuations(session, portfolios)
+    match = next((p for p in portfolios if p.id == portfolio_id), None)
+    valuation = valuations.by_portfolio_id.get(match.id) if match else None
+    if valuation is None:
+        raise HTTPException(404, "Portfolio not found")
+    return {"as_of": valuations.as_of, "portfolio": serialize_detail(valuation, valuations, admin=True)}
+
+
 def _reload_allocation(session: Session, allocation_id: int) -> Allocation:
     return session.scalars(
         select(Allocation)
@@ -310,7 +330,7 @@ def create_allocation(portfolio_id: int, body: AllocationCreate, session: Sessio
     allocation = _build_allocation(session, portfolio, body)
     session.add(allocation)
     session.commit()
-    return serialize_allocation(_reload_allocation(session, allocation.id))
+    return serialize_allocation(_reload_allocation(session, allocation.id), admin=True)
 
 
 @router.put("/allocations/{allocation_id}")
@@ -333,7 +353,8 @@ def update_allocation(allocation_id: int, body: AllocationUpdate, session: Sessi
                 "Positions are frozen: the effective close has passed. Enter a new rebalance instead.",
             )
         positions = [
-            {"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct} for p in body.positions
+            {"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct, "note": p.note}
+            for p in body.positions
         ]
         try:
             validate_positions(positions)
@@ -349,6 +370,7 @@ def update_allocation(allocation_id: int, body: AllocationUpdate, session: Sessi
                     symbol=position["symbol"],
                     instrument=derive_instrument(position["symbol"]),
                     weight_pct=position["weight_pct"],
+                    note=position["note"],
                 )
             )
 
@@ -362,7 +384,7 @@ def update_allocation(allocation_id: int, body: AllocationUpdate, session: Sessi
         allocation.note = body.note
 
     session.commit()
-    return serialize_allocation(_reload_allocation(session, allocation.id))
+    return serialize_allocation(_reload_allocation(session, allocation.id), admin=True)
 
 
 @router.delete("/allocations/{allocation_id}")
