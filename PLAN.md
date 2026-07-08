@@ -31,9 +31,9 @@ Everything model-facing happens outside this app. The app never calls an LLM. Da
 These rules protect the measurement itself. They are enforced in code, not by convention.
 
 - **No backdating / no lookahead.** An allocation entered at time T takes effect at the **first market close strictly after T** (`effective_close`). Entered Saturday → effective Monday's close. Prices before entry can never be claimed.
-- **Positions lock at the effective close.** An allocation's positions and effective date are editable/deletable until its effective close has occurred (typo-correction window); after that they are frozen — the prices backing the track record can't be rewritten. Metadata that doesn't affect measurement (prompt reference, note, raw response) stays editable at any time.
+- **Positions lock at the effective close.** An allocation's positions and effective date are editable/deletable until its effective close has occurred (typo-correction window); after that they are frozen — the prices backing the track record can't be rewritten. Metadata that doesn't affect measurement (prompt reference, note) stays editable at any time.
 - **Benchmarks are computed with the identical engine.** SPY (primary) and RSP (equal-weight S&P, secondary) are tracked as system portfolios: 100% single-ETF allocations created at the same inception dates, valued by the same code path — with zero cost, since holding SPY really is near-free.
-- **Provenance.** Every allocation can store the raw model response verbatim (optional textarea) alongside the entered positions.
+- **Notes.** Every allocation has a single optional free-text notes field (e.g. the model's regime call) alongside the entered positions.
 - **Honesty labels.** The leaderboard shows age since inception and marks portfolios younger than 6 months as "too early to judge". Sample size is displayed, never hidden.
 
 ## Instruments
@@ -72,11 +72,10 @@ allocations   one row per decision (initial or rebalance)
   id, portfolio_id → portfolios, prompt_id → prompts (the prompt that
   produced this decision), entered_at (UTC, server-set),
   effective_date (date, computed: first US trading day whose close is after entered_at),
-  raw_response (text, optional, verbatim),
   note (optional — e.g. the AI's regime call), created_at
   locked = effective_date's close has passed (derived, not a column);
-  once locked, positions and effective_date are frozen — prompt_id,
-  note, and raw_response remain editable
+  once locked, positions and effective_date are frozen — prompt_id
+  and note remain editable
 
 positions     entered holdings of an allocation
   id, allocation_id → allocations, symbol (Yahoo symbol or CASH:CCY, uppercase),
@@ -120,13 +119,13 @@ Admin form: a table of rows — symbol + weight — with add/remove/reorder. On 
 
 Each position row also has an admin-only **per-stock note** field — the short message the agent left about that holding, carried forward to the next cycle's handoff.
 
-Beyond positions, the form has: **prompt selector** (defaults to the portfolio's previous allocation's prompt; a different one can be picked — prompts are created beforehand in the Prompts tab — this is how regime switching is entered), raw model response (provenance textarea), note (e.g. the regime call). The computed effective date is shown before submitting. A rebalance form pre-fills the previous allocation's *target* weights as the starting point.
+Beyond positions, the form has: **prompt selector** (defaults to the portfolio's previous allocation's prompt; a different one can be picked — prompts are created beforehand in the Prompts tab — this is how regime switching is entered) and a single optional **Notes** field (e.g. the regime call). The computed effective date is shown before submitting. A rebalance form pre-fills the previous allocation's *target* weights as the starting point.
 
 ## API (FastAPI, /api prefix)
 
 Public (no auth, rate-limited in-memory like market-deck):
 - `GET /api/leaderboard` — all portfolios with metrics, benchmark rows included, plus flags (`too_early`, `stale_data`)
-- `GET /api/portfolios/{slug}` — detail: metadata, agent, metrics, base-100 NAV series, SPY series over the same window, current drifted weights, allocation history (dates, prompt used, turnover, cost, raw text). Public payload never includes per-stock notes or holding buy/current prices.
+- `GET /api/portfolios/{slug}` — detail: metadata, agent, metrics, base-100 NAV series, SPY series over the same window, current drifted weights, allocation history (dates, prompt used, turnover, cost, notes). Public payload never includes per-stock notes or holding buy/current prices.
 - `GET /api/prompts` / `GET /api/prompts/{slug}` — prompt text + portfolios whose allocations used it
 - `GET /api/agents` — agents + their portfolios
 - `GET /api/compare?slugs=a,b,c` — overlaid base-100 series for the chart
@@ -135,11 +134,11 @@ Admin (JWT bearer, port market-deck auth minus demo):
 - `POST /api/auth/login`, `GET /api/auth/me`, `PUT /api/auth/password`
 - `POST /api/agents`, `PATCH /api/agents/{id}` (name/notes), `DELETE /api/agents/{id}` (**409 if any portfolio still uses it**; benchmark agent protected)
 - `POST /api/prompts`, `PATCH /api/prompts/{id}` (name/text/notes), `DELETE /api/prompts/{id}` (**409 if any allocation still references it**)
-- `POST /api/portfolios` (agent + name; first allocation with its prompt attached in the same flow)
+- `POST /api/portfolios` (agent + name + optional cost bps; no allocation — the first allocation is entered separately from the Allocations tab)
 - `GET /api/portfolios/{id}/detail` — admin view: same shape as the public detail plus admin-only handoff fields (per-position notes, holding entry/current prices)
 - `GET /api/symbols/{symbol}` — validation/resolution for the entry form
-- `POST /api/portfolios/{id}/allocations` — positions + prompt + optional raw text/note
-- `PUT /api/allocations/{id}` / `DELETE /api/allocations/{id}` — positions/effective date **403 once locked** (effective close passed); prompt_id/note/raw_response editable anytime
+- `POST /api/portfolios/{id}/allocations` — positions + prompt + optional note (also enters a portfolio's first allocation)
+- `PUT /api/allocations/{id}` / `DELETE /api/allocations/{id}` — positions/effective date **403 once locked** (effective close passed); prompt_id/note editable anytime
 - `PATCH /api/portfolios/{id}` — archive/unarchive, rename, reassign agent, change cost bps
 - `DELETE /api/portfolios/{id}` — hard delete (non-benchmark); cascades to its allocations + positions
 - `DELETE /api/prices/cache`
@@ -148,10 +147,10 @@ Admin (JWT bearer, port market-deck auth minus demo):
 
 Pages:
 1. **Leaderboard `/`** — the product. Table: rank, portfolio, agent, prompt (from latest allocation), inception, ITD return, **vs SPY** (headline column, default sort), max DD, Sharpe, turnover, sparkline. Benchmark rows pinned and visually distinct. Filter by agent/prompt; archived behind a toggle. "Too early" badge under 6 months. Checkbox-select rows → overlay comparison chart (`/api/compare`).
-2. **Portfolio detail `/p/{slug}`** — base-100 NAV vs SPY chart with allocation-date markers; metrics row; current drifted holdings table (weight, drift since last rebalance); allocation timeline, each entry expandable to positions + prompt used + raw response; stale-data/delisting warnings.
+2. **Portfolio detail `/p/{slug}`** — base-100 NAV vs SPY chart with allocation-date markers; metrics row; current drifted holdings table (weight, drift since last rebalance); allocation timeline, each entry expandable to positions + prompt used; stale-data/delisting warnings.
 3. **Prompt detail `/prompt/{slug}`** — full text, portfolios whose allocations used it with mini-metrics (does this prompt work across models?).
 4. **Agent detail `/agent/{slug}`** — portfolios by this model (does this model work across prompts?).
-5. **Admin `/admin`** — login; five tabs: **Allocations** (per selected portfolio: allocation history, a **Current state** panel — drifted holdings with buy/current price, change, weight vs target, and per-stock notes, plus a "Copy handoff for next agent" button that builds a paste-ready text block — and the row-entry rebalance form, see above), **Portfolios** (create a portfolio by picking an existing agent + entering its first allocation, plus a list of portfolios to edit — name, agent, cost bps — archive/unarchive, or delete), **Agents** (create/edit/delete agents; delete disabled while a portfolio uses one), **Prompts** (create/edit/delete prompts; delete disabled while an allocation references one), and **Settings** (default cost bps, password, price cache). Agents and prompts are created in their own tabs beforehand — no inline creation during portfolio/allocation entry.
+5. **Admin `/admin`** — login; five tabs: **Allocations** (per selected portfolio: allocation history, a **Current state** panel — drifted holdings with buy/current price, change, weight vs target, and per-stock notes, plus a "Copy handoff for next agent" button that builds a paste-ready text block — and the row-entry allocation form used for both the first allocation and later rebalances, see above), **Portfolios** (create a portfolio's metadata — name, agent, cost bps — then enter its first allocation from the Allocations tab; plus a list of portfolios to edit, archive/unarchive, or delete), **Agents** (create/edit/delete agents; delete disabled while a portfolio uses one), **Prompts** (create/edit/delete prompts; delete disabled while an allocation references one), and **Settings** (default cost bps, password, price cache). Agents and prompts are created in their own tabs beforehand — no inline creation during portfolio/allocation entry.
 
 Charting: lightweight SVG/canvas line charts, self-written or a tiny dependency — match market-deck's frontend approach; no heavyweight chart library. Long tables and charts scroll within their own containers. Dark/light theme like market-deck.
 

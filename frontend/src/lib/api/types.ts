@@ -63,7 +63,6 @@ export interface AllocationOut {
   applied_date: string | null;
   locked: boolean;
   note: string;
-  raw_response: string;
   turnover_pct: number | null;
   cost: number | null;
   positions: PositionOut[];

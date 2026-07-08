@@ -253,12 +253,6 @@
                   </tbody>
                 </table>
               </div>
-              {#if allocation.raw_response}
-                <details class="raw">
-                  <summary>Raw model response</summary>
-                  <pre>{allocation.raw_response}</pre>
-                </details>
-              {/if}
             </div>
           {/if}
         </article>
@@ -403,22 +397,5 @@
 
   .note {
     margin-bottom: 10px;
-  }
-
-  .raw {
-    margin-top: 10px;
-  }
-
-  .raw pre {
-    margin-top: 8px;
-    padding: 12px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    overflow-x: auto;
-    font-size: 12px;
-    white-space: pre-wrap;
-    max-height: 400px;
-    overflow-y: auto;
   }
 </style>

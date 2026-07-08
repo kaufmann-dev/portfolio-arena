@@ -6,7 +6,6 @@
   export interface AllocationPayload {
     prompt_id: number;
     positions: { symbol: string; weight_pct: number; note: string }[];
-    raw_response: string;
     note: string;
   }
 
@@ -24,7 +23,6 @@
     initialPositions?: { symbol: string; weight_pct: number; note?: string }[];
     initialPromptId?: number | null;
     initialNote?: string;
-    initialRawResponse?: string;
     /** When false (locked allocation edit) position rows are read-only. */
     positionsEditable?: boolean;
     submitLabel: string;
@@ -36,7 +34,6 @@
     initialPositions = [],
     initialPromptId = null,
     initialNote = "",
-    initialRawResponse = "",
     positionsEditable = true,
     submitLabel,
     onSubmit,
@@ -62,8 +59,6 @@
   let promptId = $state<number | null>(initialPromptId);
   // svelte-ignore state_referenced_locally
   let note = $state(initialNote);
-  // svelte-ignore state_referenced_locally
-  let rawResponse = $state(initialRawResponse);
   let submitting = $state(false);
   let formError = $state("");
 
@@ -157,7 +152,7 @@
     }
     submitting = true;
     try {
-      await onSubmit({ prompt_id: promptId, positions, raw_response: rawResponse, note });
+      await onSubmit({ prompt_id: promptId, positions, note });
     } catch (e) {
       formError = e instanceof Error ? e.message : "Submit failed";
     } finally {
@@ -248,13 +243,8 @@
   </div>
 
   <div class="field">
-    <label for="alloc-note">Note <span class="muted">(e.g. the AI's regime call)</span></label>
-    <input id="alloc-note" type="text" bind:value={note} />
-  </div>
-
-  <div class="field">
-    <label for="alloc-raw">Raw model response <span class="muted">(optional, verbatim provenance)</span></label>
-    <textarea id="alloc-raw" bind:value={rawResponse} rows="5"></textarea>
+    <label for="alloc-note">Notes <span class="muted">(optional)</span></label>
+    <textarea id="alloc-note" bind:value={note} rows="4"></textarea>
   </div>
 
   {#if formError}

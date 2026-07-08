@@ -18,6 +18,30 @@ def make_allocation_body(prompt_id, positions=None, **extra):
 
 
 class TestCreation:
+    def test_portfolio_created_without_allocation(self, client, admin_headers, sample_agent, sample_prompt):
+        created = client.post(
+            "/api/portfolios",
+            json={"name": "Empty Weekly", "agent_id": sample_agent["id"]},
+            headers=admin_headers,
+        )
+        assert created.status_code == 201, created.text
+        portfolio = created.json()
+        assert "allocation" not in portfolio
+
+        # It shows up on the leaderboard with no track record yet.
+        row = next(p for p in client.get("/api/leaderboard").json()["portfolios"] if p["id"] == portfolio["id"])
+        assert row["allocation_count"] == 0
+        assert row["metrics"]["has_data"] is False
+
+        # The first allocation is entered separately (Allocations tab).
+        first = client.post(
+            f"/api/portfolios/{portfolio['id']}/allocations",
+            json=make_allocation_body(sample_prompt["id"]),
+            headers=admin_headers,
+        )
+        assert first.status_code == 201, first.text
+        assert not first.json()["locked"]
+
     def test_portfolio_with_first_allocation(self, sample_portfolio):
         allocation = sample_portfolio["allocation"]
         assert allocation["effective_date"] >= datetime.now(UTC).date().isoformat()
@@ -206,7 +230,6 @@ class TestLockEnforcement:
             json={
                 "prompt_id": second_prompt["id"],
                 "note": "regime call: risk-on",
-                "raw_response": "full model output",
             },
             headers=admin_headers,
         )

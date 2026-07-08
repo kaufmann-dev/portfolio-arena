@@ -229,7 +229,6 @@ def _build_allocation(session: Session, portfolio: Portfolio, body: AllocationCr
         prompt_id=prompt.id,
         entered_at=now,
         effective_date=effective,
-        raw_response=body.raw_response,
         note=body.note,
     )
     for position in positions:
@@ -262,17 +261,12 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
         cost_bps=cost_bps,
     )
     session.add(portfolio)
-    session.flush()
-
-    allocation = _build_allocation(session, portfolio, body.allocation)
-    session.add(allocation)
     session.commit()
     return {
         "id": portfolio.id,
         "slug": portfolio.slug,
         "name": portfolio.name,
         "cost_bps": portfolio.cost_bps,
-        "allocation": serialize_allocation(_reload_allocation(session, allocation.id), admin=True),
     }
 
 
@@ -386,8 +380,6 @@ def update_allocation(allocation_id: int, body: AllocationUpdate, session: Sessi
         if session.get(Prompt, body.prompt_id) is None:
             raise HTTPException(422, "Prompt not found")
         allocation.prompt_id = body.prompt_id
-    if body.raw_response is not None:
-        allocation.raw_response = body.raw_response
     if body.note is not None:
         allocation.note = body.note
 

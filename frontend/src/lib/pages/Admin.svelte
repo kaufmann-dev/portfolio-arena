@@ -11,7 +11,6 @@
   import AllocationForm, { type AllocationPayload } from "../components/AllocationForm.svelte";
   import { fmtDate, num, pctPoints, signClass } from "../format";
   import { auth } from "../stores/auth.svelte";
-  import { router } from "../stores/router.svelte";
 
   type Tab = "allocation" | "portfolio" | "agents" | "prompts" | "settings";
   let tab = $state<Tab>("allocation");
@@ -166,7 +165,6 @@
     const body: Record<string, unknown> = {
       prompt_id: payload.prompt_id,
       note: payload.note,
-      raw_response: payload.raw_response,
     };
     if (!editingAllocation.locked) body.positions = payload.positions;
     await putJson(`/api/allocations/${editingAllocation.id}`, body);
@@ -193,24 +191,28 @@
   let newCostBps = $state<string>("");
   let portfolioError = $state("");
 
-  async function submitNewPortfolio(payload: AllocationPayload) {
+  async function createPortfolio(event: SubmitEvent) {
+    event.preventDefault();
     portfolioError = "";
     if (!newName.trim() || newAgentId === null) {
-      throw new Error("Portfolio name and agent are required.");
+      portfolioError = "Portfolio name and agent are required.";
+      return;
     }
-    const body: Record<string, unknown> = {
-      name: newName.trim(),
-      agent_id: newAgentId,
-      allocation: payload,
-    };
+    const body: Record<string, unknown> = { name: newName.trim(), agent_id: newAgentId };
     if (newCostBps.trim() !== "") body.cost_bps = parseInt(newCostBps, 10);
-    const created = await postJson<{ slug: string; name: string }>("/api/portfolios", body);
-    flash(`Portfolio ${created.name} created.`);
-    newName = "";
-    newAgentId = null;
-    newCostBps = "";
-    await loadAll();
-    router.navigate(`/p/${created.slug}`);
+    try {
+      const created = await postJson<{ slug: string; name: string }>("/api/portfolios", body);
+      flash(`Portfolio ${created.name} created — enter its first allocation.`);
+      newName = "";
+      newAgentId = null;
+      newCostBps = "";
+      await loadAll();
+      // Jump to the Allocations tab with the new portfolio selected.
+      selectedSlug = created.slug;
+      tab = "allocation";
+    } catch (e) {
+      portfolioError = e instanceof Error ? e.message : "Create failed";
+    }
   }
 
   // ── Tab 3: agents ────────────────────────────
@@ -507,6 +509,10 @@
                     {/if}
                   </td>
                 </tr>
+              {:else}
+                <tr>
+                  <td colspan="5" class="muted">No allocations yet — enter the first one below.</td>
+                </tr>
               {/each}
             </tbody>
           </table>
@@ -566,11 +572,15 @@
               initialPositions={editingAllocation.positions}
               initialPromptId={editingAllocation.prompt?.id ?? null}
               initialNote={editingAllocation.note}
-              initialRawResponse={editingAllocation.raw_response}
               positionsEditable={!editingAllocation.locked}
               submitLabel="Save changes"
               onSubmit={submitEdit}
             />
+          {/key}
+        {:else if detail.allocations.length === 0}
+          <h2>First allocation</h2>
+          {#key formKey}
+            <AllocationForm {prompts} submitLabel="Enter first allocation" onSubmit={submitRebalance} />
           {/key}
         {:else}
           <h2>New rebalance</h2>
@@ -596,35 +606,39 @@
   {:else if tab === "portfolio"}
     <section class="card">
       <h2>New portfolio</h2>
-      <div class="grid-2">
-        <div class="field">
-          <label for="np-name">Portfolio name</label>
-          <input id="np-name" type="text" bind:value={newName} placeholder="Claude Weekly Manager" />
+      <form onsubmit={createPortfolio}>
+        <div class="grid-2">
+          <div class="field">
+            <label for="np-name">Portfolio name</label>
+            <input id="np-name" type="text" bind:value={newName} placeholder="Claude Weekly Manager" />
+          </div>
+          <div class="field">
+            <label for="np-cost">Cost bps <span class="muted">(blank = default)</span></label>
+            <input id="np-cost" type="number" min="0" bind:value={newCostBps} placeholder="10" />
+          </div>
         </div>
         <div class="field">
-          <label for="np-cost">Cost bps <span class="muted">(blank = default)</span></label>
-          <input id="np-cost" type="number" min="0" bind:value={newCostBps} placeholder="10" />
+          <label for="np-agent">Agent</label>
+          <select id="np-agent" bind:value={newAgentId}>
+            <option value={null} disabled>Select an agent…</option>
+            {#each agents as agent (agent.id)}
+              <option value={agent.id}>{agent.name}</option>
+            {/each}
+          </select>
+          {#if agents.length === 0}
+            <p class="muted hint">No agents yet — create one in the Agents tab first.</p>
+          {/if}
         </div>
-      </div>
-      <div class="field">
-        <label for="np-agent">Agent</label>
-        <select id="np-agent" bind:value={newAgentId}>
-          <option value={null} disabled>Select an agent…</option>
-          {#each agents as agent (agent.id)}
-            <option value={agent.id}>{agent.name}</option>
-          {/each}
-        </select>
-        {#if agents.length === 0}
-          <p class="muted hint">No agents yet — create one in the Agents tab first.</p>
+
+        {#if portfolioError}
+          <div class="error-box" role="alert">{portfolioError}</div>
         {/if}
-      </div>
 
-      {#if portfolioError}
-        <div class="error-box" role="alert">{portfolioError}</div>
-      {/if}
-
-      <h2>First allocation</h2>
-      <AllocationForm {prompts} submitLabel="Create portfolio" onSubmit={submitNewPortfolio} />
+        <button class="btn primary" type="submit" disabled={!newName.trim() || newAgentId === null}>
+          Create portfolio
+        </button>
+        <p class="muted hint">Enter its first allocation from the Allocations tab.</p>
+      </form>
 
       <h2 class="spaced">Existing portfolios</h2>
       {#each contestants as portfolio (portfolio.id)}
