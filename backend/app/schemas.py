@@ -74,6 +74,8 @@ class PortfolioCreate(BaseModel):
 class PortfolioPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     status: str | None = Field(default=None, pattern="^(active|archived)$")
+    agent_id: int | None = None
+    cost_bps: int | None = Field(default=None, ge=0)
 
 
 class SettingsUpdate(BaseModel):
