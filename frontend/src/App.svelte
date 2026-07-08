@@ -19,7 +19,7 @@
 <div class="shell">
   <header class="topbar">
     <a href="/" class="brand" onclick={(e) => link(e, "/")}>
-      <span class="brand-mark" aria-hidden="true"><Landmark size={20} /></span>
+      <span class="brand-mark" aria-hidden="true"><Landmark size={17} /></span>
       Portfolio Arena
     </a>
     <nav aria-label="Main">
@@ -107,6 +107,8 @@
   }
 
   .brand-mark {
+    display: flex;
+    margin-top: 2px;
     color: var(--accent);
   }
 
