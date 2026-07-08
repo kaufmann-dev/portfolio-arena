@@ -1,4 +1,5 @@
 """Test helpers."""
+
 from datetime import UTC, datetime, timedelta
 
 from app.services.trading_calendar import is_trading_day
@@ -22,8 +23,6 @@ def backdate_allocation(allocation_id: int, days_back: int = 30):
     with session_factory()() as session:
         allocation = session.get(Allocation, allocation_id)
         allocation.effective_date = day
-        allocation.entered_at = datetime.combine(
-            day - timedelta(days=1), datetime.min.time(), tzinfo=UTC
-        )
+        allocation.entered_at = datetime.combine(day - timedelta(days=1), datetime.min.time(), tzinfo=UTC)
         session.commit()
     return day

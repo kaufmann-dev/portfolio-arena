@@ -5,6 +5,7 @@ Fetches daily closes directly from the chart endpoint in parallel with httpx
 docs/bugs/slow-global-ticker-loading.md). Equities use adjusted closes (total
 return); ``=X`` FX symbols use plain closes.
 """
+
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -207,9 +208,7 @@ def download_prices(symbols: list[str], start: date) -> PriceDownloadResult:
 
     executor = ThreadPoolExecutor(max_workers=min(PRICE_FETCH_MAX_WORKERS, len(symbols)))
     with httpx.Client(headers=_HEADERS, timeout=PRICE_FETCH_TIMEOUT_SECONDS) as client:
-        futures = {
-            executor.submit(_fetch_one, client, symbol, start): symbol for symbol in symbols
-        }
+        futures = {executor.submit(_fetch_one, client, symbol, start): symbol for symbol in symbols}
         try:
             done, not_done = wait(futures, timeout=PRICE_FETCH_TOTAL_TIMEOUT_SECONDS)
             for future in not_done:

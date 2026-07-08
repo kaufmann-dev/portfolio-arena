@@ -1,4 +1,5 @@
 """FastAPI application factory: API routers plus SPA static serving."""
+
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path

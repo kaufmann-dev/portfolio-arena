@@ -6,6 +6,7 @@ times (including early closes); the valuation engine itself uses SPY's
 *actual* close calendar, so an unscheduled closure merely shifts the
 effective close to the next actual close.
 """
+
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 

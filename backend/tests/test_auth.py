@@ -1,4 +1,5 @@
 """Auth boundaries: public reads open, writes admin-only."""
+
 from .conftest import ADMIN_EMAIL, ADMIN_PASSWORD
 
 
@@ -22,17 +23,13 @@ class TestWriteBoundaries:
         assert client.delete("/api/prices/cache").status_code == 401
 
     def test_garbage_token_rejected(self, client):
-        response = client.post(
-            "/api/agents", json={"name": "X"}, headers={"Authorization": "Bearer nope"}
-        )
+        response = client.post("/api/agents", json={"name": "X"}, headers={"Authorization": "Bearer nope"})
         assert response.status_code == 401
 
 
 class TestLogin:
     def test_login_and_me(self, client):
-        response = client.post(
-            "/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
-        )
+        response = client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
         assert response.status_code == 200
         token = response.json()["token"]
 
@@ -41,9 +38,7 @@ class TestLogin:
         assert me.json()["email"] == ADMIN_EMAIL
 
     def test_wrong_password(self, client):
-        response = client.post(
-            "/api/auth/login", json={"email": ADMIN_EMAIL, "password": "wrong"}
-        )
+        response = client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": "wrong"})
         assert response.status_code == 401
 
     def test_password_change_roundtrip(self, client, admin_headers):

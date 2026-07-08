@@ -1,4 +1,5 @@
 """No-lookahead effective-date rules: weekends, holidays, early closes, locking."""
+
 from datetime import UTC, date, datetime
 
 from app.services.trading_calendar import (

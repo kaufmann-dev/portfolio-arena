@@ -1,4 +1,5 @@
 """Small shared helpers."""
+
 import re
 import unicodedata
 

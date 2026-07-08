@@ -1,4 +1,5 @@
 """Symbol syntax derivation and position-set validation (pure rules, no network)."""
+
 import pytest
 
 from app.services.symbols import (

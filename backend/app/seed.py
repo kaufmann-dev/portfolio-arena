@@ -1,6 +1,7 @@
 """Idempotent seeding on every start: admin user, default settings, and the
 benchmark agent/prompt/portfolios. Benchmark *allocations* are created lazily
 (services/benchmarks.py) once the first real portfolio exists."""
+
 import logging
 
 from sqlalchemy import select
@@ -58,9 +59,7 @@ def seed_benchmarks(session: Session) -> None:
         session.flush()
 
     for benchmark in BENCHMARKS:
-        existing = session.scalars(
-            select(Portfolio).where(Portfolio.slug == benchmark["slug"])
-        ).first()
+        existing = session.scalars(select(Portfolio).where(Portfolio.slug == benchmark["slug"])).first()
         if existing is None:
             session.add(
                 Portfolio(

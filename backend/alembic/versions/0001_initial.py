@@ -5,6 +5,7 @@ Revision ID: 0001
 Revises:
 Create Date: 2026-07-08
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -23,9 +24,7 @@ def upgrade() -> None:
         sa.Column("email", sa.Text(), nullable=False, unique=True),
         sa.Column("password_hash", sa.Text(), nullable=False),
         sa.Column("role", sa.Text(), nullable=False, server_default="admin"),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.CheckConstraint("role IN ('admin')", name="users_role_check"),
     )
 
@@ -41,9 +40,7 @@ def upgrade() -> None:
         sa.Column("slug", sa.Text(), nullable=False, unique=True),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("notes", sa.Text(), nullable=False, server_default=""),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
 
     op.create_table(
@@ -53,12 +50,8 @@ def upgrade() -> None:
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("notes", sa.Text(), nullable=False, server_default=""),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
 
     op.create_table(
@@ -70,9 +63,7 @@ def upgrade() -> None:
         sa.Column("cost_bps", sa.Integer(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False, server_default="active"),
         sa.Column("is_benchmark", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.CheckConstraint("status IN ('active', 'archived')", name="portfolios_status_check"),
         sa.CheckConstraint("cost_bps >= 0", name="portfolios_cost_bps_check"),
     )
@@ -91,9 +82,7 @@ def upgrade() -> None:
         sa.Column("effective_date", sa.Date(), nullable=False),
         sa.Column("raw_response", sa.Text(), nullable=False, server_default=""),
         sa.Column("note", sa.Text(), nullable=False, server_default=""),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
     op.create_index("idx_allocations_portfolio_id", "allocations", ["portfolio_id"])
 
@@ -120,9 +109,7 @@ def upgrade() -> None:
         sa.Column("symbol", sa.Text(), primary_key=True),
         sa.Column("series", JSONB(), nullable=False),
         sa.Column("start_date", sa.Date(), nullable=False),
-        sa.Column(
-            "fetched_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
     op.create_index("idx_price_cache_fetched_at", "price_cache", ["fetched_at"])
 

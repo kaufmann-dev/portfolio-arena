@@ -1,4 +1,5 @@
 """Allocation entry rules: validation, no-backdating, lock enforcement."""
+
 from datetime import UTC, datetime
 
 from .util import backdate_allocation
@@ -30,9 +31,7 @@ class TestCreation:
     def test_weights_must_sum_to_100(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(
-                sample_prompt["id"], [{"symbol": "AAPL", "weight_pct": 99}]
-            ),
+            json=make_allocation_body(sample_prompt["id"], [{"symbol": "AAPL", "weight_pct": 99}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -65,9 +64,7 @@ class TestCreation:
     def test_fx_pair_rejected_with_hint(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(
-                sample_prompt["id"], [{"symbol": "EURUSD=X", "weight_pct": 100}]
-            ),
+            json=make_allocation_body(sample_prompt["id"], [{"symbol": "EURUSD=X", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -175,10 +172,7 @@ class TestLockEnforcement:
 
     def test_unlocked_allocation_deletable(self, client, admin_headers, sample_portfolio):
         allocation_id = sample_portfolio["allocation"]["id"]
-        assert (
-            client.delete(f"/api/allocations/{allocation_id}", headers=admin_headers).status_code
-            == 200
-        )
+        assert client.delete(f"/api/allocations/{allocation_id}", headers=admin_headers).status_code == 200
 
     def test_locked_positions_frozen(self, client, admin_headers, sample_portfolio):
         allocation_id = sample_portfolio["allocation"]["id"]
@@ -197,9 +191,7 @@ class TestLockEnforcement:
         response = client.delete(f"/api/allocations/{allocation_id}", headers=admin_headers)
         assert response.status_code == 403
 
-    def test_locked_metadata_still_editable(
-        self, client, admin_headers, sample_portfolio, sample_prompt
-    ):
+    def test_locked_metadata_still_editable(self, client, admin_headers, sample_portfolio, sample_prompt):
         allocation_id = sample_portfolio["allocation"]["id"]
         backdate_allocation(allocation_id)
 
@@ -235,9 +227,7 @@ class TestLockEnforcement:
 
         with session_factory()() as session:
             benchmark_allocation = session.scalars(
-                select(Allocation)
-                .join(Portfolio)
-                .where(Portfolio.is_benchmark.is_(True))
+                select(Allocation).join(Portfolio).where(Portfolio.is_benchmark.is_(True))
             ).first()
         assert benchmark_allocation is not None
 
@@ -248,9 +238,7 @@ class TestLockEnforcement:
         )
         assert response.status_code == 403
         assert (
-            client.delete(
-                f"/api/allocations/{benchmark_allocation.id}", headers=admin_headers
-            ).status_code
+            client.delete(f"/api/allocations/{benchmark_allocation.id}", headers=admin_headers).status_code
             == 403
         )
 

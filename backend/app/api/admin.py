@@ -1,6 +1,7 @@
 """Admin write endpoints (JWT bearer). Experiment-integrity rules are enforced
 here: server-set entry times, computed effective dates, and position locking
 once the effective close has occurred."""
+
 import logging
 from datetime import UTC, datetime
 
@@ -162,9 +163,7 @@ def _build_allocation(session: Session, portfolio: Portfolio, body: AllocationCr
     if prompt is None:
         raise HTTPException(422, "Prompt not found")
 
-    positions = [
-        {"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct} for p in body.positions
-    ]
+    positions = [{"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct} for p in body.positions]
     try:
         validate_positions(positions)
         for position in positions:
@@ -262,9 +261,7 @@ def _reload_allocation(session: Session, allocation_id: int) -> Allocation:
 
 
 @router.post("/portfolios/{portfolio_id}/allocations", status_code=201)
-def create_allocation(
-    portfolio_id: int, body: AllocationCreate, session: Session = Depends(get_session)
-):
+def create_allocation(portfolio_id: int, body: AllocationCreate, session: Session = Depends(get_session)):
     portfolio = _writable_portfolio(session, portfolio_id)
     if portfolio.status != "active":
         raise HTTPException(409, "Unarchive the portfolio before adding allocations")
@@ -275,9 +272,7 @@ def create_allocation(
 
 
 @router.put("/allocations/{allocation_id}")
-def update_allocation(
-    allocation_id: int, body: AllocationUpdate, session: Session = Depends(get_session)
-):
+def update_allocation(allocation_id: int, body: AllocationUpdate, session: Session = Depends(get_session)):
     allocation = session.scalars(
         select(Allocation)
         .where(Allocation.id == allocation_id)
@@ -293,12 +288,10 @@ def update_allocation(
         if is_locked(allocation.effective_date, now):
             raise HTTPException(
                 403,
-                "Positions are frozen: the effective close has passed. "
-                "Enter a new rebalance instead.",
+                "Positions are frozen: the effective close has passed. Enter a new rebalance instead.",
             )
         positions = [
-            {"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct}
-            for p in body.positions
+            {"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct} for p in body.positions
         ]
         try:
             validate_positions(positions)
@@ -333,9 +326,7 @@ def update_allocation(
 @router.delete("/allocations/{allocation_id}")
 def delete_allocation(allocation_id: int, session: Session = Depends(get_session)):
     allocation = session.scalars(
-        select(Allocation)
-        .where(Allocation.id == allocation_id)
-        .options(selectinload(Allocation.portfolio))
+        select(Allocation).where(Allocation.id == allocation_id).options(selectinload(Allocation.portfolio))
     ).first()
     if allocation is None:
         raise HTTPException(404, "Allocation not found")

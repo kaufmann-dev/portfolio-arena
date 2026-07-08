@@ -5,6 +5,7 @@ Nothing here stores NAVs — every request recomputes deterministically from
 locked allocations + cached price/FX series (adjusted closes change
 retroactively, so recomputation is *more* correct than snapshotting).
 """
+
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -73,9 +74,7 @@ def load_price_series(session: Session, symbols: list[str], required_start: date
             fetched = yahoo.download_prices(to_fetch, required_start)
             price_cache.record_fetch_results(fetched)
             price_cache.set_cached_series(session, fetched, required_start)
-            series.update(
-                {symbol: data for symbol, data in fetched.items() if yahoo.is_valid_series(data)}
-            )
+            series.update({symbol: data for symbol, data in fetched.items() if yahoo.is_valid_series(data)})
     return series
 
 

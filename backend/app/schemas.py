@@ -1,4 +1,5 @@
 """Pydantic request/response models."""
+
 from pydantic import BaseModel, Field
 
 
