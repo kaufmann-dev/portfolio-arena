@@ -13,7 +13,7 @@
   import { auth } from "../stores/auth.svelte";
   import { router } from "../stores/router.svelte";
 
-  type Tab = "allocation" | "portfolio" | "manage" | "settings";
+  type Tab = "allocation" | "portfolio" | "agents" | "prompts" | "settings";
   let tab = $state<Tab>("allocation");
 
   // ── Login ────────────────────────────────────
@@ -136,22 +136,11 @@
     }
   }
 
-  // ── Tab 2: new portfolio ─────────────────────
+  // ── Tab 2: portfolios ────────────────────────
   let newName = $state("");
   let newAgentId = $state<number | null>(null);
   let newCostBps = $state<string>("");
-  let newAgentOpen = $state(false);
-  let newAgentName = $state("");
   let portfolioError = $state("");
-
-  async function createAgentInline() {
-    if (!newAgentName.trim()) return;
-    const created = await postJson<AgentOut>("/api/agents", { name: newAgentName.trim() });
-    await loadAll();
-    newAgentId = created.id;
-    newAgentOpen = false;
-    newAgentName = "";
-  }
 
   async function submitNewPortfolio(payload: AllocationPayload) {
     portfolioError = "";
@@ -173,9 +162,69 @@
     router.navigate(`/p/${created.slug}`);
   }
 
-  // ── Tab 3: manage ────────────────────────────
-  let editPrompt = $state<PromptOut | null>(null);
+  // ── Tab 3: agents ────────────────────────────
   let editAgent = $state<AgentOut | null>(null);
+  let newAgentName = $state("");
+  let newAgentNotes = $state("");
+
+  async function createAgent(event: SubmitEvent) {
+    event.preventDefault();
+    if (!newAgentName.trim()) return;
+    try {
+      await postJson("/api/agents", { name: newAgentName.trim(), notes: newAgentNotes.trim() });
+      newAgentName = "";
+      newAgentNotes = "";
+      await loadAll();
+      flash("Agent created.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Create failed");
+    }
+  }
+
+  async function saveAgent(event: SubmitEvent) {
+    event.preventDefault();
+    if (!editAgent) return;
+    await patchJson(`/api/agents/${editAgent.id}`, { name: editAgent.name, notes: editAgent.notes });
+    editAgent = null;
+    await loadAll();
+    flash("Agent saved.");
+  }
+
+  async function deleteAgent(agent: AgentOut) {
+    if (!confirm(`Delete agent ${agent.name}?`)) return;
+    try {
+      await del(`/api/agents/${agent.id}`);
+      flash("Agent deleted.");
+      await loadAll();
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  // ── Tab 4: prompts ───────────────────────────
+  let editPrompt = $state<PromptOut | null>(null);
+  let newPromptName = $state("");
+  let newPromptText = $state("");
+  let newPromptNotes = $state("");
+
+  async function createPrompt(event: SubmitEvent) {
+    event.preventDefault();
+    if (!newPromptName.trim() || !newPromptText.trim()) return;
+    try {
+      await postJson("/api/prompts", {
+        name: newPromptName.trim(),
+        text: newPromptText,
+        notes: newPromptNotes.trim(),
+      });
+      newPromptName = "";
+      newPromptText = "";
+      newPromptNotes = "";
+      await refreshPrompts();
+      flash("Prompt created.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Create failed");
+    }
+  }
 
   async function savePrompt(event: SubmitEvent) {
     event.preventDefault();
@@ -190,20 +239,35 @@
     flash("Prompt saved.");
   }
 
-  async function saveAgent(event: SubmitEvent) {
-    event.preventDefault();
-    if (!editAgent) return;
-    await patchJson(`/api/agents/${editAgent.id}`, { name: editAgent.name, notes: editAgent.notes });
-    editAgent = null;
-    await loadAll();
-    flash("Agent saved.");
+  async function deletePrompt(prompt: PromptOut) {
+    if (!confirm(`Delete prompt ${prompt.name}?`)) return;
+    try {
+      await del(`/api/prompts/${prompt.id}`);
+      flash("Prompt deleted.");
+      await refreshPrompts();
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Delete failed");
+    }
   }
 
+  // ── Portfolio management (Portfolios tab) ────
   async function toggleArchive(portfolio: PortfolioSummary) {
     await patchJson(`/api/portfolios/${portfolio.id}`, {
       status: portfolio.status === "active" ? "archived" : "active",
     });
     await loadAll();
+  }
+
+  async function deletePortfolio(portfolio: PortfolioSummary) {
+    if (!confirm(`Delete ${portfolio.name} and all its allocations? This is irreversible.`)) return;
+    try {
+      await del(`/api/portfolios/${portfolio.id}`);
+      if (selectedSlug === portfolio.slug) selectedSlug = "";
+      flash(`Portfolio ${portfolio.name} deleted.`);
+      await loadAll();
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Delete failed");
+    }
   }
 
   // ── Tab 4: settings ──────────────────────────
@@ -304,8 +368,9 @@
       </button>
     {/snippet}
     {@render tabBtn("allocation", "Allocations")}
-    {@render tabBtn("portfolio", "New portfolio")}
-    {@render tabBtn("manage", "Agents & prompts")}
+    {@render tabBtn("portfolio", "Portfolios")}
+    {@render tabBtn("agents", "Agents")}
+    {@render tabBtn("prompts", "Prompts")}
     {@render tabBtn("settings", "Settings")}
   </div>
 
@@ -380,7 +445,6 @@
           {#key editingAllocation.id}
             <AllocationForm
               {prompts}
-              onPromptsChanged={refreshPrompts}
               initialPositions={editingAllocation.positions}
               initialPromptId={editingAllocation.prompt?.id ?? null}
               initialNote={editingAllocation.note}
@@ -398,7 +462,6 @@
           {#key formKey}
             <AllocationForm
               {prompts}
-              onPromptsChanged={refreshPrompts}
               initialPositions={latestAllocation?.positions ?? []}
               initialPromptId={latestAllocation?.prompt?.id ?? null}
               submitLabel="Enter rebalance"
@@ -427,136 +490,168 @@
       </div>
       <div class="field">
         <label for="np-agent">Agent</label>
-        <div class="agent-line">
-          <select id="np-agent" bind:value={newAgentId}>
-            <option value={null} disabled>Select an agent…</option>
-            {#each agents as agent (agent.id)}
-              <option value={agent.id}>{agent.name}</option>
-            {/each}
-          </select>
-          <button type="button" class="btn" onclick={() => (newAgentOpen = !newAgentOpen)}>
-            {newAgentOpen ? "Cancel" : "+ New agent"}
-          </button>
-        </div>
+        <select id="np-agent" bind:value={newAgentId}>
+          <option value={null} disabled>Select an agent…</option>
+          {#each agents as agent (agent.id)}
+            <option value={agent.id}>{agent.name}</option>
+          {/each}
+        </select>
+        {#if agents.length === 0}
+          <p class="muted hint">No agents yet — create one in the Agents tab first.</p>
+        {/if}
       </div>
-      {#if newAgentOpen}
-        <div class="card inline-create">
-          <div class="field">
-            <label for="np-agent-name">Agent name <span class="muted">(model + harness)</span></label>
-            <input
-              id="np-agent-name"
-              type="text"
-              bind:value={newAgentName}
-              placeholder="Claude Opus 4.8 (Claude Code)"
-            />
-          </div>
-          <button
-            type="button"
-            class="btn primary"
-            onclick={createAgentInline}
-            disabled={!newAgentName.trim()}
-          >
-            Create agent
-          </button>
-        </div>
-      {/if}
 
       {#if portfolioError}
         <div class="error-box" role="alert">{portfolioError}</div>
       {/if}
 
       <h2>First allocation</h2>
-      <AllocationForm
-        {prompts}
-        onPromptsChanged={refreshPrompts}
-        submitLabel="Create portfolio"
-        onSubmit={submitNewPortfolio}
-      />
+      <AllocationForm {prompts} submitLabel="Create portfolio" onSubmit={submitNewPortfolio} />
     </section>
-  {:else if tab === "manage"}
-    <div class="manage-grid">
-      <section class="card">
-        <h2>Prompts</h2>
-        {#each prompts as prompt (prompt.id)}
-          {#if editPrompt?.id === prompt.id}
-            <form class="edit-form" onsubmit={savePrompt}>
-              <div class="field">
-                <label for="ep-name-{prompt.id}">Name</label>
-                <input id="ep-name-{prompt.id}" type="text" bind:value={editPrompt.name} />
-              </div>
-              <div class="field">
-                <label for="ep-text-{prompt.id}">Text</label>
-                <textarea id="ep-text-{prompt.id}" bind:value={editPrompt.text} rows="8"></textarea>
-              </div>
-              <div class="field">
-                <label for="ep-notes-{prompt.id}">Notes</label>
-                <input id="ep-notes-{prompt.id}" type="text" bind:value={editPrompt.notes} />
-              </div>
-              <div class="edit-actions">
-                <button class="btn primary" type="submit">Save</button>
-                <button class="btn" type="button" onclick={() => (editPrompt = null)}>Cancel</button>
-              </div>
-            </form>
-          {:else}
-            <div class="manage-row">
-              <div>
-                <strong>{prompt.name}</strong>
-                <span class="muted"> · {prompt.portfolio_count ?? 0} portfolio(s)</span>
-                <p class="muted preview">{prompt.text.slice(0, 140)}{prompt.text.length > 140 ? "…" : ""}</p>
-              </div>
-              <button class="btn small" onclick={() => (editPrompt = { ...prompt })}>Edit</button>
-            </div>
-          {/if}
-        {:else}
-          <div class="empty-state"><p>No prompts yet — create one from an allocation form.</p></div>
-        {/each}
-      </section>
 
-      <section class="card">
-        <h2>Agents</h2>
-        {#each agents as agent (agent.id)}
-          {#if editAgent?.id === agent.id}
-            <form class="edit-form" onsubmit={saveAgent}>
-              <div class="field">
-                <label for="ea-name-{agent.id}">Name</label>
-                <input id="ea-name-{agent.id}" type="text" bind:value={editAgent.name} />
-              </div>
-              <div class="field">
-                <label for="ea-notes-{agent.id}">Notes</label>
-                <input id="ea-notes-{agent.id}" type="text" bind:value={editAgent.notes} />
-              </div>
-              <div class="edit-actions">
-                <button class="btn primary" type="submit">Save</button>
-                <button class="btn" type="button" onclick={() => (editAgent = null)}>Cancel</button>
-              </div>
-            </form>
-          {:else}
-            <div class="manage-row">
-              <div>
-                <strong>{agent.name}</strong>
-                {#if agent.notes}<p class="muted preview">{agent.notes}</p>{/if}
-              </div>
-              <button class="btn small" onclick={() => (editAgent = { ...agent })}>Edit</button>
-            </div>
-          {/if}
-        {:else}
-          <div class="empty-state"><p>No agents yet — create one with your first portfolio.</p></div>
-        {/each}
-
-        <h2 class="spaced">Portfolios</h2>
-        {#each contestants as portfolio (portfolio.id)}
-          <div class="manage-row">
-            <div>
-              <strong>{portfolio.name}</strong>
-              <span class="muted"> · {portfolio.status}</span>
-            </div>
+    <section class="card">
+      <h2>Existing portfolios</h2>
+      {#each contestants as portfolio (portfolio.id)}
+        <div class="manage-row">
+          <div>
+            <strong>{portfolio.name}</strong>
+            <span class="muted"> · {portfolio.agent.name} · {portfolio.status}</span>
+          </div>
+          <div class="row-actions">
             <button class="btn small" onclick={() => toggleArchive(portfolio)}>
               {portfolio.status === "active" ? "Archive" : "Unarchive"}
             </button>
+            <button class="btn small danger" onclick={() => deletePortfolio(portfolio)}>Delete</button>
           </div>
-        {/each}
-      </section>
-    </div>
+        </div>
+      {:else}
+        <div class="empty-state"><p>No portfolios yet.</p></div>
+      {/each}
+    </section>
+  {:else if tab === "agents"}
+    <section class="card">
+      <h2>New agent</h2>
+      <form onsubmit={createAgent}>
+        <div class="field">
+          <label for="na-name">Name <span class="muted">(model + harness)</span></label>
+          <input id="na-name" type="text" bind:value={newAgentName} placeholder="Claude Opus 4.8 (Claude Code)" />
+        </div>
+        <div class="field">
+          <label for="na-notes">Notes <span class="muted">(optional)</span></label>
+          <input id="na-notes" type="text" bind:value={newAgentNotes} />
+        </div>
+        <button class="btn primary" type="submit" disabled={!newAgentName.trim()}>Create agent</button>
+      </form>
+
+      <h2 class="spaced">Agents</h2>
+      {#each agents as agent (agent.id)}
+        {#if editAgent?.id === agent.id}
+          <form class="edit-form" onsubmit={saveAgent}>
+            <div class="field">
+              <label for="ea-name-{agent.id}">Name</label>
+              <input id="ea-name-{agent.id}" type="text" bind:value={editAgent.name} />
+            </div>
+            <div class="field">
+              <label for="ea-notes-{agent.id}">Notes</label>
+              <input id="ea-notes-{agent.id}" type="text" bind:value={editAgent.notes} />
+            </div>
+            <div class="edit-actions">
+              <button class="btn primary" type="submit">Save</button>
+              <button class="btn" type="button" onclick={() => (editAgent = null)}>Cancel</button>
+            </div>
+          </form>
+        {:else}
+          {@const used = agent.portfolios?.length ?? 0}
+          <div class="manage-row">
+            <div>
+              <strong>{agent.name}</strong>
+              <span class="muted"> · {used} portfolio(s)</span>
+              {#if agent.notes}<p class="muted preview">{agent.notes}</p>{/if}
+            </div>
+            <div class="row-actions">
+              <button class="btn small" onclick={() => (editAgent = { ...agent })}>Edit</button>
+              <button
+                class="btn small danger"
+                onclick={() => deleteAgent(agent)}
+                disabled={used > 0}
+                title={used > 0 ? `${used} portfolio(s) still use this agent` : ""}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        {/if}
+      {:else}
+        <div class="empty-state"><p>No agents yet — create one above.</p></div>
+      {/each}
+    </section>
+  {:else if tab === "prompts"}
+    <section class="card">
+      <h2>New prompt</h2>
+      <form onsubmit={createPrompt}>
+        <div class="field">
+          <label for="np-prompt-name">Name <span class="muted">(e.g. weekly-manager-v2)</span></label>
+          <input id="np-prompt-name" type="text" bind:value={newPromptName} />
+        </div>
+        <div class="field">
+          <label for="np-prompt-text">Text</label>
+          <textarea id="np-prompt-text" bind:value={newPromptText} rows="6"></textarea>
+        </div>
+        <div class="field">
+          <label for="np-prompt-notes">Notes <span class="muted">(optional)</span></label>
+          <input id="np-prompt-notes" type="text" bind:value={newPromptNotes} />
+        </div>
+        <button class="btn primary" type="submit" disabled={!newPromptName.trim() || !newPromptText.trim()}>
+          Create prompt
+        </button>
+      </form>
+
+      <h2 class="spaced">Prompts</h2>
+      {#each prompts as prompt (prompt.id)}
+        {#if editPrompt?.id === prompt.id}
+          <form class="edit-form" onsubmit={savePrompt}>
+            <div class="field">
+              <label for="ep-name-{prompt.id}">Name</label>
+              <input id="ep-name-{prompt.id}" type="text" bind:value={editPrompt.name} />
+            </div>
+            <div class="field">
+              <label for="ep-text-{prompt.id}">Text</label>
+              <textarea id="ep-text-{prompt.id}" bind:value={editPrompt.text} rows="8"></textarea>
+            </div>
+            <div class="field">
+              <label for="ep-notes-{prompt.id}">Notes</label>
+              <input id="ep-notes-{prompt.id}" type="text" bind:value={editPrompt.notes} />
+            </div>
+            <div class="edit-actions">
+              <button class="btn primary" type="submit">Save</button>
+              <button class="btn" type="button" onclick={() => (editPrompt = null)}>Cancel</button>
+            </div>
+          </form>
+        {:else}
+          {@const used = prompt.portfolio_count ?? 0}
+          <div class="manage-row">
+            <div>
+              <strong>{prompt.name}</strong>
+              <span class="muted"> · {used} portfolio(s)</span>
+              <p class="muted preview">{prompt.text.slice(0, 140)}{prompt.text.length > 140 ? "…" : ""}</p>
+            </div>
+            <div class="row-actions">
+              <button class="btn small" onclick={() => (editPrompt = { ...prompt })}>Edit</button>
+              <button
+                class="btn small danger"
+                onclick={() => deletePrompt(prompt)}
+                disabled={used > 0}
+                title={used > 0 ? "Used by existing allocations" : ""}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        {/if}
+      {:else}
+        <div class="empty-state"><p>No prompts yet — create one above.</p></div>
+      {/each}
+    </section>
   {:else}
     <div class="manage-grid">
       <section class="card">
@@ -710,18 +805,15 @@
     gap: 14px;
   }
 
-  .agent-line {
+  .hint {
+    font-size: 12.5px;
+    margin-top: 6px;
+  }
+
+  .row-actions {
     display: flex;
-    gap: 8px;
-  }
-
-  .agent-line select {
-    flex: 1;
-  }
-
-  .inline-create {
-    border-style: dashed;
-    margin-bottom: 14px;
+    gap: 6px;
+    white-space: nowrap;
   }
 
   .manage-grid {

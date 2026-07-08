@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { apiJson, postJson } from "../api/client";
+  import { apiJson } from "../api/client";
   import type { PromptOut, ResolvedSymbol } from "../api/types";
   import { CircleCheck, ChevronUp, ChevronDown, X, Sigma } from "@lucide/svelte";
 
@@ -20,7 +20,6 @@
 
   interface Props {
     prompts: PromptOut[];
-    onPromptsChanged: () => Promise<void>;
     initialPositions?: { symbol: string; weight_pct: number }[];
     initialPromptId?: number | null;
     initialNote?: string;
@@ -33,7 +32,6 @@
 
   const {
     prompts,
-    onPromptsChanged,
     initialPositions = [],
     initialPromptId = null,
     initialNote = "",
@@ -62,11 +60,6 @@
   let rawResponse = $state(initialRawResponse);
   let submitting = $state(false);
   let formError = $state("");
-
-  let newPromptOpen = $state(false);
-  let newPromptName = $state("");
-  let newPromptText = $state("");
-  let creatingPrompt = $state(false);
 
   let effectivePreview = $state<string | null>(null);
   $effect(() => {
@@ -131,27 +124,6 @@
     if (Math.abs(residue) > 1e-9) {
       const largest = parsed.indexOf(Math.max(...parsed));
       rows[largest].weight = String(Math.round((parsed[largest] + residue) * 1e4) / 1e4);
-    }
-  }
-
-  async function createPrompt() {
-    if (!newPromptName.trim() || !newPromptText.trim()) return;
-    creatingPrompt = true;
-    formError = "";
-    try {
-      const created = await postJson<PromptOut>("/api/prompts", {
-        name: newPromptName.trim(),
-        text: newPromptText,
-      });
-      await onPromptsChanged();
-      promptId = created.id;
-      newPromptOpen = false;
-      newPromptName = "";
-      newPromptText = "";
-    } catch (e) {
-      formError = e instanceof Error ? e.message : "Failed to create prompt";
-    } finally {
-      creatingPrompt = false;
     }
   }
 
@@ -247,34 +219,16 @@
 
   <div class="field">
     <label for="prompt-select">Prompt that produced this decision</label>
-    <div class="prompt-line">
-      <select id="prompt-select" bind:value={promptId}>
-        <option value={null} disabled>Select a prompt…</option>
-        {#each prompts as prompt (prompt.id)}
-          <option value={prompt.id}>{prompt.name}</option>
-        {/each}
-      </select>
-      <button type="button" class="btn" onclick={() => (newPromptOpen = !newPromptOpen)}>
-        {newPromptOpen ? "Cancel" : "+ New prompt"}
-      </button>
-    </div>
+    <select id="prompt-select" bind:value={promptId}>
+      <option value={null} disabled>Select a prompt…</option>
+      {#each prompts as prompt (prompt.id)}
+        <option value={prompt.id}>{prompt.name}</option>
+      {/each}
+    </select>
+    {#if prompts.length === 0}
+      <p class="muted prompt-hint">No prompts yet — add one in the Prompts tab.</p>
+    {/if}
   </div>
-
-  {#if newPromptOpen}
-    <div class="card new-prompt">
-      <div class="field">
-        <label for="new-prompt-name">Prompt name <span class="muted">(e.g. weekly-manager-v2)</span></label>
-        <input id="new-prompt-name" type="text" bind:value={newPromptName} />
-      </div>
-      <div class="field">
-        <label for="new-prompt-text">Prompt text</label>
-        <textarea id="new-prompt-text" bind:value={newPromptText} rows="6"></textarea>
-      </div>
-      <button type="button" class="btn primary" onclick={createPrompt} disabled={creatingPrompt || !newPromptName.trim() || !newPromptText.trim()}>
-        {creatingPrompt ? "Creating…" : "Create prompt"}
-      </button>
-    </div>
-  {/if}
 
   <div class="field">
     <label for="alloc-note">Note <span class="muted">(e.g. the AI's regime call)</span></label>
@@ -375,20 +329,9 @@
     margin-left: auto;
   }
 
-  .prompt-line {
-    display: flex;
-    gap: 8px;
-  }
-
-  .prompt-line select {
-    flex: 1;
-  }
-
-  .new-prompt {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    border-style: dashed;
+  .prompt-hint {
+    font-size: 12px;
+    margin-top: 6px;
   }
 
   .locked-note {
