@@ -1,6 +1,7 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
   import type { AllocationOut, PortfolioDetail } from "../api/types";
+  import { ChevronDown, ChevronRight } from "@lucide/svelte";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import { ageLabel, fmtDate, fmtDateTime, num, pct, pctPoints, signClass } from "../format";
   import { link } from "../stores/router.svelte";
@@ -222,7 +223,13 @@
             {#if !allocation.locked}
               <span class="badge warn">editable until close</span>
             {/if}
-            <span class="chevron" aria-hidden="true">{expanded.includes(allocation.id) ? "▾" : "▸"}</span>
+            <span class="chevron" aria-hidden="true">
+              {#if expanded.includes(allocation.id)}
+                <ChevronDown size={14} />
+              {:else}
+                <ChevronRight size={14} />
+              {/if}
+            </span>
           </button>
           {#if expanded.includes(allocation.id)}
             <div class="allocation-body">

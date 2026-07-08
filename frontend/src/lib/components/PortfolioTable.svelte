@@ -2,6 +2,7 @@
   import type { PortfolioSummary } from "../api/types";
   import { ageLabel, num, pct, pctPoints, signClass } from "../format";
   import { link } from "../stores/router.svelte";
+  import { ChevronDown, ChevronUp } from "@lucide/svelte";
   import Sparkline from "./Sparkline.svelte";
 
   interface Props {
@@ -40,16 +41,20 @@
       sortDesc = true;
     }
   }
-
-  function arrow(key: SortKey): string {
-    if (sortKey !== key) return "";
-    return sortDesc ? " ↓" : " ↑";
-  }
 </script>
 
 {#snippet sortHeader(key: SortKey, label: string)}
   <th class="right sortable">
-    <button class="sort-btn" onclick={() => setSort(key)}>{label}{arrow(key)}</button>
+    <button class="sort-btn" onclick={() => setSort(key)}>
+      {label}
+      {#if sortKey === key}
+        {#if sortDesc}
+          <ChevronDown size={12} />
+        {:else}
+          <ChevronUp size={12} />
+        {/if}
+      {/if}
+    </button>
   </th>
 {/snippet}
 
