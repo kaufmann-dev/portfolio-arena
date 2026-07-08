@@ -1,4 +1,5 @@
 """Public read endpoints (no auth, rate-limited)."""
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -81,9 +82,7 @@ def compare(slugs: str, request: Request, session: Session = Depends(get_session
                 "slug": portfolio.slug,
                 "name": portfolio.name,
                 "is_benchmark": portfolio.is_benchmark,
-                "series": [
-                    {"date": point["date"], "nav": point["nav"] / base * 100.0} for point in window
-                ],
+                "series": [{"date": point["date"], "nav": point["nav"] / base * 100.0} for point in window],
             }
         )
     spy = rebase_series(valuations.spy_series, common_start, valuations.as_of or common_start)
@@ -121,9 +120,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
         raise HTTPException(404, "Prompt not found")
 
     portfolios, valuations = _valuations(session)
-    users = [
-        p for p in portfolios if any(a.prompt_id == prompt.id for a in p.allocations)
-    ]
+    users = [p for p in portfolios if any(a.prompt_id == prompt.id for a in p.allocations)]
     return {
         "as_of": valuations.as_of,
         "prompt": {

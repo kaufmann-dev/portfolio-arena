@@ -1,5 +1,6 @@
 """Public reads: leaderboard, portfolio detail, compare, prompts, agents,
 benchmark auto-seeding."""
+
 from .util import backdate_allocation
 
 
@@ -73,9 +74,7 @@ class TestPortfolioDetail:
 class TestCompare:
     def test_overlay_rebased_to_common_start(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        response = client.get(
-            f"/api/compare?slugs={sample_portfolio['slug']},spy-buy-and-hold"
-        )
+        response = client.get(f"/api/compare?slugs={sample_portfolio['slug']},spy-buy-and-hold")
         payload = response.json()
         assert len(payload["series"]) == 2
         for entry in payload["series"]:

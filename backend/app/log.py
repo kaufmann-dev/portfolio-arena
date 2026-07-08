@@ -1,4 +1,5 @@
 """Logging setup for the whole application."""
+
 import logging
 
 

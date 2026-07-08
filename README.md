@@ -81,25 +81,34 @@ API tests use [testcontainers](https://testcontainers.com/) and start a throwawa
 the podman user socket (`systemctl --user start podman.socket`), or set `TEST_DATABASE_URL` to
 reuse an existing database. Yahoo is stubbed in tests; nothing hits the network.
 
-## Deployment (Coolify + Nixpacks)
+## Coolify Deployment
 
-Single Nixpacks container (`nixpacks.toml`): pip install + frontend build; start runs Alembic
-migrations then uvicorn, which serves both `/api` and the SPA. Attach a separate Coolify
-PostgreSQL resource. Single instance assumed (in-memory rate limits).
+- **Build Pack**: Nixpacks
+- **Base Directory**: `/`
+- **Health Check**: `GET /api/leaderboard`
 
-Environment variables:
+Attach a separate Coolify PostgreSQL resource. Single instance assumed (in-memory rate limits).
 
-| Variable                        | Required | Default | Purpose                                |
-| ------------------------------- | -------- | ------- | -------------------------------------- |
-| `DATABASE_URL`                  | yes      | —       | PostgreSQL URL (postgres:// accepted)   |
-| `ARENA_JWT_SECRET`              | yes      | —       | JWT signing secret                      |
-| `ARENA_ADMIN_EMAIL`             | yes      | —       | Admin login (seeded on first start)     |
-| `ARENA_ADMIN_PASSWORD`          | yes      | —       | Admin password (seeded on first start)  |
-| `ARENA_DEFAULT_COST_BPS`        | no       | `10`    | Default cost bps for new portfolios     |
-| `ARENA_PRICE_CACHE_TTL_SECONDS` | no       | `3600`  | Price cache TTL                         |
-| `PORT`                          | no       | `8000`  | Listen port                             |
+### Environment Variables
 
-Health check: `GET /api/leaderboard` (touches the DB).
+**Required**
+
+| Variable               | Purpose                   |
+| ---------------------- | ------------------------- |
+| `DATABASE_URL`         | PostgreSQL connection URL |
+| `ARENA_JWT_SECRET`     | JWT signing secret        |
+| `ARENA_ADMIN_EMAIL`    | Admin login email         |
+| `ARENA_ADMIN_PASSWORD` | Admin password            |
+
+**Optional**
+
+| Variable                        | Default | Purpose                             |
+| ------------------------------- | ------- | ----------------------------------- |
+| `ARENA_DEFAULT_COST_BPS`        | `10`    | Default cost bps for new portfolios |
+| `ARENA_DB_CONNECT_RETRIES`      | `30`    | Retries before failing startup      |
+| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`   | Seconds between retries             |
+| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`  | Price cache TTL                     |
+| `PORT`                          | `8000`  | Listen port                         |
 
 ## Non-goals (v1)
 

@@ -1,4 +1,5 @@
 """Response shaping shared by public and admin routes."""
+
 from datetime import UTC, datetime
 
 from ..models import Allocation, Portfolio
@@ -114,9 +115,7 @@ def serialize_detail(valuation: PortfolioValuation, valuations: ArenaValuations)
         ],
         "stale_days": result.stale_days if result else {},
         "allocations": [
-            serialize_allocation(
-                allocation, applied_by_date.get(allocation.effective_date.isoformat()), now
-            )
+            serialize_allocation(allocation, applied_by_date.get(allocation.effective_date.isoformat()), now)
             for allocation in reversed(portfolio.allocations)
         ],
     }

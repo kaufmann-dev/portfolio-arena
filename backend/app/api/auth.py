@@ -1,4 +1,5 @@
 """Authentication endpoints (single admin)."""
+
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request

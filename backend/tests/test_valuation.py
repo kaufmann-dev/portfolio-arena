@@ -3,6 +3,7 @@
 The engine is pure: same inputs must always produce identical output.
 NAV series are base-100 at the first effective close.
 """
+
 import pytest
 
 from app.services.valuation import (
@@ -250,9 +251,7 @@ def test_no_price_at_or_before_first_close_raises():
 
 def test_zero_weight_positions_are_ignored():
     prices = {"AAA": series(*((day, 10.0) for day in DAYS))}
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 100.0), equity("MISSING-DATA", 0.0)))
-    ]
+    allocations = [AllocationInput(DAYS[0], (equity("AAA", 100.0), equity("MISSING-DATA", 0.0)))]
 
     result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
 

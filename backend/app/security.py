@@ -1,4 +1,5 @@
 """Password hashing and JWT authentication (single admin, no other roles)."""
+
 from datetime import UTC, datetime, timedelta
 
 import bcrypt

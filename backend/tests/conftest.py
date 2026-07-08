@@ -5,6 +5,7 @@ and stubbed Yahoo fetching (tests never hit the network).
 Environment must be configured before any `app.*` import, because Settings
 is cached at first use.
 """
+
 import os
 from pathlib import Path
 
@@ -16,11 +17,7 @@ os.environ.setdefault("ARENA_DB_CONNECT_RETRY_DELAY", "0.2")
 
 # Let testcontainers talk to podman when no docker daemon is configured.
 _PODMAN_SOCK = Path(f"/run/user/{os.getuid()}/podman/podman.sock")
-if (
-    "TEST_DATABASE_URL" not in os.environ
-    and "DOCKER_HOST" not in os.environ
-    and _PODMAN_SOCK.exists()
-):
+if "TEST_DATABASE_URL" not in os.environ and "DOCKER_HOST" not in os.environ and _PODMAN_SOCK.exists():
     os.environ["DOCKER_HOST"] = f"unix://{_PODMAN_SOCK}"
     os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
 
@@ -96,20 +93,55 @@ def stub_yahoo(monkeypatch):
     from app.services.trading_calendar import is_trading_day
 
     universe = {
-        "SPY": {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "currency": "USD",
-                "exchangeName": "NYSEArca", "instrumentType": "ETF"},
-        "RSP": {"symbol": "RSP", "name": "Invesco S&P 500 Equal Weight ETF", "currency": "USD",
-                "exchangeName": "NYSEArca", "instrumentType": "ETF"},
-        "AAPL": {"symbol": "AAPL", "name": "Apple Inc.", "currency": "USD",
-                 "exchangeName": "NasdaqGS", "instrumentType": "EQUITY"},
-        "MSFT": {"symbol": "MSFT", "name": "Microsoft Corporation", "currency": "USD",
-                 "exchangeName": "NasdaqGS", "instrumentType": "EQUITY"},
-        "EURUSD=X": {"symbol": "EURUSD=X", "name": "EUR/USD", "currency": "USD",
-                     "exchangeName": "CCY", "instrumentType": "CURRENCY"},
-        "GC=F": {"symbol": "GC=F", "name": "Gold Futures", "currency": "USD",
-                 "exchangeName": "CMX", "instrumentType": "FUTURE"},
-        "BTC-USD": {"symbol": "BTC-USD", "name": "Bitcoin USD", "currency": "USD",
-                    "exchangeName": "CCC", "instrumentType": "CRYPTOCURRENCY"},
+        "SPY": {
+            "symbol": "SPY",
+            "name": "SPDR S&P 500 ETF Trust",
+            "currency": "USD",
+            "exchangeName": "NYSEArca",
+            "instrumentType": "ETF",
+        },
+        "RSP": {
+            "symbol": "RSP",
+            "name": "Invesco S&P 500 Equal Weight ETF",
+            "currency": "USD",
+            "exchangeName": "NYSEArca",
+            "instrumentType": "ETF",
+        },
+        "AAPL": {
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "currency": "USD",
+            "exchangeName": "NasdaqGS",
+            "instrumentType": "EQUITY",
+        },
+        "MSFT": {
+            "symbol": "MSFT",
+            "name": "Microsoft Corporation",
+            "currency": "USD",
+            "exchangeName": "NasdaqGS",
+            "instrumentType": "EQUITY",
+        },
+        "EURUSD=X": {
+            "symbol": "EURUSD=X",
+            "name": "EUR/USD",
+            "currency": "USD",
+            "exchangeName": "CCY",
+            "instrumentType": "CURRENCY",
+        },
+        "GC=F": {
+            "symbol": "GC=F",
+            "name": "Gold Futures",
+            "currency": "USD",
+            "exchangeName": "CMX",
+            "instrumentType": "FUTURE",
+        },
+        "BTC-USD": {
+            "symbol": "BTC-USD",
+            "name": "Bitcoin USD",
+            "currency": "USD",
+            "exchangeName": "CCC",
+            "instrumentType": "CRYPTOCURRENCY",
+        },
     }
     base_prices = {"SPY": 500.0, "RSP": 180.0, "AAPL": 200.0, "MSFT": 400.0, "EURUSD=X": 1.10}
 
@@ -137,18 +169,21 @@ def stub_yahoo(monkeypatch):
 
     monkeypatch.setattr(yahoo, "fetch_chart_meta", fake_meta)
     monkeypatch.setattr(yahoo, "download_prices", fake_download)
-    monkeypatch.setattr(yahoo, "search_symbols", lambda q: [
-        {"symbol": s, "name": m["name"], "exchange": m["exchangeName"], "type": m["instrumentType"]}
-        for s, m in universe.items() if q.upper() in s
-    ])
+    monkeypatch.setattr(
+        yahoo,
+        "search_symbols",
+        lambda q: [
+            {"symbol": s, "name": m["name"], "exchange": m["exchangeName"], "type": m["instrumentType"]}
+            for s, m in universe.items()
+            if q.upper() in s
+        ],
+    )
     yield
 
 
 @pytest.fixture
 def admin_token(client) -> str:
-    response = client.post(
-        "/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
-    )
+    response = client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
     assert response.status_code == 200, response.text
     return response.json()["token"]
 

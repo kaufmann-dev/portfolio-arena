@@ -1,4 +1,5 @@
 """SQLAlchemy engine, session factory, and FastAPI session dependency."""
+
 import logging
 import time
 from collections.abc import Iterator
@@ -55,7 +56,9 @@ def wait_for_db() -> None:
             last_error = exc
             logger.warning(
                 "database connection attempt %d/%d failed: %s",
-                attempt, settings.db_connect_retries, exc,
+                attempt,
+                settings.db_connect_retries,
+                exc,
             )
             if attempt < settings.db_connect_retries:
                 time.sleep(settings.db_connect_retry_delay)

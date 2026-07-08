@@ -5,6 +5,7 @@ symbols, cash is ``CASH:CCY``. Raw indices, FX pairs, and futures are rejected
 with actionable hints (see PLAN: futures roll artifacts would corrupt the
 long-horizon measurement; ETFs cover the use cases).
 """
+
 import re
 from dataclasses import dataclass
 
@@ -87,9 +88,7 @@ def resolve_symbol(raw: str) -> ResolvedSymbol:
             raise SymbolValidationError(
                 f"No Yahoo FX rate for {currency} (looked up {fx_pair_for(currency)})."
             )
-        return ResolvedSymbol(
-            symbol=symbol, instrument="cash", name=f"{currency} cash", currency=currency
-        )
+        return ResolvedSymbol(symbol=symbol, instrument="cash", name=f"{currency} cash", currency=currency)
 
     meta = yahoo.fetch_chart_meta(symbol)
     if meta is None:
@@ -120,9 +119,7 @@ SEARCHABLE_TYPES = {"EQUITY", "ETF", "MUTUALFUND", "FUND"}
 def search_symbols_allowed(query: str) -> list[dict]:
     """Yahoo symbol search filtered to instrument types the arena accepts."""
     results = yahoo.search_symbols(query)
-    return [
-        item for item in results if str(item.get("type") or "").upper() in SEARCHABLE_TYPES
-    ]
+    return [item for item in results if str(item.get("type") or "").upper() in SEARCHABLE_TYPES]
 
 
 def validate_positions(positions: list[dict]) -> None:

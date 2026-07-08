@@ -4,6 +4,7 @@ Benchmark portfolios (SPY/RSP buy & hold) get a single 100% allocation whose
 effective date tracks the earliest real portfolio inception, so every
 comparison starts from the same date and runs through the identical engine.
 """
+
 import logging
 from datetime import UTC, datetime
 

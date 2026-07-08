@@ -1,5 +1,6 @@
 """Idempotent migration runner: upgrade to head (fresh databases get the
 full baseline schema)."""
+
 import logging
 
 from alembic.config import Config

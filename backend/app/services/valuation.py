@@ -15,6 +15,7 @@ Conventions (see PLAN.md):
 - Calendar = days SPY has a close. Missing prices carry forward and are
   flagged; nothing is guessed silently.
 """
+
 import math
 from bisect import bisect_right
 from dataclasses import dataclass, field
@@ -194,13 +195,9 @@ def value_portfolio(
         else:
             nav_before = position_value(day)
             drifted = _drifted_weights(day)
-            new_weights = {
-                p.symbol: p.weight_pct for p in positions if p.instrument == "equity"
-            }
+            new_weights = {p.symbol: p.weight_pct for p in positions if p.instrument == "equity"}
             symbols = set(drifted) | set(new_weights)
-            turnover_pct = 0.5 * sum(
-                abs(new_weights.get(s, 0.0) - drifted.get(s, 0.0)) for s in symbols
-            )
+            turnover_pct = 0.5 * sum(abs(new_weights.get(s, 0.0) - drifted.get(s, 0.0)) for s in symbols)
             cost = nav_before * 2 * (turnover_pct / 100.0) * cost_bps / 10_000.0
             cumulative_turnover += turnover_pct
 
