@@ -61,9 +61,10 @@ class TestPortfolioDetail:
         symbols = {holding["symbol"] for holding in portfolio["holdings"]}
         assert symbols == {"AAPL", "CASH:USD"}
 
+        assert portfolio["prompt"]["slug"] == "weekly-manager-v1"
+
         allocation = portfolio["allocations"][0]
         assert allocation["locked"] is True
-        assert allocation["prompt"]["slug"] == "weekly-manager-v1"
         assert allocation["applied_date"] is not None
         assert allocation["cost"] is not None
 

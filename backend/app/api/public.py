@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_session
-from ..models import Agent, Allocation, Portfolio, Prompt
+from ..models import Agent, Portfolio, Prompt
 from ..ratelimit import limiter
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import ensure_benchmark_allocations
@@ -93,9 +93,9 @@ def compare(slugs: str, request: Request, session: Session = Depends(get_session
 @limiter.limit("60/minute")
 def list_prompts(request: Request, session: Session = Depends(get_session)):
     prompts = session.scalars(select(Prompt).order_by(Prompt.slug)).all()
-    usage: dict[int, set[int]] = {}
-    for allocation in session.scalars(select(Allocation)):
-        usage.setdefault(allocation.prompt_id, set()).add(allocation.portfolio_id)
+    usage: dict[int, int] = {}
+    for portfolio in session.scalars(select(Portfolio)):
+        usage[portfolio.prompt_id] = usage.get(portfolio.prompt_id, 0) + 1
     return {
         "prompts": [
             {
@@ -105,7 +105,7 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
                 "text": prompt.text,
                 "notes": prompt.notes,
                 "updated_at": prompt.updated_at.isoformat(),
-                "portfolio_count": len(usage.get(prompt.id, ())),
+                "portfolio_count": usage.get(prompt.id, 0),
             }
             for prompt in prompts
         ]
@@ -120,7 +120,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
         raise HTTPException(404, "Prompt not found")
 
     portfolios, valuations = _valuations(session)
-    users = [p for p in portfolios if any(a.prompt_id == prompt.id for a in p.allocations)]
+    users = [p for p in portfolios if p.prompt_id == prompt.id]
     return {
         "as_of": valuations.as_of,
         "prompt": {

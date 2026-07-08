@@ -76,7 +76,7 @@ class Prompt(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    allocations: Mapped[list["Allocation"]] = relationship(back_populates="prompt")
+    portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="prompt")
 
 
 class Portfolio(Base):
@@ -90,6 +90,7 @@ class Portfolio(Base):
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
+    prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
     cost_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     is_benchmark: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
@@ -98,6 +99,7 @@ class Portfolio(Base):
     )
 
     agent: Mapped[Agent] = relationship(back_populates="portfolios")
+    prompt: Mapped[Prompt] = relationship(back_populates="portfolios")
     allocations: Mapped[list["Allocation"]] = relationship(
         back_populates="portfolio",
         cascade="all, delete-orphan",
@@ -110,8 +112,7 @@ class Allocation(Base):
     """One row per decision (initial or rebalance).
 
     Locked (= effective_date's close has passed) is derived, never stored;
-    once locked, positions and effective_date are frozen — prompt_id and note
-    remain editable.
+    once locked, positions and effective_date are frozen — note remains editable.
     """
 
     __tablename__ = "allocations"
@@ -121,7 +122,6 @@ class Allocation(Base):
     portfolio_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
     )
-    prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -130,7 +130,6 @@ class Allocation(Base):
     )
 
     portfolio: Mapped[Portfolio] = relationship(back_populates="allocations")
-    prompt: Mapped[Prompt] = relationship(back_populates="allocations")
     positions: Mapped[list["Position"]] = relationship(
         back_populates="allocation",
         cascade="all, delete-orphan",

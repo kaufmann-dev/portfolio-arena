@@ -25,16 +25,16 @@ automation, not advice. The app never calls an LLM.
   market close strictly after T (early closes honored). Entered Saturday → effective Monday's
   close.
 - **Positions lock at the effective close.** Until then there is a typo-correction window
-  (edit/delete allowed); afterwards positions and effective date are frozen — only prompt
-  reference and note stay editable.
+  (edit/delete allowed); afterwards positions and effective date are frozen — only the note
+  stays editable.
+- **One portfolio, one prompt.** A portfolio has a fixed prompt chosen at creation, like its
+  agent; it can be reassigned later but is not chosen per allocation.
 - **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system
   portfolios whose single 100% allocation is auto-aligned to the earliest real portfolio
   inception, valued by the same code path at zero cost.
 - **Costs on turnover.** Every trade pays a flat fee (default 10 bps of traded notional, frozen
   per portfolio at creation). Initial deployment pays one side; rebalances pay both sides.
-- **Provenance.** Each allocation can store the raw model response verbatim and references the
-  prompt that produced it (that is also the regime-switching mechanism — any rebalance may attach
-  a different prompt).
+- **Notes.** Each allocation has an optional free-text note (e.g. the model's regime call).
 - **Honesty labels.** Portfolios younger than 6 months are badged "too early to judge"; stale or
   frozen (possibly delisted) price data is flagged, never guessed.
 

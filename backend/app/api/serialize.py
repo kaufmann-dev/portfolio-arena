@@ -12,10 +12,8 @@ def agent_ref(portfolio: Portfolio) -> dict:
     return {"id": portfolio.agent.id, "slug": portfolio.agent.slug, "name": portfolio.agent.name}
 
 
-def prompt_ref(allocation: Allocation | None) -> dict | None:
-    if allocation is None:
-        return None
-    prompt = allocation.prompt
+def prompt_ref(portfolio: Portfolio) -> dict:
+    prompt = portfolio.prompt
     return {"id": prompt.id, "slug": prompt.slug, "name": prompt.name}
 
 
@@ -42,7 +40,6 @@ def serialize_allocation(
     return {
         "id": allocation.id,
         "portfolio_id": allocation.portfolio_id,
-        "prompt": prompt_ref(allocation),
         "entered_at": allocation.entered_at.isoformat(),
         "effective_date": allocation.effective_date.isoformat(),
         "applied_date": applied.applied_date if applied else None,
@@ -66,14 +63,13 @@ def _flags(valuation: PortfolioValuation) -> dict:
 def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations) -> dict:
     portfolio = valuation.portfolio
     allocations = portfolio.allocations
-    latest = allocations[-1] if allocations else None
     age = age_days(valuation, valuations.as_of)
     return {
         "id": portfolio.id,
         "slug": portfolio.slug,
         "name": portfolio.name,
         "agent": agent_ref(portfolio),
-        "prompt": prompt_ref(latest),
+        "prompt": prompt_ref(portfolio),
         "is_benchmark": portfolio.is_benchmark,
         "status": portfolio.status,
         "cost_bps": portfolio.cost_bps,

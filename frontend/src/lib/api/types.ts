@@ -57,7 +57,6 @@ export interface PositionOut {
 export interface AllocationOut {
   id: number;
   portfolio_id: number;
-  prompt: Ref | null;
   entered_at: string;
   effective_date: string;
   applied_date: string | null;

@@ -1,10 +1,9 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { PromptOut, ResolvedSymbol } from "../api/types";
+  import type { ResolvedSymbol } from "../api/types";
   import { CircleCheck, ChevronUp, ChevronDown, X, Sigma } from "@lucide/svelte";
 
   export interface AllocationPayload {
-    prompt_id: number;
     positions: { symbol: string; weight_pct: number; note: string }[];
     note: string;
   }
@@ -19,9 +18,7 @@
   }
 
   interface Props {
-    prompts: PromptOut[];
     initialPositions?: { symbol: string; weight_pct: number; note?: string }[];
-    initialPromptId?: number | null;
     initialNote?: string;
     /** When false (locked allocation edit) position rows are read-only. */
     positionsEditable?: boolean;
@@ -30,9 +27,7 @@
   }
 
   const {
-    prompts,
     initialPositions = [],
-    initialPromptId = null,
     initialNote = "",
     positionsEditable = true,
     submitLabel,
@@ -53,8 +48,6 @@
   // form with {#key} when a different allocation is loaded.
   // svelte-ignore state_referenced_locally
   let rows = $state<Row[]>(toRows(initialPositions));
-  // svelte-ignore state_referenced_locally
-  let promptId = $state<number | null>(initialPromptId);
   // svelte-ignore state_referenced_locally
   let note = $state(initialNote);
   let submitting = $state(false);
@@ -127,10 +120,6 @@
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     formError = "";
-    if (promptId === null) {
-      formError = "Pick the prompt that produced this decision.";
-      return;
-    }
     const positions = rows
       .filter((row) => row.symbol.trim())
       .map((row) => ({
@@ -148,7 +137,7 @@
     }
     submitting = true;
     try {
-      await onSubmit({ prompt_id: promptId, positions, note });
+      await onSubmit({ positions, note });
     } catch (e) {
       formError = e instanceof Error ? e.message : "Submit failed";
     } finally {
@@ -240,22 +229,9 @@
     </fieldset>
   {:else}
     <p class="muted locked-note">
-      Positions are locked — the effective close has passed. Only prompt, note, and raw response can change.
+      Positions are locked — the effective close has passed. Only the note can change.
     </p>
   {/if}
-
-  <div class="field">
-    <label for="prompt-select">Prompt that produced this decision</label>
-    <select id="prompt-select" bind:value={promptId}>
-      <option value={null} disabled>Select a prompt…</option>
-      {#each prompts as prompt (prompt.id)}
-        <option value={prompt.id}>{prompt.name}</option>
-      {/each}
-    </select>
-    {#if prompts.length === 0}
-      <p class="muted prompt-hint">No prompts yet — add one in the Prompts tab.</p>
-    {/if}
-  </div>
 
   <div class="field">
     <label for="alloc-note">Notes <span class="muted">(optional)</span></label>
@@ -354,11 +330,6 @@
   .sum {
     font-weight: 600;
     margin-left: auto;
-  }
-
-  .prompt-hint {
-    font-size: 12px;
-    margin-top: 6px;
   }
 
   .locked-note {

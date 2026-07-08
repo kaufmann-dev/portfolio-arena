@@ -162,10 +162,7 @@
 
   async function submitEdit(payload: AllocationPayload) {
     if (!editingAllocation || !detail) return;
-    const body: Record<string, unknown> = {
-      prompt_id: payload.prompt_id,
-      note: payload.note,
-    };
+    const body: Record<string, unknown> = { note: payload.note };
     if (!editingAllocation.locked) body.positions = payload.positions;
     await putJson(`/api/allocations/${editingAllocation.id}`, body);
     flash("Allocation updated.");
@@ -188,23 +185,29 @@
   // ── Tab 2: portfolios ────────────────────────
   let newName = $state("");
   let newAgentId = $state<number | null>(null);
+  let newPromptId = $state<number | null>(null);
   let newCostBps = $state<string>("");
   let portfolioError = $state("");
 
   async function createPortfolio(event: SubmitEvent) {
     event.preventDefault();
     portfolioError = "";
-    if (!newName.trim() || newAgentId === null) {
-      portfolioError = "Portfolio name and agent are required.";
+    if (!newName.trim() || newAgentId === null || newPromptId === null) {
+      portfolioError = "Portfolio name, agent, and prompt are required.";
       return;
     }
-    const body: Record<string, unknown> = { name: newName.trim(), agent_id: newAgentId };
+    const body: Record<string, unknown> = {
+      name: newName.trim(),
+      agent_id: newAgentId,
+      prompt_id: newPromptId,
+    };
     if (newCostBps.trim() !== "") body.cost_bps = parseInt(newCostBps, 10);
     try {
       const created = await postJson<{ slug: string; name: string }>("/api/portfolios", body);
       flash(`Portfolio ${created.name} created — enter its first allocation.`);
       newName = "";
       newAgentId = null;
+      newPromptId = null;
       newCostBps = "";
       await loadAll();
       // Jump to the Allocations tab with the new portfolio selected.
@@ -308,6 +311,7 @@
     id: number;
     name: string;
     agent_id: number;
+    prompt_id: number;
     cost_bps: string;
   } | null>(null);
 
@@ -325,6 +329,7 @@
       await patchJson(`/api/portfolios/${editPortfolio.id}`, {
         name: editPortfolio.name,
         agent_id: editPortfolio.agent_id,
+        prompt_id: editPortfolio.prompt_id,
         cost_bps: parseInt(editPortfolio.cost_bps, 10) || 0,
       });
       editPortfolio = null;
@@ -469,13 +474,15 @@
       {#if detailLoading}
         <div class="loading-block"><span class="spinner" aria-hidden="true"></span></div>
       {:else if detail}
+        <p class="muted picked-meta">
+          {detail.agent.name} · prompt {detail.prompt?.name ?? "—"}
+        </p>
         <h2>Allocation history</h2>
         <div class="table-scroll history">
           <table>
             <thead>
               <tr>
                 <th>Effective</th>
-                <th>Prompt</th>
                 <th>Status</th>
                 <th class="right">Positions</th>
                 <th></th>
@@ -485,7 +492,6 @@
               {#each detail.allocations as allocation (allocation.id)}
                 <tr>
                   <td class="num">{fmtDate(allocation.effective_date)}</td>
-                  <td>{allocation.prompt?.name ?? "—"}</td>
                   <td>
                     {#if allocation.locked}
                       <span class="badge">locked</span>
@@ -507,7 +513,7 @@
                 </tr>
               {:else}
                 <tr>
-                  <td colspan="5" class="muted">No allocations yet — enter the first one below.</td>
+                  <td colspan="4" class="muted">No allocations yet — enter the first one below.</td>
                 </tr>
               {/each}
             </tbody>
@@ -566,9 +572,7 @@
           </h2>
           {#key editingAllocation.id}
             <AllocationForm
-              {prompts}
               initialPositions={editingAllocation.positions}
-              initialPromptId={editingAllocation.prompt?.id ?? null}
               initialNote={editingAllocation.note}
               positionsEditable={!editingAllocation.locked}
               submitLabel="Save changes"
@@ -578,7 +582,7 @@
         {:else if detail.allocations.length === 0}
           <h2>First allocation</h2>
           {#key formKey}
-            <AllocationForm {prompts} submitLabel="Enter first allocation" onSubmit={submitRebalance} />
+            <AllocationForm submitLabel="Enter first allocation" onSubmit={submitRebalance} />
           {/key}
         {:else}
           <h2>New rebalance</h2>
@@ -587,9 +591,7 @@
           </p>
           {#key formKey}
             <AllocationForm
-              {prompts}
               initialPositions={latestAllocation?.positions ?? []}
-              initialPromptId={latestAllocation?.prompt?.id ?? null}
               submitLabel="Enter rebalance"
               onSubmit={submitRebalance}
             />
@@ -627,12 +629,28 @@
             <p class="muted hint">No agents yet — create one in the Agents tab first.</p>
           {/if}
         </div>
+        <div class="field">
+          <label for="np-prompt">Prompt</label>
+          <select id="np-prompt" bind:value={newPromptId}>
+            <option value={null} disabled>Select a prompt…</option>
+            {#each prompts as prompt (prompt.id)}
+              <option value={prompt.id}>{prompt.name}</option>
+            {/each}
+          </select>
+          {#if prompts.length === 0}
+            <p class="muted hint">No prompts yet — create one in the Prompts tab first.</p>
+          {/if}
+        </div>
 
         {#if portfolioError}
           <div class="error-box" role="alert">{portfolioError}</div>
         {/if}
 
-        <button class="btn primary" type="submit" disabled={!newName.trim() || newAgentId === null}>
+        <button
+          class="btn primary"
+          type="submit"
+          disabled={!newName.trim() || newAgentId === null || newPromptId === null}
+        >
           Create portfolio
         </button>
         <p class="muted hint">Enter its first allocation from the Allocations tab.</p>
@@ -651,6 +669,14 @@
               <select id="epf-agent-{portfolio.id}" bind:value={editPortfolio.agent_id}>
                 {#each agents as agent (agent.id)}
                   <option value={agent.id}>{agent.name}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="field">
+              <label for="epf-prompt-{portfolio.id}">Prompt</label>
+              <select id="epf-prompt-{portfolio.id}" bind:value={editPortfolio.prompt_id}>
+                {#each prompts as prompt (prompt.id)}
+                  <option value={prompt.id}>{prompt.name}</option>
                 {/each}
               </select>
             </div>
@@ -679,6 +705,7 @@
                     id: portfolio.id,
                     name: portfolio.name,
                     agent_id: portfolio.agent.id,
+                    prompt_id: portfolio.prompt?.id ?? prompts[0]?.id ?? 0,
                     cost_bps: String(portfolio.cost_bps),
                   })}
               >

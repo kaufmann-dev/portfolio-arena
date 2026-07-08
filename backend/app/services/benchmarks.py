@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from ..config import BENCHMARK_PROMPT_SLUG, BENCHMARKS
-from ..models import Allocation, Portfolio, Position, Prompt
+from ..config import BENCHMARKS
+from ..models import Allocation, Portfolio, Position
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +28,6 @@ def ensure_benchmark_allocations(session: Session) -> None:
     if earliest is None:
         return
 
-    prompt = session.scalars(select(Prompt).where(Prompt.slug == BENCHMARK_PROMPT_SLUG)).first()
-    if prompt is None:  # seeding hasn't run; nothing sane to attach
-        return
-
     changed = False
     for benchmark in BENCHMARKS:
         portfolio = session.scalars(
@@ -45,7 +41,6 @@ def ensure_benchmark_allocations(session: Session) -> None:
         if not portfolio.allocations:
             allocation = Allocation(
                 portfolio_id=portfolio.id,
-                prompt_id=prompt.id,
                 entered_at=datetime.now(UTC),
                 effective_date=earliest,
                 note="System benchmark allocation.",

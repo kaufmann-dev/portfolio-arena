@@ -5,9 +5,8 @@ from datetime import UTC, datetime
 from .util import backdate_allocation
 
 
-def make_allocation_body(prompt_id, positions=None, **extra):
+def make_allocation_body(positions=None, **extra):
     return {
-        "prompt_id": prompt_id,
         "positions": positions
         or [
             {"symbol": "AAPL", "weight_pct": 60},
@@ -21,7 +20,11 @@ class TestCreation:
     def test_portfolio_created_without_allocation(self, client, admin_headers, sample_agent, sample_prompt):
         created = client.post(
             "/api/portfolios",
-            json={"name": "Empty Weekly", "agent_id": sample_agent["id"]},
+            json={
+                "name": "Empty Weekly",
+                "agent_id": sample_agent["id"],
+                "prompt_id": sample_prompt["id"],
+            },
             headers=admin_headers,
         )
         assert created.status_code == 201, created.text
@@ -37,7 +40,7 @@ class TestCreation:
         # The first allocation is entered separately (Allocations tab).
         first = client.post(
             f"/api/portfolios/{portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"]),
+            json=make_allocation_body(),
             headers=admin_headers,
         )
         assert first.status_code == 201, first.text
@@ -56,7 +59,7 @@ class TestCreation:
     def test_weights_must_sum_to_100(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"], [{"symbol": "AAPL", "weight_pct": 99}]),
+            json=make_allocation_body([{"symbol": "AAPL", "weight_pct": 99}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -66,7 +69,6 @@ class TestCreation:
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
             json=make_allocation_body(
-                sample_prompt["id"],
                 [
                     {"symbol": "AAPL", "weight_pct": 50},
                     {"symbol": "aapl", "weight_pct": 50},
@@ -80,7 +82,7 @@ class TestCreation:
     def test_index_symbol_rejected_with_hint(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"], [{"symbol": "^GSPC", "weight_pct": 100}]),
+            json=make_allocation_body([{"symbol": "^GSPC", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -89,7 +91,7 @@ class TestCreation:
     def test_fx_pair_rejected_with_hint(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"], [{"symbol": "EURUSD=X", "weight_pct": 100}]),
+            json=make_allocation_body([{"symbol": "EURUSD=X", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -98,7 +100,7 @@ class TestCreation:
     def test_futures_rejected_with_hint(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"], [{"symbol": "GC=F", "weight_pct": 100}]),
+            json=make_allocation_body([{"symbol": "GC=F", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -107,7 +109,7 @@ class TestCreation:
     def test_crypto_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"], [{"symbol": "BTC-USD", "weight_pct": 100}]),
+            json=make_allocation_body([{"symbol": "BTC-USD", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -115,7 +117,7 @@ class TestCreation:
     def test_unknown_symbol_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"], [{"symbol": "NOPE", "weight_pct": 100}]),
+            json=make_allocation_body([{"symbol": "NOPE", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -126,7 +128,6 @@ class TestCreation:
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
             json=make_allocation_body(
-                sample_prompt["id"],
                 [
                     {"symbol": "MSFT", "weight_pct": 50},
                     {"symbol": "CASH:EUR", "weight_pct": 50},
@@ -139,7 +140,7 @@ class TestCreation:
     def test_unknown_cash_currency_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"], [{"symbol": "CASH:ZZZ", "weight_pct": 100}]),
+            json=make_allocation_body([{"symbol": "CASH:ZZZ", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
@@ -148,19 +149,11 @@ class TestCreation:
     def test_same_effective_date_conflicts(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"]),
+            json=make_allocation_body(),
             headers=admin_headers,
         )
         assert response.status_code == 409
         assert "edit it instead" in response.json()["detail"]
-
-    def test_missing_prompt_rejected(self, client, admin_headers, sample_portfolio):
-        response = client.post(
-            f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(99999),
-            headers=admin_headers,
-        )
-        assert response.status_code == 422
 
     def test_archived_portfolio_rejects_allocations(
         self, client, admin_headers, sample_portfolio, sample_prompt
@@ -173,7 +166,7 @@ class TestCreation:
         )
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(sample_prompt["id"]),
+            json=make_allocation_body(),
             headers=admin_headers,
         )
         assert response.status_code == 409
@@ -216,27 +209,17 @@ class TestLockEnforcement:
         response = client.delete(f"/api/allocations/{allocation_id}", headers=admin_headers)
         assert response.status_code == 403
 
-    def test_locked_metadata_still_editable(self, client, admin_headers, sample_portfolio, sample_prompt):
+    def test_locked_metadata_still_editable(self, client, admin_headers, sample_portfolio):
         allocation_id = sample_portfolio["allocation"]["id"]
         backdate_allocation(allocation_id)
 
-        second_prompt = client.post(
-            "/api/prompts",
-            json={"name": "weekly-manager-v2", "text": "Be bolder."},
-            headers=admin_headers,
-        ).json()
-
         response = client.put(
             f"/api/allocations/{allocation_id}",
-            json={
-                "prompt_id": second_prompt["id"],
-                "note": "regime call: risk-on",
-            },
+            json={"note": "regime call: risk-on"},
             headers=admin_headers,
         )
         assert response.status_code == 200, response.text
         payload = response.json()
-        assert payload["prompt"]["id"] == second_prompt["id"]
         assert payload["note"] == "regime call: risk-on"
         assert payload["locked"] is True
 
