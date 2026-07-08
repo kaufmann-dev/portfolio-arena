@@ -29,7 +29,8 @@ class TestCreation:
         assert "allocation" not in portfolio
 
         # It shows up on the leaderboard with no track record yet.
-        row = next(p for p in client.get("/api/leaderboard").json()["portfolios"] if p["id"] == portfolio["id"])
+        rows = client.get("/api/leaderboard").json()["portfolios"]
+        row = next(p for p in rows if p["id"] == portfolio["id"])
         assert row["allocation_count"] == 0
         assert row["metrics"]["has_data"] is False
 
