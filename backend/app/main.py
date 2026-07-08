@@ -8,11 +8,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .api import api_router
 from .config import get_settings
 from .db import dispose_engine, session_factory
 from .log import setup_logging
+from .mcp_server import build_mcp_asgi_app, mcp
 from .migrate import run_migrations
 from .ratelimit import limiter
 from .seed import run_seed
@@ -20,12 +22,30 @@ from .seed import run_seed
 logger = logging.getLogger(__name__)
 
 
+class McpTrailingSlash:
+    """Rewrite exactly ``/mcp`` to ``/mcp/`` before routing. Starlette's
+    ``Mount('/mcp')`` only matches ``/mcp/…``, so without this the bare path
+    falls through to the SPA catch-all (405/index.html) instead of the MCP app.
+    This lets clients use either form with no redirect."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] == "/mcp":
+            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+        await self.app(scope, receive, send)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     run_migrations()
     with session_factory()() as session:
         run_seed(session)
-    yield
+    # A mounted sub-app's own lifespan never runs, so the MCP session manager
+    # must be started here or every /mcp request fails.
+    async with mcp.session_manager.run():
+        yield
     dispose_engine()
 
 
@@ -33,6 +53,7 @@ def create_app() -> FastAPI:
     setup_logging()
     app = FastAPI(lifespan=lifespan)
     app.state.limiter = limiter
+    app.add_middleware(McpTrailingSlash)
 
     @app.exception_handler(RateLimitExceeded)
     async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
@@ -46,6 +67,10 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(api_router)
+
+    # Mount before the SPA catch-all: routes match in registration order, so the
+    # catch-all would otherwise swallow GET /mcp and serve index.html.
+    app.mount("/mcp", build_mcp_asgi_app())
 
     static_dir: Path = get_settings().static_dir.resolve()
 

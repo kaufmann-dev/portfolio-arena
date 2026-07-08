@@ -6,7 +6,8 @@ On a recurring cadence the operator prompts AI agents (Claude, Codex, Gemini, �
 portfolio-management prompts, then enters each agent's proposed allocation here by hand. The app
 simulates it as a paper portfolio from Yahoo Finance data and tracks it live against SPY on a
 public leaderboard. It is an *arena*: honest, deterministic measurement — not trading, not
-automation, not advice. The app never calls an LLM.
+advice. The app never calls an LLM itself; agents drive it from outside (by hand or over the
+MCP server).
 
 ## Architecture
 
@@ -18,6 +19,9 @@ automation, not advice. The app never calls an LLM.
 - **No stored NAVs, no background jobs.** Every NAV series is recomputed on request from the
   entered allocations + cached price series. Adjusted closes change retroactively
   (dividends/splits), so recomputation is *more* correct than snapshotting.
+- **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
+  endpoint exposing the full app surface as tools, so an AI agent can read its portfolio's
+  history and enter rebalances programmatically instead of by hand. See below.
 
 ## Experiment-integrity rules (enforced in code)
 
@@ -53,6 +57,23 @@ contracts have roll artifacts that would corrupt long-horizon measurement).
 
 **Known simplification:** cash earns no interest in any currency. This slightly penalizes
 cash-heavy contestants; the benchmark is unaffected.
+
+## MCP server
+
+The app mounts a streamable-HTTP [MCP](https://modelcontextprotocol.io) server at `/mcp`. It
+exposes the entire app surface as tools — everything an admin or visitor can do (manage
+portfolios, agents, prompts, allocations; validate symbols; read the leaderboard and
+per-portfolio history) — **except** API-key management, which stays in the admin panel.
+
+- **Auth.** Every request needs an API key (`Authorization: Bearer <key>`, or `X-API-Key`);
+  there is no anonymous access. Create and revoke keys in the admin panel's **API Keys** tab.
+  The plaintext key is shown once at creation; only a SHA-256 hash is stored.
+- **Flagship read tools.** `get_portfolio(slug_or_id)` returns everything an agent needs to
+  rebalance one portfolio (prompt text, drifted holdings with entry/current prices, the full
+  allocation history with general and per-position notes, performance metrics).
+  `get_arena_overview()` compares every portfolio's performance at once.
+- **Connecting a client.** e.g. `claude mcp add --transport http arena https://<host>/mcp
+  --header "Authorization: Bearer <key>"`.
 
 ## Development
 
@@ -113,6 +134,7 @@ Attach a separate Coolify PostgreSQL resource. Single instance assumed (in-memor
 
 ## Non-goals (v1)
 
-No LLM API calls, no automation, no response parsing, no broker integration, no shorts or
-leverage, no options/futures, no intraday prices, no cash interest, no multi-user accounts, no
-notifications, no historical backtesting, no significance testing beyond the age badge.
+The app never calls an LLM itself and does no response parsing — agents drive it from outside,
+via the admin panel or the MCP server. No broker integration, no shorts or leverage, no
+options/futures, no intraday prices, no cash interest, no multi-user accounts, no notifications,
+no historical backtesting, no significance testing beyond the age badge.

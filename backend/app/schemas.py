@@ -77,3 +77,7 @@ class PortfolioPatch(BaseModel):
 
 class SettingsUpdate(BaseModel):
     default_cost_bps: int = Field(ge=0)
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)

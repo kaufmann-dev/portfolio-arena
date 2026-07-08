@@ -3,6 +3,9 @@
   import type {
     AgentOut,
     AllocationOut,
+    ApiKeyCreated,
+    ApiKeyOut,
+    ApiKeysResponse,
     LeaderboardResponse,
     PortfolioDetail,
     PortfolioSummary,
@@ -12,7 +15,7 @@
   import { fmtDate, num, pctPoints, signClass } from "../format";
   import { auth } from "../stores/auth.svelte";
 
-  type Tab = "allocation" | "portfolio" | "agents" | "prompts" | "settings";
+  type Tab = "allocation" | "portfolio" | "agents" | "prompts" | "keys" | "settings";
   let tab = $state<Tab>("allocation");
 
   // ── Login ────────────────────────────────────
@@ -352,6 +355,56 @@
     }
   }
 
+  // ── Tab: API keys ────────────────────────────
+  let apiKeys = $state<ApiKeyOut[]>([]);
+  let newKeyName = $state("");
+  let createdKey = $state<ApiKeyCreated | null>(null);
+  let keyError = $state("");
+
+  $effect(() => {
+    if (auth.isAdmin && tab === "keys") void loadKeys();
+  });
+
+  async function loadKeys() {
+    const payload = await apiJson<ApiKeysResponse>("/api/keys");
+    apiKeys = payload.keys;
+  }
+
+  async function createKey(event: SubmitEvent) {
+    event.preventDefault();
+    keyError = "";
+    if (!newKeyName.trim()) return;
+    try {
+      createdKey = await postJson<ApiKeyCreated>("/api/keys", { name: newKeyName.trim() });
+      newKeyName = "";
+      await loadKeys();
+    } catch (e) {
+      keyError = e instanceof Error ? e.message : "Create failed";
+    }
+  }
+
+  async function copyKey() {
+    if (!createdKey) return;
+    try {
+      await navigator.clipboard.writeText(createdKey.key);
+      flash("API key copied.");
+    } catch {
+      flash("Copy failed — select and copy the key manually.");
+    }
+  }
+
+  async function revokeKey(key: ApiKeyOut) {
+    if (!confirm(`Revoke key "${key.name}"? Clients using it stop working immediately.`)) return;
+    try {
+      await del(`/api/keys/${key.id}`);
+      if (createdKey?.id === key.id) createdKey = null;
+      flash("API key revoked.");
+      await loadKeys();
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Revoke failed");
+    }
+  }
+
   // ── Tab 4: settings ──────────────────────────
   let defaultCostBps = $state<string>("");
   let currentPassword = $state("");
@@ -453,6 +506,7 @@
     {@render tabBtn("portfolio", "Portfolios")}
     {@render tabBtn("agents", "Agents")}
     {@render tabBtn("prompts", "Prompts")}
+    {@render tabBtn("keys", "API Keys")}
     {@render tabBtn("settings", "Settings")}
   </div>
 
@@ -851,6 +905,74 @@
         <div class="empty-state"><p>No prompts yet — create one above.</p></div>
       {/each}
     </section>
+  {:else if tab === "keys"}
+    <section class="card">
+      <h2>New API key</h2>
+      <p class="muted cache-note">
+        API keys authenticate the MCP server, which can do everything the admin panel can
+        (manage portfolios, agents, prompts, allocations, and read performance) except manage keys.
+      </p>
+      <form onsubmit={createKey}>
+        <div class="field">
+          <label for="nk-name">Name <span class="muted">(what this key is for)</span></label>
+          <input id="nk-name" type="text" bind:value={newKeyName} placeholder="Claude rebalancer" />
+        </div>
+        {#if keyError}
+          <div class="error-box" role="alert">{keyError}</div>
+        {/if}
+        <button class="btn primary" type="submit" disabled={!newKeyName.trim()}>Create key</button>
+      </form>
+
+      {#if createdKey}
+        <div class="key-reveal">
+          <p><strong>{createdKey.name}</strong> — copy this key now. It won't be shown again.</p>
+          <div class="key-value">
+            <code>{createdKey.key}</code>
+            <button class="btn small" onclick={copyKey}>Copy</button>
+          </div>
+        </div>
+      {/if}
+
+      <h2 class="spaced">Keys</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Prefix</th>
+              <th>Created</th>
+              <th>Last used</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each apiKeys as key (key.id)}
+              <tr class:revoked={key.revoked}>
+                <td>{key.name}</td>
+                <td class="num">{key.prefix}…</td>
+                <td class="num">{fmtDate(key.created_at)}</td>
+                <td class="num">{key.last_used_at ? fmtDate(key.last_used_at) : "—"}</td>
+                <td>
+                  {#if key.revoked}
+                    <span class="badge">revoked</span>
+                  {:else}
+                    <span class="badge warn">active</span>
+                  {/if}
+                </td>
+                <td class="right">
+                  {#if !key.revoked}
+                    <button class="btn small danger" onclick={() => revokeKey(key)}>Revoke</button>
+                  {/if}
+                </td>
+              </tr>
+            {:else}
+              <tr><td colspan="6" class="muted">No API keys yet — create one above.</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </section>
   {:else}
     <div class="manage-grid">
       <section class="card">
@@ -1068,6 +1190,40 @@
   .cache-note {
     font-size: 12.5px;
     margin-bottom: 10px;
+  }
+
+  .key-reveal {
+    border: 1px solid var(--pos);
+    background: color-mix(in srgb, var(--pos) 8%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    margin: 14px 0;
+  }
+
+  .key-reveal p {
+    margin: 0 0 8px;
+    font-size: 13px;
+  }
+
+  .key-value {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .key-value code {
+    flex: 1;
+    overflow-x: auto;
+    white-space: nowrap;
+    padding: 6px 8px;
+    background: var(--surface-sunken, rgba(127, 127, 127, 0.12));
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+  }
+
+  tr.revoked td {
+    color: var(--text-secondary);
+    opacity: 0.6;
   }
 
   @media (max-width: 800px) {

@@ -159,6 +159,23 @@ class Position(Base):
     allocation: Mapped[Allocation] = relationship(back_populates="positions")
 
 
+class ApiKey(Base):
+    """A named credential for the MCP server. The raw key is shown once at
+    creation and stored only as a SHA-256 hash; revoked keys are kept for audit."""
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    key_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    prefix: Mapped[str] = mapped_column(Text, nullable=False)  # first chars, for display
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class PriceCache(Base):
     """Daily series per Yahoo symbol — equities (adjusted close) and FX pairs share this table."""
 

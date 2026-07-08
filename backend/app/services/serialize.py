@@ -3,9 +3,9 @@
 from datetime import UTC, datetime
 
 from ..models import Allocation, Portfolio
-from ..services.arena import ArenaValuations, PortfolioValuation, age_days, downsample, too_early
-from ..services.trading_calendar import is_locked
-from ..services.valuation import AppliedAllocation, rebase_series
+from .arena import ArenaValuations, PortfolioValuation, age_days, downsample, too_early
+from .trading_calendar import is_locked
+from .valuation import AppliedAllocation, rebase_series
 
 
 def agent_ref(portfolio: Portfolio) -> dict:
@@ -85,9 +85,7 @@ def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations
     }
 
 
-def serialize_detail(
-    valuation: PortfolioValuation, valuations: ArenaValuations, admin: bool = False
-) -> dict:
+def serialize_detail(valuation: PortfolioValuation, valuations: ArenaValuations, admin: bool = False) -> dict:
     portfolio = valuation.portfolio
     result = valuation.result
     now = datetime.now(UTC)

@@ -73,7 +73,7 @@ def clean_db(client):
         session.execute(
             text(
                 "TRUNCATE users, settings, agents, prompts, portfolios, allocations, "
-                "positions, price_cache RESTART IDENTITY CASCADE"
+                "positions, price_cache, api_keys RESTART IDENTITY CASCADE"
             )
         )
         session.commit()
@@ -191,6 +191,22 @@ def admin_token(client) -> str:
 @pytest.fixture
 def admin_headers(admin_token) -> dict:
     return {"Authorization": f"Bearer {admin_token}"}
+
+
+@pytest.fixture
+def api_key(client, admin_headers) -> str:
+    response = client.post("/api/keys", json={"name": "test-key"}, headers=admin_headers)
+    assert response.status_code == 201, response.text
+    return response.json()["key"]
+
+
+@pytest.fixture
+def mcp_headers(api_key) -> dict:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
 
 
 @pytest.fixture

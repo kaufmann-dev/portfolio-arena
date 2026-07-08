@@ -129,3 +129,21 @@ export interface ResolvedSymbol {
   currency: string | null;
   exchange: string | null;
 }
+
+export interface ApiKeyOut {
+  id: number;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked: boolean;
+}
+
+/** Returned only from POST /api/keys — `key` is the plaintext, shown once. */
+export interface ApiKeyCreated extends ApiKeyOut {
+  key: string;
+}
+
+export interface ApiKeysResponse {
+  keys: ApiKeyOut[];
+}

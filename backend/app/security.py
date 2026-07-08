@@ -1,5 +1,8 @@
-"""Password hashing and JWT authentication (single admin, no other roles)."""
+"""Password hashing and JWT authentication (single admin, no other roles),
+plus API-key generation/verification for the MCP server."""
 
+import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -10,8 +13,11 @@ from sqlalchemy.orm import Session
 
 from .config import JWT_ALGORITHM, JWT_TTL_SECONDS, get_settings
 from .db import get_session
-from .models import User
+from .models import ApiKey, User
 from .schemas import CurrentUser
+
+API_KEY_PREFIX = "arena_"
+API_KEY_DISPLAY_LEN = 12  # leading chars stored as `prefix` for identifying a key in the UI
 
 
 def hash_password(password: str) -> str:
@@ -54,3 +60,27 @@ def require_admin(request: Request, session: Session = Depends(get_session)) -> 
     if not user or user.role != "admin":
         raise HTTPException(401, "Token expired")
     return CurrentUser(email=user.email)
+
+
+# --- API keys (MCP server) ---------------------------------------------------
+
+
+def generate_api_key() -> str:
+    """A high-entropy opaque token. Shown to the operator once, never stored raw."""
+    return API_KEY_PREFIX + secrets.token_urlsafe(32)
+
+
+def hash_api_key(raw: str) -> str:
+    """SHA-256 hex. The token already has 256 bits of entropy, so a fast digest
+    (not bcrypt) is correct and lets us look keys up by an indexed unique column."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def resolve_api_key(session: Session, raw: str) -> ApiKey | None:
+    """Return the matching, non-revoked key, or None. Does not stamp last_used_at."""
+    if not raw:
+        return None
+    api_key = session.scalars(select(ApiKey).where(ApiKey.key_hash == hash_api_key(raw))).first()
+    if api_key is None or api_key.revoked_at is not None:
+        return None
+    return api_key
