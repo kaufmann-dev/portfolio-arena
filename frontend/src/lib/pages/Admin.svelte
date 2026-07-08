@@ -601,10 +601,8 @@
 
       <h2>First allocation</h2>
       <AllocationForm {prompts} submitLabel="Create portfolio" onSubmit={submitNewPortfolio} />
-    </section>
 
-    <section class="card">
-      <h2>Existing portfolios</h2>
+      <h2 class="spaced">Existing portfolios</h2>
       {#each contestants as portfolio (portfolio.id)}
         <div class="manage-row">
           <div>
