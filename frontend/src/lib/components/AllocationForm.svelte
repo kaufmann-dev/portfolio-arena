@@ -40,14 +40,12 @@
   }: Props = $props();
 
   function toRows(positions: { symbol: string; weight_pct: number; note?: string }[]): Row[] {
-    const rows = positions.map(
-      (position): Row => ({
-        symbol: position.symbol,
-        weight: String(position.weight_pct),
-        note: position.note ?? "",
-        status: "idle",
-      }),
-    );
+    const rows = positions.map((position): Row => ({
+      symbol: position.symbol,
+      weight: String(position.weight_pct),
+      note: position.note ?? "",
+      status: "idle",
+    }));
     return rows.length ? rows : [{ symbol: "", weight: "", note: "", status: "idle" }];
   }
 
@@ -69,9 +67,7 @@
       .catch(() => (effectivePreview = null));
   });
 
-  const weightSum = $derived(
-    rows.reduce((sum, row) => sum + (parseFloat(row.weight) || 0), 0),
-  );
+  const weightSum = $derived(rows.reduce((sum, row) => sum + (parseFloat(row.weight) || 0), 0));
   const sumOk = $derived(Math.abs(weightSum - 100) < 1e-6);
 
   function addRow() {
@@ -181,7 +177,9 @@
                 {#if row.status === "checking"}
                   <span class="muted">checking…</span>
                 {:else if row.status === "ok" && row.resolved}
-                  <span class="ok"><CircleCheck size={14} /> {row.resolved.name} · {row.resolved.instrument}</span>
+                  <span class="ok"
+                    ><CircleCheck size={14} /> {row.resolved.name} · {row.resolved.instrument}</span
+                  >
                 {:else if row.status === "error"}
                   <span class="neg">{row.error}</span>
                 {/if}
@@ -197,9 +195,26 @@
               aria-label="Weight percent for row {index + 1}"
             />
             <div class="row-actions">
-              <button type="button" class="btn small" onclick={() => move(index, -1)} aria-label="Move row {index + 1} up" disabled={index === 0}><ChevronUp size={14} /></button>
-              <button type="button" class="btn small" onclick={() => move(index, 1)} aria-label="Move row {index + 1} down" disabled={index === rows.length - 1}><ChevronDown size={14} /></button>
-              <button type="button" class="btn small danger" onclick={() => removeRow(index)} aria-label="Remove row {index + 1}"><X size={14} /></button>
+              <button
+                type="button"
+                class="btn small"
+                onclick={() => move(index, -1)}
+                aria-label="Move row {index + 1} up"
+                disabled={index === 0}><ChevronUp size={14} /></button
+              >
+              <button
+                type="button"
+                class="btn small"
+                onclick={() => move(index, 1)}
+                aria-label="Move row {index + 1} down"
+                disabled={index === rows.length - 1}><ChevronDown size={14} /></button
+              >
+              <button
+                type="button"
+                class="btn small danger"
+                onclick={() => removeRow(index)}
+                aria-label="Remove row {index + 1}"><X size={14} /></button
+              >
             </div>
             <input
               class="pos-note"
@@ -214,7 +229,8 @@
       <div class="rows-footer">
         <button type="button" class="btn small" onclick={addRow}>+ Add position</button>
         <span class="sum num" class:ok={sumOk} class:neg={!sumOk} aria-live="polite">
-          <Sigma size={14} /> {weightSum.toFixed(4).replace(/\.?0+$/, "")}%
+          <Sigma size={14} />
+          {weightSum.toFixed(4).replace(/\.?0+$/, "")}%
           {#if !sumOk}(must be exactly 100){/if}
         </span>
         <button type="button" class="btn small" onclick={normalize} disabled={weightSum <= 0}>
@@ -224,8 +240,7 @@
     </fieldset>
   {:else}
     <p class="muted locked-note">
-      Positions are locked — the effective close has passed. Only prompt, note, and raw response
-      can change.
+      Positions are locked — the effective close has passed. Only prompt, note, and raw response can change.
     </p>
   {/if}
 

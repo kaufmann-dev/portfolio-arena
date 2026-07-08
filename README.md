@@ -75,6 +75,7 @@ cd frontend && npm install && npm run dev
 ```sh
 cd backend && ../.venv/bin/python -m pytest        # valuation engine, calendar, API
 cd frontend && npm run check && npm run build      # svelte-check + production build
+cd frontend && npm run format                      # Prettier (format:check to verify only)
 ```
 
 API tests use [testcontainers](https://testcontainers.com/) and start a throwaway Postgres via

@@ -23,9 +23,7 @@
       Portfolio Arena
     </a>
     <nav aria-label="Main">
-      <a href="/" class:active={router.route.name === "home"} onclick={(e) => link(e, "/")}>
-        Leaderboard
-      </a>
+      <a href="/" class:active={router.route.name === "home"} onclick={(e) => link(e, "/")}> Leaderboard </a>
       <a href="/about" class:active={router.route.name === "about"} onclick={(e) => link(e, "/about")}>
         About
       </a>
