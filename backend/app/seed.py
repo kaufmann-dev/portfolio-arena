@@ -66,6 +66,7 @@ def seed_benchmarks(session: Session) -> None:
                     slug=benchmark["slug"],
                     name=benchmark["name"],
                     agent_id=agent.id,
+                    prompt_id=prompt.id,
                     cost_bps=0,
                     is_benchmark=True,
                 )

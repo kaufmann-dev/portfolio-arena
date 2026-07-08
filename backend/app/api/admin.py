@@ -141,10 +141,10 @@ def delete_prompt(prompt_id: int, session: Session = Depends(get_session)):
     if prompt is None:
         raise HTTPException(404, "Prompt not found")
     count = session.scalar(
-        select(func.count()).select_from(Allocation).where(Allocation.prompt_id == prompt_id)
+        select(func.count()).select_from(Portfolio).where(Portfolio.prompt_id == prompt_id)
     )
     if count:
-        raise HTTPException(409, "This prompt is used by existing allocations — it can't be deleted.")
+        raise HTTPException(409, "This prompt is used by existing portfolios — it can't be deleted.")
     session.delete(prompt)
     session.commit()
     return {"ok": True}
@@ -195,10 +195,6 @@ def _writable_portfolio(session: Session, portfolio_id: int) -> Portfolio:
 def _build_allocation(session: Session, portfolio: Portfolio, body: AllocationCreate) -> Allocation:
     """Validate + construct an allocation. Entry time is server-set; the
     effective date is the first market close strictly after it (no backdating)."""
-    prompt = session.get(Prompt, body.prompt_id)
-    if prompt is None:
-        raise HTTPException(422, "Prompt not found")
-
     positions = [
         {"symbol": normalize_symbol(p.symbol), "weight_pct": p.weight_pct, "note": p.note}
         for p in body.positions
@@ -226,7 +222,6 @@ def _build_allocation(session: Session, portfolio: Portfolio, body: AllocationCr
 
     allocation = Allocation(
         portfolio_id=portfolio.id,
-        prompt_id=prompt.id,
         entered_at=now,
         effective_date=effective,
         note=body.note,
@@ -248,6 +243,9 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
     agent = session.get(Agent, body.agent_id)
     if agent is None:
         raise HTTPException(422, "Agent not found")
+    prompt = session.get(Prompt, body.prompt_id)
+    if prompt is None:
+        raise HTTPException(422, "Prompt not found")
 
     cost_bps = body.cost_bps
     if cost_bps is None:
@@ -258,6 +256,7 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
         slug=_unique_slug(session, Portfolio, body.slug or body.name),
         name=body.name,
         agent_id=agent.id,
+        prompt_id=prompt.id,
         cost_bps=cost_bps,
     )
     session.add(portfolio)
@@ -281,6 +280,10 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
         if session.get(Agent, body.agent_id) is None:
             raise HTTPException(422, "Agent not found")
         portfolio.agent_id = body.agent_id
+    if body.prompt_id is not None:
+        if session.get(Prompt, body.prompt_id) is None:
+            raise HTTPException(422, "Prompt not found")
+        portfolio.prompt_id = body.prompt_id
     if body.cost_bps is not None:
         portfolio.cost_bps = body.cost_bps
     session.commit()
@@ -290,6 +293,7 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
         "name": portfolio.name,
         "status": portfolio.status,
         "agent_id": portfolio.agent_id,
+        "prompt_id": portfolio.prompt_id,
         "cost_bps": portfolio.cost_bps,
     }
 
@@ -320,7 +324,7 @@ def _reload_allocation(session: Session, allocation_id: int) -> Allocation:
     return session.scalars(
         select(Allocation)
         .where(Allocation.id == allocation_id)
-        .options(selectinload(Allocation.positions), selectinload(Allocation.prompt))
+        .options(selectinload(Allocation.positions))
     ).one()
 
 
@@ -376,10 +380,6 @@ def update_allocation(allocation_id: int, body: AllocationUpdate, session: Sessi
                 )
             )
 
-    if body.prompt_id is not None:
-        if session.get(Prompt, body.prompt_id) is None:
-            raise HTTPException(422, "Prompt not found")
-        allocation.prompt_id = body.prompt_id
     if body.note is not None:
         allocation.note = body.note
 

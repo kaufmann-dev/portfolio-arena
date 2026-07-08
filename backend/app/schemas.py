@@ -48,7 +48,6 @@ class PositionIn(BaseModel):
 
 
 class AllocationCreate(BaseModel):
-    prompt_id: int
     positions: list[PositionIn] = Field(min_length=1)
     note: str = ""
 
@@ -56,7 +55,6 @@ class AllocationCreate(BaseModel):
 class AllocationUpdate(BaseModel):
     """Positions are frozen once the allocation is locked; metadata stays editable."""
 
-    prompt_id: int | None = None
     positions: list[PositionIn] | None = Field(default=None, min_length=1)
     note: str | None = None
 
@@ -65,6 +63,7 @@ class PortfolioCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None
     agent_id: int
+    prompt_id: int
     cost_bps: int | None = Field(default=None, ge=0)
 
 
@@ -72,6 +71,7 @@ class PortfolioPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     status: str | None = Field(default=None, pattern="^(active|archived)$")
     agent_id: int | None = None
+    prompt_id: int | None = None
     cost_bps: int | None = Field(default=None, ge=0)
 
 

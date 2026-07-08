@@ -111,8 +111,8 @@ def load_portfolios(session: Session) -> list[Portfolio]:
         session.scalars(
             select(Portfolio).options(
                 selectinload(Portfolio.agent),
+                selectinload(Portfolio.prompt),
                 selectinload(Portfolio.allocations).selectinload(Allocation.positions),
-                selectinload(Portfolio.allocations).selectinload(Allocation.prompt),
             )
         )
     )

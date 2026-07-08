@@ -218,9 +218,6 @@
             {:else if allocation.cost !== null}
               <span class="muted">entry cost {num(allocation.cost, 3)} pts</span>
             {/if}
-            {#if allocation.prompt}
-              <span class="badge">{allocation.prompt.name}</span>
-            {/if}
             {#if !allocation.locked}
               <span class="badge warn">editable until close</span>
             {/if}

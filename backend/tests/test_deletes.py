@@ -26,10 +26,10 @@ class TestDeletePrompt:
         assert all(p["id"] != sample_prompt["id"] for p in listing)
 
     def test_delete_prompt_in_use_blocked(self, client, admin_headers, sample_portfolio, sample_prompt):
-        # sample_portfolio's first allocation references sample_prompt.
+        # sample_portfolio uses sample_prompt as its fixed prompt.
         response = client.delete(f"/api/prompts/{sample_prompt['id']}", headers=admin_headers)
         assert response.status_code == 409
-        assert "allocation" in response.json()["detail"].lower()
+        assert "portfolio" in response.json()["detail"].lower()
 
     def test_delete_missing_prompt(self, client, admin_headers):
         assert client.delete("/api/prompts/999999", headers=admin_headers).status_code == 404
