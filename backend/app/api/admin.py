@@ -283,12 +283,20 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
         portfolio.name = body.name
     if body.status is not None:
         portfolio.status = body.status
+    if body.agent_id is not None:
+        if session.get(Agent, body.agent_id) is None:
+            raise HTTPException(422, "Agent not found")
+        portfolio.agent_id = body.agent_id
+    if body.cost_bps is not None:
+        portfolio.cost_bps = body.cost_bps
     session.commit()
     return {
         "id": portfolio.id,
         "slug": portfolio.slug,
         "name": portfolio.name,
         "status": portfolio.status,
+        "agent_id": portfolio.agent_id,
+        "cost_bps": portfolio.cost_bps,
     }
 
 

@@ -302,11 +302,35 @@
   }
 
   // ── Portfolio management (Portfolios tab) ────
+  let editPortfolio = $state<{
+    id: number;
+    name: string;
+    agent_id: number;
+    cost_bps: string;
+  } | null>(null);
+
   async function toggleArchive(portfolio: PortfolioSummary) {
     await patchJson(`/api/portfolios/${portfolio.id}`, {
       status: portfolio.status === "active" ? "archived" : "active",
     });
     await loadAll();
+  }
+
+  async function savePortfolio(event: SubmitEvent) {
+    event.preventDefault();
+    if (!editPortfolio) return;
+    try {
+      await patchJson(`/api/portfolios/${editPortfolio.id}`, {
+        name: editPortfolio.name,
+        agent_id: editPortfolio.agent_id,
+        cost_bps: parseInt(editPortfolio.cost_bps, 10) || 0,
+      });
+      editPortfolio = null;
+      await loadAll();
+      flash("Portfolio saved.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Save failed");
+    }
   }
 
   async function deletePortfolio(portfolio: PortfolioSummary) {
@@ -604,18 +628,55 @@
 
       <h2 class="spaced">Existing portfolios</h2>
       {#each contestants as portfolio (portfolio.id)}
-        <div class="manage-row">
-          <div>
-            <strong>{portfolio.name}</strong>
-            <span class="muted"> · {portfolio.agent.name} · {portfolio.status}</span>
+        {#if editPortfolio?.id === portfolio.id}
+          <form class="edit-form" onsubmit={savePortfolio}>
+            <div class="field">
+              <label for="epf-name-{portfolio.id}">Name</label>
+              <input id="epf-name-{portfolio.id}" type="text" bind:value={editPortfolio.name} />
+            </div>
+            <div class="field">
+              <label for="epf-agent-{portfolio.id}">Agent</label>
+              <select id="epf-agent-{portfolio.id}" bind:value={editPortfolio.agent_id}>
+                {#each agents as agent (agent.id)}
+                  <option value={agent.id}>{agent.name}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="field">
+              <label for="epf-cost-{portfolio.id}">Cost bps</label>
+              <input id="epf-cost-{portfolio.id}" type="number" min="0" bind:value={editPortfolio.cost_bps} />
+            </div>
+            <div class="edit-actions">
+              <button class="btn primary" type="submit">Save</button>
+              <button class="btn" type="button" onclick={() => (editPortfolio = null)}>Cancel</button>
+            </div>
+          </form>
+        {:else}
+          <div class="manage-row">
+            <div>
+              <strong>{portfolio.name}</strong>
+              <span class="muted"> · {portfolio.agent.name} · {portfolio.cost_bps} bps · {portfolio.status}</span>
+            </div>
+            <div class="row-actions">
+              <button
+                class="btn small"
+                onclick={() =>
+                  (editPortfolio = {
+                    id: portfolio.id,
+                    name: portfolio.name,
+                    agent_id: portfolio.agent.id,
+                    cost_bps: String(portfolio.cost_bps),
+                  })}
+              >
+                Edit
+              </button>
+              <button class="btn small" onclick={() => toggleArchive(portfolio)}>
+                {portfolio.status === "active" ? "Archive" : "Unarchive"}
+              </button>
+              <button class="btn small danger" onclick={() => deletePortfolio(portfolio)}>Delete</button>
+            </div>
           </div>
-          <div class="row-actions">
-            <button class="btn small" onclick={() => toggleArchive(portfolio)}>
-              {portfolio.status === "active" ? "Archive" : "Unarchive"}
-            </button>
-            <button class="btn small danger" onclick={() => deletePortfolio(portfolio)}>Delete</button>
-          </div>
-        </div>
+        {/if}
       {:else}
         <div class="empty-state"><p>No portfolios yet.</p></div>
       {/each}
