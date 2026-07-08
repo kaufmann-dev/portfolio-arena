@@ -156,6 +156,7 @@ class Position(Base):
     symbol: Mapped[str] = mapped_column(Text, nullable=False)
     instrument: Mapped[str] = mapped_column(Text, nullable=False)
     weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
 
     allocation: Mapped[Allocation] = relationship(back_populates="positions")
 

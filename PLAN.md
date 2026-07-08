@@ -81,7 +81,8 @@ allocations   one row per decision (initial or rebalance)
 positions     entered holdings of an allocation
   id, allocation_id → allocations, symbol (Yahoo symbol or CASH:CCY, uppercase),
   instrument (equity | cash — derived from symbol, stored),
-  weight_pct (numeric(9,4), ≥ 0)
+  weight_pct (numeric(9,4), ≥ 0),
+  note (text, default "" — admin-only per-stock message carried to the next cycle)
 
 price_cache   daily series per Yahoo symbol — equities (adjusted close)
               and FX pairs share this table
@@ -117,13 +118,15 @@ Admin form: a table of rows — symbol + weight — with add/remove/reorder. On 
 - all weights ≥ 0; `CASH:*` currency code must have a Yahoo FX pair (or be USD)
 - no duplicate symbols; every symbol resolves; `^`, `=X`, and `=F` symbols rejected with hints (use ETFs / `CASH:CCY`)
 
+Each position row also has an admin-only **per-stock note** field — the short message the agent left about that holding, carried forward to the next cycle's handoff.
+
 Beyond positions, the form has: **prompt selector** (defaults to the portfolio's previous allocation's prompt; a different one can be picked — prompts are created beforehand in the Prompts tab — this is how regime switching is entered), raw model response (provenance textarea), note (e.g. the regime call). The computed effective date is shown before submitting. A rebalance form pre-fills the previous allocation's *target* weights as the starting point.
 
 ## API (FastAPI, /api prefix)
 
 Public (no auth, rate-limited in-memory like market-deck):
 - `GET /api/leaderboard` — all portfolios with metrics, benchmark rows included, plus flags (`too_early`, `stale_data`)
-- `GET /api/portfolios/{slug}` — detail: metadata, agent, metrics, base-100 NAV series, SPY series over the same window, current drifted weights, allocation history (dates, prompt used, turnover, cost, raw text)
+- `GET /api/portfolios/{slug}` — detail: metadata, agent, metrics, base-100 NAV series, SPY series over the same window, current drifted weights, allocation history (dates, prompt used, turnover, cost, raw text). Public payload never includes per-stock notes or holding buy/current prices.
 - `GET /api/prompts` / `GET /api/prompts/{slug}` — prompt text + portfolios whose allocations used it
 - `GET /api/agents` — agents + their portfolios
 - `GET /api/compare?slugs=a,b,c` — overlaid base-100 series for the chart
@@ -133,6 +136,7 @@ Admin (JWT bearer, port market-deck auth minus demo):
 - `POST /api/agents`, `PATCH /api/agents/{id}` (name/notes), `DELETE /api/agents/{id}` (**409 if any portfolio still uses it**; benchmark agent protected)
 - `POST /api/prompts`, `PATCH /api/prompts/{id}` (name/text/notes), `DELETE /api/prompts/{id}` (**409 if any allocation still references it**)
 - `POST /api/portfolios` (agent + name; first allocation with its prompt attached in the same flow)
+- `GET /api/portfolios/{id}/detail` — admin view: same shape as the public detail plus admin-only handoff fields (per-position notes, holding entry/current prices)
 - `GET /api/symbols/{symbol}` — validation/resolution for the entry form
 - `POST /api/portfolios/{id}/allocations` — positions + prompt + optional raw text/note
 - `PUT /api/allocations/{id}` / `DELETE /api/allocations/{id}` — positions/effective date **403 once locked** (effective close passed); prompt_id/note/raw_response editable anytime
@@ -147,7 +151,7 @@ Pages:
 2. **Portfolio detail `/p/{slug}`** — base-100 NAV vs SPY chart with allocation-date markers; metrics row; current drifted holdings table (weight, drift since last rebalance); allocation timeline, each entry expandable to positions + prompt used + raw response; stale-data/delisting warnings.
 3. **Prompt detail `/prompt/{slug}`** — full text, portfolios whose allocations used it with mini-metrics (does this prompt work across models?).
 4. **Agent detail `/agent/{slug}`** — portfolios by this model (does this model work across prompts?).
-5. **Admin `/admin`** — login; five tabs: **Allocations** (row-entry rebalance form, see above), **Portfolios** (create a portfolio by picking an existing agent + entering its first allocation, plus a list of portfolios to archive/unarchive or delete), **Agents** (create/edit/delete agents; delete disabled while a portfolio uses one), **Prompts** (create/edit/delete prompts; delete disabled while an allocation references one), and **Settings** (default cost bps, password, price cache). Agents and prompts are created in their own tabs beforehand — no inline creation during portfolio/allocation entry.
+5. **Admin `/admin`** — login; five tabs: **Allocations** (per selected portfolio: allocation history, a **Current state** panel — drifted holdings with buy/current price, change, weight vs target, and per-stock notes, plus a "Copy handoff for next agent" button that builds a paste-ready text block — and the row-entry rebalance form, see above), **Portfolios** (create a portfolio by picking an existing agent + entering its first allocation, plus a list of portfolios to archive/unarchive or delete), **Agents** (create/edit/delete agents; delete disabled while a portfolio uses one), **Prompts** (create/edit/delete prompts; delete disabled while an allocation references one), and **Settings** (default cost bps, password, price cache). Agents and prompts are created in their own tabs beforehand — no inline creation during portfolio/allocation entry.
 
 Charting: lightweight SVG/canvas line charts, self-written or a tiny dependency — match market-deck's frontend approach; no heavyweight chart library. Long tables and charts scroll within their own containers. Dark/light theme like market-deck.
 

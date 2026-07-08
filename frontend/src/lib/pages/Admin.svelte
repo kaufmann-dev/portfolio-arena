@@ -9,7 +9,7 @@
     PromptOut,
   } from "../api/types";
   import AllocationForm, { type AllocationPayload } from "../components/AllocationForm.svelte";
-  import { fmtDate, pctPoints } from "../format";
+  import { fmtDate, num, pctPoints, signClass } from "../format";
   import { auth } from "../stores/auth.svelte";
   import { router } from "../stores/router.svelte";
 
@@ -74,6 +74,7 @@
   // ── Tab 1: allocations ───────────────────────
   let selectedSlug = $state("");
   let detail = $state<PortfolioDetail | null>(null);
+  let detailAsOf = $state<string | null>(null);
   let detailLoading = $state(false);
   let editingAllocation = $state<AllocationOut | null>(null);
   let formKey = $state(0);
@@ -91,10 +92,17 @@
     detailLoading = true;
     editingAllocation = null;
     try {
-      const payload = await apiJson<{ portfolio: PortfolioDetail }>(`/api/portfolios/${slug}`, {
-        auth: false,
-      });
+      const summary = portfolios.find((portfolio) => portfolio.slug === slug);
+      if (!summary) {
+        detail = null;
+        return;
+      }
+      // Admin endpoint: carries per-position notes + holding entry/current prices.
+      const payload = await apiJson<{ as_of: string | null; portfolio: PortfolioDetail }>(
+        `/api/portfolios/${summary.id}/detail`,
+      );
       detail = payload.portfolio;
+      detailAsOf = payload.as_of;
       formKey += 1;
     } finally {
       detailLoading = false;
@@ -102,6 +110,49 @@
   }
 
   const latestAllocation = $derived(detail?.allocations[0] ?? null);
+
+  function buildHandoff(): string {
+    if (!detail) return "";
+    const lines = [
+      `${detail.name} — current state as of ${detailAsOf ?? "n/a"}`,
+      `Overall note: ${latestAllocation?.note?.trim() || "—"}`,
+      "",
+      "Holdings:",
+    ];
+    if (detail.holdings.length) {
+      for (const h of detail.holdings) {
+        if (h.instrument === "equity" && h.entry_price != null && h.current_price != null) {
+          const chg = h.entry_price ? (h.current_price / h.entry_price - 1) * 100 : 0;
+          const sign = chg >= 0 ? "+" : "";
+          lines.push(
+            `- ${h.symbol}: bought @ ${h.entry_price.toFixed(2)} → now ${h.current_price.toFixed(2)} ` +
+              `(${sign}${chg.toFixed(2)}%); weight ${h.weight_pct.toFixed(1)}% (target ${h.target_weight_pct.toFixed(1)}%)`,
+          );
+        } else {
+          lines.push(
+            `- ${h.symbol}: weight ${h.weight_pct.toFixed(1)}% (target ${h.target_weight_pct.toFixed(1)}%)`,
+          );
+        }
+        lines.push(`  note: ${h.note?.trim() || "—"}`);
+      }
+    } else {
+      // No drifted holdings yet (first allocation still pending) — fall back to targets.
+      for (const p of latestAllocation?.positions ?? []) {
+        lines.push(`- ${p.symbol}: target ${p.weight_pct.toFixed(1)}%`);
+        lines.push(`  note: ${p.note?.trim() || "—"}`);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  async function copyHandoff() {
+    try {
+      await navigator.clipboard.writeText(buildHandoff());
+      flash("Handoff copied.");
+    } catch {
+      flash("Copy failed — copy the text manually.");
+    }
+  }
 
   async function submitRebalance(payload: AllocationPayload) {
     if (!detail) return;
@@ -436,6 +487,49 @@
             </tbody>
           </table>
         </div>
+
+        <div class="state-head">
+          <h2>Current state <span class="muted">(drifted, admin-only)</span></h2>
+          <button class="btn small" onclick={copyHandoff} disabled={!detail.allocations.length}>
+            Copy handoff for next agent
+          </button>
+        </div>
+        {#if detail.holdings.length}
+          <div class="table-scroll history">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th class="right">Buy</th>
+                  <th class="right">Now</th>
+                  <th class="right">Change</th>
+                  <th class="right">Weight</th>
+                  <th class="right">Target</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each detail.holdings as holding (holding.symbol)}
+                  {@const chg =
+                    holding.entry_price && holding.current_price
+                      ? (holding.current_price / holding.entry_price - 1) * 100
+                      : null}
+                  <tr>
+                    <td class="num">{holding.symbol}</td>
+                    <td class="right num">{holding.entry_price != null ? num(holding.entry_price) : "—"}</td>
+                    <td class="right num">{holding.current_price != null ? num(holding.current_price) : "—"}</td>
+                    <td class="right num {signClass(chg)}">{chg != null ? pctPoints(chg, 2) : "—"}</td>
+                    <td class="right num">{pctPoints(holding.weight_pct)}</td>
+                    <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
+                    <td class="muted preview">{holding.note || "—"}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else}
+          <p class="muted prefill-note">No drifted holdings yet — the first allocation is still pending.</p>
+        {/if}
 
         {#if editingAllocation}
           <h2>
@@ -797,6 +891,19 @@
   .prefill-note {
     font-size: 12.5px;
     margin: -6px 0 12px;
+  }
+
+  .state-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+  }
+
+  .state-head h2 {
+    margin: 0;
   }
 
   .grid-2 {

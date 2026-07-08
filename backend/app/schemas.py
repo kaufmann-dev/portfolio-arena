@@ -44,6 +44,7 @@ class PromptPatch(BaseModel):
 class PositionIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
     weight_pct: float = Field(ge=0)
+    note: str = Field(default="", max_length=2000)
 
 
 class AllocationCreate(BaseModel):

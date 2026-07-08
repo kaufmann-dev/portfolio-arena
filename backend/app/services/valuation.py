@@ -37,6 +37,7 @@ class PositionInput:
     symbol: str  # normalized Yahoo symbol or CASH:CCY
     instrument: str  # equity | cash
     weight_pct: float
+    note: str = ""  # admin-only per-stock message, carried between cycles
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,9 @@ class Holding:
     weight_pct: float  # drifted, as of the last valued day
     target_weight_pct: float  # from the latest applied allocation
     value: float  # NAV points
+    entry_price: float | None = None  # price at the last rebalance (equities only)
+    current_price: float | None = None  # price on the last valued day (equities only)
+    note: str = ""  # per-stock note from the latest applied allocation
 
 
 @dataclass
@@ -155,6 +159,7 @@ def value_portfolio(
     shares: dict[str, float] = {}  # equity symbol -> fractional shares
     cash: dict[str, float] = {}  # currency -> fixed foreign amount
     targets: dict[str, PositionInput] = {}
+    entry_prices: dict[str, float] = {}  # equity symbol -> price at the last rebalance
     nav = 100.0
     cumulative_cost = 0.0
     cumulative_turnover = 0.0
@@ -184,7 +189,7 @@ def value_portfolio(
         return total
 
     def apply_allocation(allocation: AllocationInput, day: str, first: bool) -> None:
-        nonlocal nav, cumulative_cost, cumulative_turnover, shares, cash, targets
+        nonlocal nav, cumulative_cost, cumulative_turnover, shares, cash, targets, entry_prices
         positions = [p for p in allocation.positions if p.weight_pct > 0]
 
         if first:
@@ -206,11 +211,13 @@ def value_portfolio(
 
         shares = {}
         cash = {}
+        entry_prices = {}
         for position in positions:
             value = nav_after * position.weight_pct / 100.0
             if position.instrument == "equity":
                 price = lookup(position.symbol, day, position.symbol)
                 shares[position.symbol] = value / price
+                entry_prices[position.symbol] = price
             else:
                 currency = position.symbol.split(":", 1)[1]
                 rate = 1.0 if currency == "USD" else lookup(fx_pair_for(currency), day, position.symbol)
@@ -253,7 +260,8 @@ def value_portfolio(
     last_nav = series[-1]["nav"]
     if last_nav > 0:
         for symbol, quantity in sorted(shares.items()):
-            value = quantity * lookup(symbol, last_day, symbol)
+            current_price = lookup(symbol, last_day, symbol)
+            value = quantity * current_price
             holdings.append(
                 Holding(
                     symbol=symbol,
@@ -261,6 +269,9 @@ def value_portfolio(
                     weight_pct=value / last_nav * 100.0,
                     target_weight_pct=targets[symbol].weight_pct if symbol in targets else 0.0,
                     value=value,
+                    entry_price=entry_prices.get(symbol),
+                    current_price=current_price,
+                    note=targets[symbol].note if symbol in targets else "",
                 )
             )
         for currency, amount in sorted(cash.items()):
@@ -274,6 +285,7 @@ def value_portfolio(
                     weight_pct=value / last_nav * 100.0,
                     target_weight_pct=targets[symbol].weight_pct if symbol in targets else 0.0,
                     value=value,
+                    note=targets[symbol].note if symbol in targets else "",
                 )
             )
 

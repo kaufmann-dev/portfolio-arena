@@ -87,6 +87,7 @@ def _allocation_inputs(allocations: list[Allocation]) -> list[AllocationInput]:
                     symbol=position.symbol,
                     instrument=position.instrument,
                     weight_pct=float(position.weight_pct),
+                    note=position.note,
                 )
                 for position in allocation.positions
             ),
