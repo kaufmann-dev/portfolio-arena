@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_session
@@ -77,6 +77,25 @@ def patch_agent(agent_id: int, body: AgentPatch, session: Session = Depends(get_
     return {"id": agent.id, "slug": agent.slug, "name": agent.name, "notes": agent.notes}
 
 
+@router.delete("/agents/{agent_id}")
+def delete_agent(agent_id: int, session: Session = Depends(get_session)):
+    agent = session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(404, "Agent not found")
+    if agent.slug == "benchmark":
+        raise HTTPException(403, "The benchmark agent is system-managed")
+    count = session.scalar(
+        select(func.count()).select_from(Portfolio).where(Portfolio.agent_id == agent_id)
+    )
+    if count:
+        raise HTTPException(
+            409, f"{count} portfolio(s) still use this agent — delete or reassign them first."
+        )
+    session.delete(agent)
+    session.commit()
+    return {"ok": True}
+
+
 # --- Prompts ----------------------------------------------------------------
 
 
@@ -112,6 +131,21 @@ def patch_prompt(prompt_id: int, body: PromptPatch, session: Session = Depends(g
         prompt.notes = body.notes
     session.commit()
     return _prompt_out(prompt)
+
+
+@router.delete("/prompts/{prompt_id}")
+def delete_prompt(prompt_id: int, session: Session = Depends(get_session)):
+    prompt = session.get(Prompt, prompt_id)
+    if prompt is None:
+        raise HTTPException(404, "Prompt not found")
+    count = session.scalar(
+        select(func.count()).select_from(Allocation).where(Allocation.prompt_id == prompt_id)
+    )
+    if count:
+        raise HTTPException(409, "This prompt is used by existing allocations — it can't be deleted.")
+    session.delete(prompt)
+    session.commit()
+    return {"ok": True}
 
 
 # --- Symbol validation (entry-form support) ----------------------------------
@@ -250,6 +284,14 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
         "name": portfolio.name,
         "status": portfolio.status,
     }
+
+
+@router.delete("/portfolios/{portfolio_id}")
+def delete_portfolio(portfolio_id: int, session: Session = Depends(get_session)):
+    portfolio = _writable_portfolio(session, portfolio_id)
+    session.delete(portfolio)  # allocations + positions cascade
+    session.commit()
+    return {"ok": True}
 
 
 def _reload_allocation(session: Session, allocation_id: int) -> Allocation:
