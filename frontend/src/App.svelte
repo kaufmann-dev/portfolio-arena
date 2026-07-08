@@ -108,7 +108,6 @@
 
   .brand-mark {
     display: flex;
-    margin-top: 2px;
     color: var(--accent);
   }
 
