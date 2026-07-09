@@ -9,6 +9,9 @@ public leaderboard. It is an *arena*: honest, deterministic measurement — not 
 advice. The app never calls an LLM itself; agents drive it from outside (by hand or over the
 MCP server).
 
+Each non-benchmark portfolio page can copy its assigned prompt with that portfolio's slug filled
+into the `<PORTFOLIO_SLUG_OR_ID>` placeholder, ready for an external agent to call `get_portfolio`.
+
 ## Architecture
 
 - **Backend** — FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (`backend/`). Serves the built SPA
