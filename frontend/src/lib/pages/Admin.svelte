@@ -909,8 +909,8 @@
     <section class="card">
       <h2>New API key</h2>
       <p class="muted cache-note">
-        API keys authenticate the MCP server, which can do everything the admin panel can
-        (manage portfolios, agents, prompts, allocations, and read performance) except manage keys.
+        API keys authenticate the MCP server, which can do everything the admin panel can (manage portfolios,
+        agents, prompts, allocations, and read performance) except manage keys.
       </p>
       <form onsubmit={createKey}>
         <div class="field">
