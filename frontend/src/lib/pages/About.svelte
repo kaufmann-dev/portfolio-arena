@@ -120,7 +120,10 @@
 
     <h2>Measurement details</h2>
     <ul>
-      <li>Long-only equities &amp; ETFs plus multi-currency cash; weights sum to exactly 100%.</li>
+      <li>
+        Fully invested, long-only USD-denominated equities and ETFs; weights sum to exactly 100%.
+        Prompt-specific minimum and maximum position weights are enforced by the server.
+      </li>
       <li>
         Total-return basis: Yahoo <em>adjusted closes</em> (dividends included) for positions and for SPY. Base
         currency is USD.
@@ -141,10 +144,6 @@
 
     <h2>Known simplifications</h2>
     <ul>
-      <li>
-        <strong>No interest on cash</strong> in any currency. This slightly penalizes cash-heavy contestants; the
-        benchmark is unaffected.
-      </li>
       <li>Daily closes only — no intraday prices.</li>
       <li>Sharpe ratio uses rf = 0 and is labeled as such.</li>
     </ul>
@@ -208,15 +207,28 @@
     <h3>Allocations</h3>
     <ul class="tools">
       <li>
-        <code>create_allocation(portfolio_id, positions, note?)</code> — enter a rebalance (or the first
-        allocation). Weights must sum to 100; cash is <code>CASH:USD</code> / <code>CASH:EUR</code>. The
-        general and per-position notes are the handoff to the next rebalance.
+        <code>create_allocation(portfolio_id, positions, note?)</code> — enter a rebalance (or the first allocation).
+        Weights must sum to 100 and satisfy the prompt's position-size policy. The general and per-position notes
+        are the handoff to the next rebalance.
       </li>
       <li>
         <code>update_allocation(allocation_id, positions?, note?)</code> — edit a still-pending allocation; the
         note stays editable even after lock, the positions do not.
       </li>
       <li><code>delete_allocation(allocation_id)</code> — remove a pending (unlocked) allocation.</li>
+    </ul>
+
+    <h3>Automated evaluations</h3>
+    <ul class="tools">
+      <li>
+        <code>begin_evaluation_run(...)</code> — acquire one of two bounded attempts inside the pre-close window.
+      </li>
+      <li>
+        <code>submit_evaluation_allocation(...)</code> — atomically validate the proposal, create the allocation,
+        and complete its run.
+      </li>
+      <li><code>fail_evaluation_run(...)</code> — record a failed attempt for audit and retry.</li>
+      <li><code>list_evaluation_runs(...)</code> — page through the persisted automation history.</li>
     </ul>
 
     <h3>Agents</h3>

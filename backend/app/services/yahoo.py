@@ -2,8 +2,8 @@
 
 Fetches daily closes directly from the chart endpoint in parallel with httpx
 (market-deck dropped yfinance for being slow; see its
-docs/bugs/slow-global-ticker-loading.md). Equities use adjusted closes (total
-return); ``=X`` FX symbols use plain closes.
+docs/bugs/slow-global-ticker-loading.md). Prices use adjusted closes so returns
+include dividends and splits.
 """
 
 import logging
@@ -38,10 +38,6 @@ class PriceDownloadResult(dict):
 
 def is_valid_series(data) -> bool:
     return isinstance(data, list) and len(data) >= 1
-
-
-def is_fx_symbol(symbol: str) -> bool:
-    return symbol.endswith("=X")
 
 
 def _chart_timezone(meta):
@@ -132,8 +128,7 @@ def _chart_endpoint(symbol: str) -> str:
 
 
 def _chart_params(start: date) -> dict:
-    # A few days of lead so the effective close always has a prior print to
-    # carry from, and so FX pairs cover the first equity date.
+    # A few days of lead so the effective close always has a prior print to carry from.
     period1 = datetime.combine(start - timedelta(days=7), datetime.min.time(), tzinfo=UTC)
     return {
         "period1": int(period1.timestamp()),
@@ -147,7 +142,7 @@ def _chart_params(start: date) -> dict:
 def _fetch_one(client: httpx.Client, symbol: str, start: date) -> Series | None:
     response = client.get(_chart_endpoint(symbol), params=_chart_params(start))
     response.raise_for_status()
-    return parse_chart_payload(response.json(), prefer_adjusted=not is_fx_symbol(symbol))
+    return parse_chart_payload(response.json(), prefer_adjusted=True)
 
 
 def _permanent_chart_failure(exc: Exception) -> bool:

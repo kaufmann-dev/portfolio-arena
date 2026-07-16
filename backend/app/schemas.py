@@ -1,6 +1,8 @@
 """Pydantic request/response models."""
 
-from pydantic import BaseModel, Field
+import math
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class CurrentUser(BaseModel):
@@ -28,17 +30,34 @@ class AgentPatch(BaseModel):
     notes: str | None = None
 
 
+class AllocationPolicyIn(BaseModel):
+    min_position_weight_pct: float = Field(gt=0, le=100)
+    max_position_weight_pct: float = Field(gt=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_feasible(self):
+        if self.min_position_weight_pct > self.max_position_weight_pct:
+            raise ValueError("Minimum position weight cannot exceed the maximum.")
+        minimum_positions = math.ceil(100 / self.max_position_weight_pct)
+        maximum_positions = math.floor(100 / self.min_position_weight_pct)
+        if minimum_positions > maximum_positions:
+            raise ValueError("Position weight limits cannot form a portfolio totaling 100%.")
+        return self
+
+
 class PromptCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None
     text: str = Field(min_length=1)
     notes: str = ""
+    allocation_policy: AllocationPolicyIn
 
 
 class PromptPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     text: str | None = Field(default=None, min_length=1)
     notes: str | None = None
+    allocation_policy: AllocationPolicyIn | None = None
 
 
 class PositionIn(BaseModel):

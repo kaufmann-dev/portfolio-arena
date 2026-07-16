@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+
   import { apiJson, del, patchJson, postJson, putJson } from "../api/client";
   import type {
     AgentOut,
@@ -12,10 +14,11 @@
     PromptOut,
   } from "../api/types";
   import AllocationForm, { type AllocationPayload } from "../components/AllocationForm.svelte";
+  import AutomationPanel from "../components/AutomationPanel.svelte";
   import { fmtDate, num, pctPoints, signClass } from "../format";
   import { auth } from "../stores/auth.svelte";
 
-  type Tab = "allocation" | "portfolio" | "agents" | "prompts" | "keys" | "settings";
+  type Tab = "allocation" | "automation" | "portfolio" | "agents" | "prompts" | "keys" | "settings";
   let tab = $state<Tab>("allocation");
 
   // ── Login ────────────────────────────────────
@@ -30,6 +33,7 @@
     loginError = "";
     try {
       await auth.login(email, password);
+      await loadAll();
       password = "";
     } catch (e) {
       loginError = e instanceof Error ? e.message : "Login failed";
@@ -67,8 +71,10 @@
     prompts = payload.prompts;
   }
 
-  $effect(() => {
-    if (auth.isAdmin) void loadAll();
+  onMount(() => {
+    void auth.restore().then(() => {
+      if (auth.isAdmin) void loadAll();
+    });
   });
 
   const contestants = $derived(portfolios.filter((portfolio) => !portfolio.is_benchmark));
@@ -81,14 +87,15 @@
   let editingAllocation = $state<AllocationOut | null>(null);
   let formKey = $state(0);
 
-  $effect(() => {
+  async function selectPortfolio(event: Event) {
+    selectedSlug = (event.currentTarget as HTMLSelectElement).value;
     if (!selectedSlug) {
       detail = null;
       editingAllocation = null;
       return;
     }
-    void loadDetail(selectedSlug);
-  });
+    await loadDetail(selectedSlug);
+  }
 
   async function loadDetail(slug: string) {
     detailLoading = true;
@@ -123,7 +130,7 @@
     ];
     if (detail.holdings.length) {
       for (const h of detail.holdings) {
-        if (h.instrument === "equity" && h.entry_price != null && h.current_price != null) {
+        if (h.entry_price != null && h.current_price != null) {
           const chg = h.entry_price ? (h.current_price / h.entry_price - 1) * 100 : 0;
           const sign = chg >= 0 ? "+" : "";
           lines.push(
@@ -216,6 +223,7 @@
       // Jump to the Allocations tab with the new portfolio selected.
       selectedSlug = created.slug;
       tab = "allocation";
+      await loadDetail(created.slug);
     } catch (e) {
       portfolioError = e instanceof Error ? e.message : "Create failed";
     }
@@ -265,6 +273,8 @@
   let newPromptName = $state("");
   let newPromptText = $state("");
   let newPromptNotes = $state("");
+  let newPromptMinWeight = $state(10);
+  let newPromptMaxWeight = $state(25);
 
   async function createPrompt(event: SubmitEvent) {
     event.preventDefault();
@@ -274,10 +284,16 @@
         name: newPromptName.trim(),
         text: newPromptText,
         notes: newPromptNotes.trim(),
+        allocation_policy: {
+          min_position_weight_pct: newPromptMinWeight,
+          max_position_weight_pct: newPromptMaxWeight,
+        },
       });
       newPromptName = "";
       newPromptText = "";
       newPromptNotes = "";
+      newPromptMinWeight = 10;
+      newPromptMaxWeight = 25;
       await refreshPrompts();
       flash("Prompt created.");
     } catch (e) {
@@ -292,6 +308,10 @@
       name: editPrompt.name,
       text: editPrompt.text,
       notes: editPrompt.notes,
+      allocation_policy: {
+        min_position_weight_pct: editPrompt.allocation_policy.min_position_weight_pct,
+        max_position_weight_pct: editPrompt.allocation_policy.max_position_weight_pct,
+      },
     });
     editPrompt = null;
     await refreshPrompts();
@@ -347,7 +367,11 @@
     if (!confirm(`Delete ${portfolio.name} and all its allocations? This is irreversible.`)) return;
     try {
       await del(`/api/portfolios/${portfolio.id}`);
-      if (selectedSlug === portfolio.slug) selectedSlug = "";
+      if (selectedSlug === portfolio.slug) {
+        selectedSlug = "";
+        detail = null;
+        editingAllocation = null;
+      }
       flash(`Portfolio ${portfolio.name} deleted.`);
       await loadAll();
     } catch (e) {
@@ -360,10 +384,6 @@
   let newKeyName = $state("");
   let createdKey = $state<ApiKeyCreated | null>(null);
   let keyError = $state("");
-
-  $effect(() => {
-    if (auth.isAdmin && tab === "keys") void loadKeys();
-  });
 
   async function loadKeys() {
     const payload = await apiJson<ApiKeysResponse>("/api/keys");
@@ -411,13 +431,20 @@
   let newPassword = $state("");
   let settingsError = $state("");
 
-  $effect(() => {
-    if (auth.isAdmin && tab === "settings") {
-      apiJson<{ default_cost_bps: number }>("/api/settings")
-        .then((payload) => (defaultCostBps = String(payload.default_cost_bps)))
-        .catch(() => {});
+  async function loadSettings() {
+    try {
+      const payload = await apiJson<{ default_cost_bps: number }>("/api/settings");
+      defaultCostBps = String(payload.default_cost_bps);
+    } catch {
+      defaultCostBps = "";
     }
-  });
+  }
+
+  function selectTab(id: Tab) {
+    tab = id;
+    if (id === "keys") void loadKeys();
+    if (id === "settings") void loadSettings();
+  }
 
   async function saveSettings(event: SubmitEvent) {
     event.preventDefault();
@@ -497,12 +524,13 @@
         aria-selected={tab === id}
         class="tab"
         class:active={tab === id}
-        onclick={() => (tab = id)}
+        onclick={() => selectTab(id)}
       >
         {label}
       </button>
     {/snippet}
     {@render tabBtn("allocation", "Allocations")}
+    {@render tabBtn("automation", "Automation")}
     {@render tabBtn("portfolio", "Portfolios")}
     {@render tabBtn("agents", "Agents")}
     {@render tabBtn("prompts", "Prompts")}
@@ -514,7 +542,7 @@
     <section class="card">
       <div class="field">
         <label for="portfolio-select">Portfolio</label>
-        <select id="portfolio-select" bind:value={selectedSlug}>
+        <select id="portfolio-select" value={selectedSlug} onchange={selectPortfolio}>
           <option value="">Select a portfolio…</option>
           {#each contestants as portfolio (portfolio.slug)}
             <option value={portfolio.slug}>
@@ -629,6 +657,7 @@
               initialPositions={editingAllocation.positions}
               initialNote={editingAllocation.note}
               positionsEditable={!editingAllocation.locked}
+              policy={detail.prompt?.allocation_policy}
               submitLabel="Save changes"
               onSubmit={submitEdit}
             />
@@ -636,7 +665,11 @@
         {:else if detail.allocations.length === 0}
           <h2>First allocation</h2>
           {#key formKey}
-            <AllocationForm submitLabel="Enter first allocation" onSubmit={submitRebalance} />
+            <AllocationForm
+              policy={detail.prompt?.allocation_policy}
+              submitLabel="Enter first allocation"
+              onSubmit={submitRebalance}
+            />
           {/key}
         {:else}
           <h2>New rebalance</h2>
@@ -646,6 +679,7 @@
           {#key formKey}
             <AllocationForm
               initialPositions={latestAllocation?.positions ?? []}
+              policy={detail.prompt?.allocation_policy}
               submitLabel="Enter rebalance"
               onSubmit={submitRebalance}
             />
@@ -657,6 +691,8 @@
         </div>
       {/if}
     </section>
+  {:else if tab === "automation"}
+    <AutomationPanel portfolios={contestants} />
   {:else if tab === "portfolio"}
     <section class="card">
       <h2>New portfolio</h2>
@@ -854,6 +890,36 @@
           <label for="np-prompt-notes">Notes <span class="muted">(optional)</span></label>
           <input id="np-prompt-notes" type="text" bind:value={newPromptNotes} />
         </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="np-prompt-min">Minimum position weight (%)</label>
+            <input
+              id="np-prompt-min"
+              type="number"
+              min="0.0001"
+              max="100"
+              step="0.0001"
+              bind:value={newPromptMinWeight}
+              required
+            />
+          </div>
+          <div class="field">
+            <label for="np-prompt-max">Maximum position weight (%)</label>
+            <input
+              id="np-prompt-max"
+              type="number"
+              min="0.0001"
+              max="100"
+              step="0.0001"
+              bind:value={newPromptMaxWeight}
+              required
+            />
+          </div>
+        </div>
+        <p class="muted hint">
+          These defaults produce {Math.ceil(100 / newPromptMaxWeight)}–{Math.floor(100 / newPromptMinWeight)} positions.
+          The server enforces the limits on every allocation.
+        </p>
         <button class="btn primary" type="submit" disabled={!newPromptName.trim() || !newPromptText.trim()}>
           Create prompt
         </button>
@@ -875,6 +941,32 @@
               <label for="ep-notes-{prompt.id}">Notes</label>
               <input id="ep-notes-{prompt.id}" type="text" bind:value={editPrompt.notes} />
             </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="ep-min-{prompt.id}">Minimum position weight (%)</label>
+                <input
+                  id="ep-min-{prompt.id}"
+                  type="number"
+                  min="0.0001"
+                  max="100"
+                  step="0.0001"
+                  bind:value={editPrompt.allocation_policy.min_position_weight_pct}
+                  required
+                />
+              </div>
+              <div class="field">
+                <label for="ep-max-{prompt.id}">Maximum position weight (%)</label>
+                <input
+                  id="ep-max-{prompt.id}"
+                  type="number"
+                  min="0.0001"
+                  max="100"
+                  step="0.0001"
+                  bind:value={editPrompt.allocation_policy.max_position_weight_pct}
+                  required
+                />
+              </div>
+            </div>
             <div class="edit-actions">
               <button class="btn primary" type="submit">Save</button>
               <button class="btn" type="button" onclick={() => (editPrompt = null)}>Cancel</button>
@@ -886,10 +978,21 @@
             <div>
               <strong>{prompt.name}</strong>
               <span class="muted"> · {used} portfolio(s)</span>
+              <span class="muted">
+                · {prompt.allocation_policy.min_position_weight_pct}%–{prompt.allocation_policy
+                  .max_position_weight_pct}% per position
+              </span>
               <p class="muted preview">{prompt.text.slice(0, 140)}{prompt.text.length > 140 ? "…" : ""}</p>
             </div>
             <div class="row-actions">
-              <button class="btn small" onclick={() => (editPrompt = { ...prompt })}>Edit</button>
+              <button
+                class="btn small"
+                onclick={() =>
+                  (editPrompt = {
+                    ...prompt,
+                    allocation_policy: { ...prompt.allocation_policy },
+                  })}>Edit</button
+              >
               <button
                 class="btn small danger"
                 onclick={() => deletePrompt(prompt)}

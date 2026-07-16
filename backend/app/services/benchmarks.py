@@ -46,7 +46,7 @@ def ensure_benchmark_allocations(session: Session) -> None:
                 note="System benchmark allocation.",
             )
             allocation.positions.append(
-                Position(symbol=benchmark["symbol"], instrument="equity", weight_pct=100)
+                Position(symbol=benchmark["symbol"], weight_pct=100)
             )
             session.add(allocation)
             changed = True

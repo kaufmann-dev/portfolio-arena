@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from ..models import Allocation, Portfolio
 from .arena import ArenaValuations, PortfolioValuation, age_days, downsample, too_early
+from .prompt_policy import allocation_policy_out, manual_execution_prompt
 from .trading_calendar import is_locked
 from .valuation import AppliedAllocation, rebase_series
 
@@ -14,14 +15,18 @@ def agent_ref(portfolio: Portfolio) -> dict:
 
 def prompt_ref(portfolio: Portfolio) -> dict:
     prompt = portfolio.prompt
-    return {"id": prompt.id, "slug": prompt.slug, "name": prompt.name}
+    return {
+        "id": prompt.id,
+        "slug": prompt.slug,
+        "name": prompt.name,
+        "allocation_policy": allocation_policy_out(prompt),
+    }
 
 
 def allocation_positions(allocation: Allocation, admin: bool = False) -> list[dict]:
     return [
         {
             "symbol": position.symbol,
-            "instrument": position.instrument,
             "weight_pct": float(position.weight_pct),
             # Per-stock notes are admin-only — never exposed on public payloads.
             **({"note": position.note} if admin else {}),
@@ -102,12 +107,12 @@ def serialize_detail(valuation: PortfolioValuation, valuations: ArenaValuations,
 
     return {
         **serialize_summary(valuation, valuations),
+        "execution_prompt": None if portfolio.is_benchmark else manual_execution_prompt(portfolio),
         "series": series,
         "spy_series": spy_overlay,
         "holdings": [
             {
                 "symbol": holding.symbol,
-                "instrument": holding.instrument,
                 "weight_pct": holding.weight_pct,
                 "target_weight_pct": holding.target_weight_pct,
                 # Buy/current price and per-stock note are admin-only handoff fields.

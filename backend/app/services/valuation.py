@@ -4,12 +4,10 @@ Pure functions only: same allocations + same price series => identical output.
 No wall-clock reads — callers pass every date in. All NAV series are base-100
 at the portfolio's first effective close.
 
-Conventions (see PLAN.md):
-- Equities hold fractional shares; cash positions hold fixed foreign-currency
-  amounts that float with FX until the next rebalance. CASH:USD is constant 1.
-- Entry cost at inception: NAV0 * sum(non-cash weights)/100 * bps/1e4,
-  deducted before shares are bought.
-- Rebalance: turnover = 0.5 * sum(|w_new - w_drift|) over non-cash symbols,
+Conventions:
+- USD-denominated equities and ETFs hold fractional shares.
+- Entry cost at inception applies to the fully invested NAV.
+- Rebalance: turnover = 0.5 * sum(|w_new - w_drift|) over all symbols,
   cost = NAV * 2 * (turnover/100) * bps/1e4 (both sides pay), then all state
   resets from the new weights on the post-cost NAV.
 - Calendar = days SPY has a close. Missing prices carry forward and are
@@ -22,8 +20,6 @@ from dataclasses import dataclass, field
 from datetime import date as date_type
 from datetime import timedelta
 
-from .symbols import fx_pair_for
-
 TRADING_DAYS_PER_YEAR = 252
 # A held symbol with no fresh print for this many trading days is presumed
 # delisted/halted and surfaced as frozen.
@@ -34,8 +30,7 @@ Series = list[dict]  # [{"date": "YYYY-MM-DD", "close": float}, ...]
 
 @dataclass(frozen=True)
 class PositionInput:
-    symbol: str  # normalized Yahoo symbol or CASH:CCY
-    instrument: str  # equity | cash
+    symbol: str
     weight_pct: float
     note: str = ""  # admin-only per-stock message, carried between cycles
 
@@ -59,12 +54,11 @@ class AppliedAllocation:
 @dataclass
 class Holding:
     symbol: str
-    instrument: str
     weight_pct: float  # drifted, as of the last valued day
     target_weight_pct: float  # from the latest applied allocation
     value: float  # NAV points
-    entry_price: float | None = None  # price at the last rebalance (equities only)
-    current_price: float | None = None  # price on the last valued day (equities only)
+    entry_price: float | None = None
+    current_price: float | None = None
     note: str = ""  # per-stock note from the latest applied allocation
 
 
@@ -156,20 +150,17 @@ def value_portfolio(
     day_index = calendar.index(first_day)
 
     # Portfolio state
-    shares: dict[str, float] = {}  # equity symbol -> fractional shares
-    cash: dict[str, float] = {}  # currency -> fixed foreign amount
+    shares: dict[str, float] = {}
     targets: dict[str, PositionInput] = {}
-    entry_prices: dict[str, float] = {}  # equity symbol -> price at the last rebalance
+    entry_prices: dict[str, float] = {}
     nav = 100.0
     cumulative_cost = 0.0
     cumulative_turnover = 0.0
     stale_days: dict[str, list[str]] = {}
     series: Series = []
 
-    def lookup(symbol: str | None, day: str, holder: str) -> float:
-        """Price/FX for valuation with carry-forward; flags stale days."""
-        if symbol is None:
-            return 1.0
+    def lookup(symbol: str, day: str, holder: str) -> float:
+        """Price lookup with carry-forward; flags stale days."""
         entry = lookups.get(symbol)
         result = entry.at(day) if entry else None
         if result is None:
@@ -180,27 +171,20 @@ def value_portfolio(
         return close
 
     def position_value(day: str) -> float:
-        total = 0.0
-        for symbol, quantity in shares.items():
-            total += quantity * lookup(symbol, day, symbol)
-        for currency, amount in cash.items():
-            pricing = None if currency == "USD" else fx_pair_for(currency)
-            total += amount * lookup(pricing, day, f"CASH:{currency}")
-        return total
+        return sum(quantity * lookup(symbol, day, symbol) for symbol, quantity in shares.items())
 
     def apply_allocation(allocation: AllocationInput, day: str, first: bool) -> None:
-        nonlocal nav, cumulative_cost, cumulative_turnover, shares, cash, targets, entry_prices
+        nonlocal nav, cumulative_cost, cumulative_turnover, shares, targets, entry_prices
         positions = [p for p in allocation.positions if p.weight_pct > 0]
 
         if first:
             nav_before = 100.0
-            non_cash_weight = sum(p.weight_pct for p in positions if p.instrument == "equity")
-            cost = nav_before * (non_cash_weight / 100.0) * cost_bps / 10_000.0
+            cost = nav_before * cost_bps / 10_000.0
             turnover_pct = None
         else:
             nav_before = position_value(day)
             drifted = _drifted_weights(day)
-            new_weights = {p.symbol: p.weight_pct for p in positions if p.instrument == "equity"}
+            new_weights = {p.symbol: p.weight_pct for p in positions}
             symbols = set(drifted) | set(new_weights)
             turnover_pct = 0.5 * sum(abs(new_weights.get(s, 0.0) - drifted.get(s, 0.0)) for s in symbols)
             cost = nav_before * 2 * (turnover_pct / 100.0) * cost_bps / 10_000.0
@@ -210,18 +194,12 @@ def value_portfolio(
         cumulative_cost += cost
 
         shares = {}
-        cash = {}
         entry_prices = {}
         for position in positions:
             value = nav_after * position.weight_pct / 100.0
-            if position.instrument == "equity":
-                price = lookup(position.symbol, day, position.symbol)
-                shares[position.symbol] = value / price
-                entry_prices[position.symbol] = price
-            else:
-                currency = position.symbol.split(":", 1)[1]
-                rate = 1.0 if currency == "USD" else lookup(fx_pair_for(currency), day, position.symbol)
-                cash[currency] = cash.get(currency, 0.0) + value / rate
+            price = lookup(position.symbol, day, position.symbol)
+            shares[position.symbol] = value / price
+            entry_prices[position.symbol] = price
 
         targets = {p.symbol: p for p in positions}
         nav = nav_after
@@ -237,7 +215,7 @@ def value_portfolio(
         )
 
     def _drifted_weights(day: str) -> dict[str, float]:
-        """Drifted weights of *equity* positions, % of NAV at `day`."""
+        """Drifted position weights as a percentage of NAV at `day`."""
         total = position_value(day)
         if total <= 0:
             return {}
@@ -265,26 +243,11 @@ def value_portfolio(
             holdings.append(
                 Holding(
                     symbol=symbol,
-                    instrument="equity",
                     weight_pct=value / last_nav * 100.0,
                     target_weight_pct=targets[symbol].weight_pct if symbol in targets else 0.0,
                     value=value,
                     entry_price=entry_prices.get(symbol),
                     current_price=current_price,
-                    note=targets[symbol].note if symbol in targets else "",
-                )
-            )
-        for currency, amount in sorted(cash.items()):
-            pricing = None if currency == "USD" else fx_pair_for(currency)
-            value = amount * lookup(pricing, last_day, f"CASH:{currency}")
-            symbol = f"CASH:{currency}"
-            holdings.append(
-                Holding(
-                    symbol=symbol,
-                    instrument="cash",
-                    weight_pct=value / last_nav * 100.0,
-                    target_weight_pct=targets[symbol].weight_pct if symbol in targets else 0.0,
-                    value=value,
                     note=targets[symbol].note if symbol in targets else "",
                 )
             )

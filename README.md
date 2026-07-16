@@ -2,29 +2,30 @@
 
 A self-hosted web app that runs a long-term experiment: **can LLMs pick portfolios that beat SPY?**
 
-On a recurring cadence the operator prompts AI agents (Claude, Codex, Gemini, …) with
-portfolio-management prompts, then enters each agent's proposed allocation here by hand. The app
-simulates it as a paper portfolio from Yahoo Finance data and tracks it live against SPY on a
-public leaderboard. It is an *arena*: honest, deterministic measurement — not trading, not
-advice. The app never calls an LLM itself; agents drive it from outside (by hand or over the
-MCP server).
+On every NYSE trading day, a separate worker can run selected portfolios through Codex using a
+persisted ChatGPT login, live web search, Massive market data, and Portfolio Arena's MCP tools. It
+submits each validated allocation before the close and records the complete run history. No OpenAI
+Platform API key is used. Manual prompt-copy and MCP workflows remain available.
 
-Each non-benchmark portfolio page can copy its assigned prompt with that portfolio's slug filled
-into the `<PORTFOLIO_SLUG_OR_ID>` placeholder, ready for an external agent to call `get_portfolio`.
+The app simulates the allocations as paper portfolios from Yahoo Finance data and tracks them live
+against SPY on a public leaderboard. It is an *arena*: honest, deterministic measurement — not
+trading and not advice.
 
 ## Architecture
 
 - **Backend** — FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (`backend/`). Serves the built SPA
   with fallback routing.
 - **Frontend** — Svelte 5 + Vite + TypeScript SPA (`frontend/`), built to `frontend/dist/`.
-- **Prices** — Yahoo Finance chart endpoint (daily adjusted closes; plain closes for FX), fetched
-  in parallel with httpx and cached in Postgres with a ~1h TTL.
-- **No stored NAVs, no background jobs.** Every NAV series is recomputed on request from the
+- **Prices** — Yahoo Finance chart endpoint (daily adjusted closes), fetched in parallel with
+  httpx and cached in Postgres with a ~1h TTL.
+- **Evaluator** — a separate `Dockerfile.evaluator` worker invokes `codex exec` with ChatGPT auth,
+  read-only Arena/Massive tools, and live web search. The runner alone receives Arena write tools.
+- **No stored NAVs.** Every NAV series is recomputed on request from the
   entered allocations + cached price series. Adjusted closes change retroactively
   (dividends/splits), so recomputation is *more* correct than snapshotting.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
-  endpoint exposing the full app surface as tools, so an AI agent can read its portfolio's
-  history and enter rebalances programmatically instead of by hand. See below.
+  endpoint exposing the full app surface as tools, including the evaluator lease/submission
+  protocol. See below.
 
 ## Experiment-integrity rules (enforced in code)
 
@@ -36,6 +37,8 @@ into the `<PORTFOLIO_SLUG_OR_ID>` placeholder, ready for an external agent to ca
   stays editable.
 - **One portfolio, one prompt.** A portfolio has a fixed prompt chosen at creation, like its
   agent; it can be reassigned later but is not chosen per allocation.
+- **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
+  position weights. The default is 10–25%, which implies 4–10 positions.
 - **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system
   portfolios whose single 100% allocation is auto-aligned to the earliest real portfolio
   inception, valued by the same code path at zero cost.
@@ -47,19 +50,11 @@ into the `<PORTFOLIO_SLUG_OR_ID>` placeholder, ready for an external agent to ca
 
 ## Instruments
 
-Long-only equities & ETFs plus multi-currency cash; weights ≥ 0 and sum to exactly 100.
-
-| Syntax                 | Type   | Return basis                                  |
-| ---------------------- | ------ | --------------------------------------------- |
-| `AAPL`, `SPY`, `BRK-B` | equity | adjusted close (total return)                 |
-| `CASH:USD`, `CASH:EUR` | cash   | spot FX vs USD (via `EURUSD=X`), 0% interest  |
-
-Rejected at validation with hints: raw indices (`^GSPC` → use SPY/QQQ/IWM), FX pairs (`=X` →
-use `CASH:CCY`), futures (`=F` → use ETF equivalents such as SSO/GLD/TLT; Yahoo continuous
-contracts have roll artifacts that would corrupt long-horizon measurement).
-
-**Known simplification:** cash earns no interest in any currency. This slightly penalizes
-cash-heavy contestants; the benchmark is unaffected.
+Portfolios are fully invested, long-only, and USD-denominated. Accepted Yahoo instrument types are
+`EQUITY` and `ETF`; adjusted closes provide the total-return basis. Cash, mutual funds, crypto,
+raw indices, FX pairs, futures, shorts, and leverage are rejected. Current S&P 500 membership can
+be part of a strategy prompt, but is deliberately a research judgment rather than a stale hard-coded
+symbol list.
 
 ## MCP server
 
@@ -72,11 +67,55 @@ per-portfolio history) — **except** API-key management, which stays in the adm
   there is no anonymous access. Create and revoke keys in the admin panel's **API Keys** tab.
   The plaintext key is shown once at creation; only a SHA-256 hash is stored.
 - **Flagship read tools.** `get_portfolio(slug_or_id)` returns everything an agent needs to
-  rebalance one portfolio (prompt text, drifted holdings with entry/current prices, the full
-  allocation history with general and per-position notes, performance metrics).
+  rebalance one portfolio (strategy and structured policy, drifted holdings with entry/current
+  prices, the full allocation history with general and per-position notes, performance metrics).
   `get_arena_overview()` compares every portfolio's performance at once.
+- **Automation tools.** `begin_evaluation_run`, `submit_evaluation_allocation`, and
+  `fail_evaluation_run` enforce the time window, lease, two-attempt limit, and atomic submission.
+  `list_evaluation_runs` exposes the persisted audit history.
 - **Connecting a client.** e.g. `claude mcp add --transport http arena https://<host>/mcp
   --header "Authorization: Bearer <key>"`.
+
+## Automated Evaluator
+
+The tracked allowlist in `evaluator.toml` maps six portfolio slugs to their Codex models. The worker
+wakes on NYSE sessions, including holidays, daylight-saving changes, and early closes. It starts 90
+minutes before the scheduled close, stops accepting submissions 10 minutes before, runs up to five
+jobs concurrently, completes all first attempts before retrying failures, and permits at most two
+25-minute attempts per portfolio. One portfolio failing never blocks the others.
+
+The model process has read-only access to `get_portfolio`, symbol validation/search, Massive, and
+live web search. It returns structured JSON. The worker then calls Arena's atomic submission tool,
+where symbols, USD denomination, weights, prompt policy, lease, and cutoff are validated again. The
+worker explicitly removes `OPENAI_API_KEY` and `CODEX_API_KEY` from model subprocesses.
+
+### Local Podman Setup
+
+Requirements: Podman, a ChatGPT account with access to the configured models, an Arena MCP API key,
+and a Massive API key.
+
+```sh
+cp .env.evaluator.example .env.evaluator
+# Fill in the three required values, then protect the file:
+chmod 600 .env.evaluator
+
+# Build the worker and complete Codex device login into a persistent volume.
+./scripts/bootstrap-evaluator.sh
+
+# Start the scheduler. The Codex login survives container replacement.
+podman run --detach --name arena-evaluator --restart unless-stopped \
+  --env-file .env.evaluator \
+  --volume portfolio-arena-codex:/var/lib/codex \
+  portfolio-arena-evaluator:local
+```
+
+Check it with `podman logs arena-evaluator` and `podman healthcheck run arena-evaluator`. The worker
+stays alive and healthy if Codex is logged out; it waits without consuming evaluation attempts and
+logs the exact `codex login --device-auth` remediation.
+
+When upgrading an existing Arena database, migration `0006` intentionally aborts if historical cash
+positions exist. Back up the database and resolve those rows before deploying; the migration will
+not silently rewrite the experiment's history.
 
 ## Development
 
@@ -108,24 +147,39 @@ reuse an existing database. Yahoo is stubbed in tests; nothing hits the network.
 
 ## Coolify Deployment
 
-- **Build Pack**: Nixpacks
-- **Base Directory**: `/`
-- **Health Check**: `GET /api/leaderboard`
-
-Attach a separate Coolify PostgreSQL resource. Single instance assumed (in-memory rate limits).
+- Create two Coolify applications from this repository.
+- **Web app:** Build Pack `Nixpacks`, Base Directory `/`, health check `GET /api/leaderboard`.
+  Attach a PostgreSQL resource. The tracked `nixpacks.toml` builds the SPA, runs migrations, and
+  starts FastAPI on Coolify's injected `PORT`.
+- **Evaluator:** Build Pack `Dockerfile`, Base Directory `/`, Dockerfile
+  `/Dockerfile.evaluator`, no public domain or port. Add persistent storage at `/var/lib/codex`.
+  After the first deploy, open its terminal and run `codex login --device-auth` once. Redeploys reuse
+  the stored ChatGPT login.
 
 ### Environment Variables
 
 **Required**
 
-| Variable               | Purpose                   |
-| ---------------------- | ------------------------- |
-| `DATABASE_URL`         | PostgreSQL connection URL |
-| `ARENA_JWT_SECRET`     | JWT signing secret        |
-| `ARENA_ADMIN_EMAIL`    | Admin login email         |
-| `ARENA_ADMIN_PASSWORD` | Admin password            |
+Web app:
+
+| Variable               | Purpose                      |
+| ---------------------- | ---------------------------- |
+| `DATABASE_URL`         | PostgreSQL connection URL    |
+| `ARENA_JWT_SECRET`     | JWT signing secret           |
+| `ARENA_ADMIN_EMAIL`    | Initial admin login email    |
+| `ARENA_ADMIN_PASSWORD` | Initial admin login password |
+
+Evaluator:
+
+| Variable            | Purpose                                                     |
+| ------------------- | ----------------------------------------------------------- |
+| `ARENA_MCP_URL`     | Public web-app MCP URL, ending in `/mcp`                    |
+| `ARENA_MCP_API_KEY` | Key created in Admin → API Keys; not an OpenAI Platform key |
+| `MASSIVE_API_KEY`   | Massive market-data credential                              |
 
 **Optional**
+
+Web app:
 
 | Variable                        | Default | Purpose                             |
 | ------------------------------- | ------- | ----------------------------------- |
@@ -135,9 +189,17 @@ Attach a separate Coolify PostgreSQL resource. Single instance assumed (in-memor
 | `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`  | Price cache TTL                     |
 | `PORT`                          | `8000`  | Listen port                         |
 
+Evaluator:
+
+| Variable                            | Default | Purpose                             |
+| ----------------------------------- | ------- | ----------------------------------- |
+| `EVALUATOR_MAX_CONCURRENCY`         | `5`     | Simultaneous Codex processes        |
+| `EVALUATOR_POLL_SECONDS`            | `60`    | Scheduler polling interval          |
+| `EVALUATOR_ATTEMPT_TIMEOUT_SECONDS` | `1500`  | Per-attempt timeout, maximum 25 min |
+| `EVALUATOR_SERVICE_TIER`            | `fast`  | Codex service tier                  |
+
 ## Non-goals (v1)
 
-The app never calls an LLM itself and does no response parsing — agents drive it from outside,
-via the admin panel or the MCP server. No broker integration, no shorts or leverage, no
-options/futures, no intraday prices, no cash interest, no multi-user accounts, no notifications,
-no historical backtesting, no significance testing beyond the age badge.
+No broker integration, OpenAI Platform API execution, shorts or leverage, options/futures,
+intraday prices, cash positions, OpenCode automation, multi-user accounts, external notifications,
+historical backtesting, or significance testing beyond the age badge.

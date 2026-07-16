@@ -1,0 +1,4 @@
+httpx>=0.28,<1
+mcp>=1.28,<2
+mcp_massive @ https://github.com/massive-com/mcp_massive/archive/refs/tags/v0.10.0.tar.gz
+pydantic>=2,<3

@@ -20,7 +20,7 @@ def _create_with_notes(client, admin_headers, agent_id, prompt_id) -> dict:
         json={
             "positions": [
                 {"symbol": "AAPL", "weight_pct": 60, "note": "earnings 08/01, trimming"},
-                {"symbol": "CASH:USD", "weight_pct": 40, "note": "dry powder"},
+                {"symbol": "MSFT", "weight_pct": 40, "note": "cloud demand intact"},
             ],
             "note": "risk-off tilt",
         },
@@ -40,7 +40,7 @@ class TestPositionNotes:
         assert detail.status_code == 200, detail.text
         positions = detail.json()["portfolio"]["allocations"][0]["positions"]
         notes = {p["symbol"]: p["note"] for p in positions}
-        assert notes == {"AAPL": "earnings 08/01, trimming", "CASH:USD": "dry powder"}
+        assert notes == {"AAPL": "earnings 08/01, trimming", "MSFT": "cloud demand intact"}
 
     def test_public_detail_hides_notes(self, client, admin_headers, sample_agent, sample_prompt):
         created = _create_with_notes(client, admin_headers, sample_agent["id"], sample_prompt["id"])

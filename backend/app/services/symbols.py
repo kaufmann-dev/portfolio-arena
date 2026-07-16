@@ -1,29 +1,20 @@
-"""Symbol syntax rules: instrument derivation and validation with hints.
-
-Instrument type is derived from Yahoo symbol syntax — equities/ETFs are plain
-symbols, cash is ``CASH:CCY``. Raw indices, FX pairs, and futures are rejected
-with actionable hints (see PLAN: futures roll artifacts would corrupt the
-long-horizon measurement; ETFs cover the use cases).
-"""
-
-import re
+"""Validation for USD-denominated equities and ETFs."""
 from dataclasses import dataclass
 
 from . import yahoo
 
-CASH_RE = re.compile(r"^CASH:([A-Z]{3})$")
-
 # Yahoo instrumentType values acceptable as long-only positions.
-ALLOWED_INSTRUMENT_TYPES = {"EQUITY", "ETF", "MUTUALFUND"}
+ALLOWED_INSTRUMENT_TYPES = {"EQUITY", "ETF"}
 
 REJECTION_HINTS = {
     "index": "Raw index symbols are not investable. Use an ETF instead (e.g. SPY, QQQ, IWM).",
-    "fx": "FX pairs are not positions. Use multi-currency cash instead (e.g. CASH:EUR).",
+    "fx": "FX pairs are not supported. Use a USD-denominated equity or ETF.",
     "futures": (
         "Futures are not supported — Yahoo continuous contracts have roll artifacts. "
         "Use ETF equivalents instead (e.g. SSO for leveraged index, GLD for gold, TLT for duration)."
     ),
-    "type": "Only equities and ETFs are supported (plus CASH:CCY for cash).",
+    "type": "Only equities and ETFs are supported.",
+    "currency": "Only USD-denominated equities and ETFs are supported.",
 }
 
 
@@ -36,7 +27,7 @@ class SymbolValidationError(ValueError):
 @dataclass
 class ResolvedSymbol:
     symbol: str
-    instrument: str  # equity | cash
+    security_type: str  # equity | etf
     name: str
     currency: str | None = None
     exchange: str | None = None
@@ -44,20 +35,6 @@ class ResolvedSymbol:
 
 def normalize_symbol(raw: str) -> str:
     return " ".join(str(raw or "").split()).upper()
-
-
-def cash_currency(symbol: str) -> str | None:
-    match = CASH_RE.match(symbol)
-    return match.group(1) if match else None
-
-
-def fx_pair_for(currency: str) -> str:
-    """Yahoo ticker for CCY→USD spot, e.g. EURUSD=X."""
-    return f"{currency}USD=X"
-
-
-def derive_instrument(symbol: str) -> str:
-    return "cash" if cash_currency(symbol) else "equity"
 
 
 def check_syntax(symbol: str) -> None:
@@ -70,25 +47,14 @@ def check_syntax(symbol: str) -> None:
         raise SymbolValidationError(REJECTION_HINTS["fx"])
     if symbol.endswith("=F"):
         raise SymbolValidationError(REJECTION_HINTS["futures"])
-    if symbol.startswith("CASH:") and not cash_currency(symbol):
-        raise SymbolValidationError("Cash symbols look like CASH:CCY, e.g. CASH:USD or CASH:EUR.")
+    if symbol.startswith("CASH:"):
+        raise SymbolValidationError("Cash positions are not supported; use an equity or ETF.")
 
 
 def resolve_symbol(raw: str) -> ResolvedSymbol:
     """Validate + resolve one symbol against Yahoo. Raises SymbolValidationError."""
     symbol = normalize_symbol(raw)
     check_syntax(symbol)
-
-    currency = cash_currency(symbol)
-    if currency:
-        if currency == "USD":
-            return ResolvedSymbol(symbol=symbol, instrument="cash", name="US Dollar cash", currency="USD")
-        meta = yahoo.fetch_chart_meta(fx_pair_for(currency))
-        if meta is None:
-            raise SymbolValidationError(
-                f"No Yahoo FX rate for {currency} (looked up {fx_pair_for(currency)})."
-            )
-        return ResolvedSymbol(symbol=symbol, instrument="cash", name=f"{currency} cash", currency=currency)
 
     meta = yahoo.fetch_chart_meta(symbol)
     if meta is None:
@@ -101,19 +67,22 @@ def resolve_symbol(raw: str) -> ResolvedSymbol:
         raise SymbolValidationError(REJECTION_HINTS["fx"])
     if instrument_type == "FUTURE":
         raise SymbolValidationError(REJECTION_HINTS["futures"])
-    if instrument_type and instrument_type not in ALLOWED_INSTRUMENT_TYPES:
+    if instrument_type not in ALLOWED_INSTRUMENT_TYPES:
         raise SymbolValidationError(REJECTION_HINTS["type"])
+    currency = str(meta.get("currency") or "").upper()
+    if currency != "USD":
+        raise SymbolValidationError(REJECTION_HINTS["currency"])
 
     return ResolvedSymbol(
         symbol=symbol,
-        instrument="equity",
+        security_type=instrument_type.lower(),
         name=meta.get("name") or symbol,
-        currency=meta.get("currency"),
+        currency=currency,
         exchange=meta.get("exchangeName"),
     )
 
 
-SEARCHABLE_TYPES = {"EQUITY", "ETF", "MUTUALFUND", "FUND"}
+SEARCHABLE_TYPES = ALLOWED_INSTRUMENT_TYPES
 
 
 def search_symbols_allowed(query: str) -> list[dict]:

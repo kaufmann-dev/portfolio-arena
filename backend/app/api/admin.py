@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..db import get_session
@@ -70,13 +70,27 @@ def delete_agent(agent_id: int, session: Session = Depends(get_session)):
 @router.post("/prompts", status_code=201)
 def create_prompt(body: PromptCreate, session: Session = Depends(get_session)):
     return _run(
-        admin_ops.create_prompt, session, name=body.name, text=body.text, slug=body.slug, notes=body.notes
+        admin_ops.create_prompt,
+        session,
+        name=body.name,
+        text=body.text,
+        slug=body.slug,
+        notes=body.notes,
+        allocation_policy=body.allocation_policy.model_dump(),
     )
 
 
 @router.patch("/prompts/{prompt_id}")
 def patch_prompt(prompt_id: int, body: PromptPatch, session: Session = Depends(get_session)):
-    return _run(admin_ops.update_prompt, session, prompt_id, name=body.name, text=body.text, notes=body.notes)
+    return _run(
+        admin_ops.update_prompt,
+        session,
+        prompt_id,
+        name=body.name,
+        text=body.text,
+        notes=body.notes,
+        allocation_policy=body.allocation_policy.model_dump() if body.allocation_policy else None,
+    )
 
 
 @router.delete("/prompts/{prompt_id}")
@@ -100,7 +114,7 @@ def symbol_resolution(symbol: str):
         raise HTTPException(422, exc.message) from None
     return {
         "symbol": resolved.symbol,
-        "instrument": resolved.instrument,
+        "security_type": resolved.security_type,
         "name": resolved.name,
         "currency": resolved.currency,
         "exchange": resolved.exchange,
@@ -152,6 +166,24 @@ def delete_portfolio(portfolio_id: int, session: Session = Depends(get_session))
 @router.get("/portfolios/{portfolio_id}/detail")
 def portfolio_admin_detail(portfolio_id: int, session: Session = Depends(get_session)):
     return _run(admin_ops.portfolio_admin_detail, session, portfolio_id)
+
+
+@router.get("/evaluation-runs")
+def evaluation_runs(
+    portfolio_id: int | None = None,
+    status: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    session: Session = Depends(get_session),
+):
+    return _run(
+        admin_ops.list_evaluation_runs,
+        session,
+        portfolio_id=portfolio_id,
+        status=status,
+        cursor=cursor,
+        limit=limit,
+    )
 
 
 @router.post("/portfolios/{portfolio_id}/allocations", status_code=201)

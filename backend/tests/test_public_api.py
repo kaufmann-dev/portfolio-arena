@@ -59,9 +59,10 @@ class TestPortfolioDetail:
         assert portfolio["series"][0]["date"] == portfolio["spy_series"][0]["date"]
 
         symbols = {holding["symbol"] for holding in portfolio["holdings"]}
-        assert symbols == {"AAPL", "CASH:USD"}
+        assert symbols == {"AAPL", "MSFT"}
 
         assert portfolio["prompt"]["slug"] == "weekly-manager-v1"
+        assert portfolio["execution_prompt"].startswith("Evaluate and rebalance")
 
         allocation = portfolio["allocations"][0]
         assert allocation["locked"] is True
@@ -91,6 +92,7 @@ class TestPromptsAndAgents:
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
         payload = client.get("/api/prompts/weekly-manager-v1").json()
         assert payload["prompt"]["text"].startswith("Manage a portfolio")
+        assert payload["prompt"]["allocation_policy"]["derived_max_positions"] == 100
         assert find(payload["portfolios"], sample_portfolio["slug"]) is not None
 
     def test_agent_detail_lists_portfolios(self, client, sample_portfolio, sample_agent):

@@ -2,7 +2,7 @@
 valuation engine per portfolio, and shape metrics for the API.
 
 Nothing here stores NAVs — every request recomputes deterministically from
-locked allocations + cached price/FX series (adjusted closes change
+locked allocations + cached adjusted-close series (adjusted closes change
 retroactively, so recomputation is *more* correct than snapshotting).
 """
 
@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import TOO_EARLY_AGE_DAYS
 from ..models import Allocation, Portfolio
 from . import price_cache, yahoo
-from .symbols import cash_currency, fx_pair_for
 from .trading_calendar import close_at
 from .valuation import (
     AllocationInput,
@@ -51,16 +50,8 @@ class ArenaValuations:
 
 
 def pricing_symbols(allocations: list[Allocation]) -> set[str]:
-    """Yahoo series needed to value these allocations (equities + FX pairs)."""
-    symbols: set[str] = set()
-    for allocation in allocations:
-        for position in allocation.positions:
-            currency = cash_currency(position.symbol)
-            if currency is None:
-                symbols.add(position.symbol)
-            elif currency != "USD":
-                symbols.add(fx_pair_for(currency))
-    return symbols
+    """Yahoo series needed to value these allocations."""
+    return {position.symbol for allocation in allocations for position in allocation.positions}
 
 
 def load_price_series(session: Session, symbols: list[str], required_start: date) -> dict[str, Series]:
@@ -85,7 +76,6 @@ def _allocation_inputs(allocations: list[Allocation]) -> list[AllocationInput]:
             positions=tuple(
                 PositionInput(
                     symbol=position.symbol,
-                    instrument=position.instrument,
                     weight_pct=float(position.weight_pct),
                     note=position.note,
                 )

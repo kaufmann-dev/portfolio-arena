@@ -9,6 +9,7 @@ from ..models import Agent, Portfolio, Prompt
 from ..ratelimit import limiter
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import ensure_benchmark_allocations
+from ..services.prompt_policy import allocation_policy_out
 from ..services.serialize import serialize_detail, serialize_summary
 from ..services.valuation import rebase_series
 
@@ -104,6 +105,7 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
                 "name": prompt.name,
                 "text": prompt.text,
                 "notes": prompt.notes,
+                "allocation_policy": allocation_policy_out(prompt),
                 "updated_at": prompt.updated_at.isoformat(),
                 "portfolio_count": usage.get(prompt.id, 0),
             }
@@ -129,6 +131,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
             "name": prompt.name,
             "text": prompt.text,
             "notes": prompt.notes,
+            "allocation_policy": allocation_policy_out(prompt),
             "created_at": prompt.created_at.isoformat(),
             "updated_at": prompt.updated_at.isoformat(),
         },

@@ -54,6 +54,8 @@ def seed_benchmarks(session: Session) -> None:
             name="Buy & Hold",
             text="Hold a single ETF forever. System benchmark, not an AI prompt.",
             notes="System prompt for benchmark portfolios.",
+            min_position_weight_pct=100,
+            max_position_weight_pct=100,
         )
         session.add(prompt)
         session.flush()

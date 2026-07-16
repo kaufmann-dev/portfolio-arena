@@ -1,4 +1,4 @@
-"""Valuation engine unit tests with synthetic price/FX fixtures.
+"""Valuation engine unit tests with synthetic price fixtures.
 
 The engine is pure: same inputs must always produce identical output.
 NAV series are base-100 at the first effective close.
@@ -22,11 +22,7 @@ def series(*points):
 
 
 def equity(symbol, weight):
-    return PositionInput(symbol=symbol, instrument="equity", weight_pct=weight)
-
-
-def cash(currency, weight):
-    return PositionInput(symbol=f"CASH:{currency}", instrument="cash", weight_pct=weight)
+    return PositionInput(symbol=symbol, weight_pct=weight)
 
 
 DAYS = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
@@ -49,24 +45,6 @@ def test_initial_allocation_deducts_cost_first_then_buys():
     assert result.allocations[0].nav_after == pytest.approx(99.9)
     assert result.series[0]["nav"] == pytest.approx(99.9)
     assert result.cumulative_cost == pytest.approx(0.1)
-
-
-def test_initial_cost_applies_only_to_non_cash_weight():
-    prices = {"AAPL": series((DAYS[0], 50.0))}
-    allocations = [AllocationInput(DAYS[0], (equity("AAPL", 40.0), cash("USD", 60.0)))]
-
-    result = value_portfolio(allocations, cost_bps=10, prices=prices, calendar=calendar(), as_of=DAYS[0])
-
-    assert result.allocations[0].cost == pytest.approx(100 * 0.4 * 10 / 10_000)
-
-
-def test_all_cash_portfolio_is_flat_and_free():
-    allocations = [AllocationInput(DAYS[0], (cash("USD", 100.0),))]
-
-    result = value_portfolio(allocations, cost_bps=10, prices={}, calendar=calendar(), as_of=DAYS[-1])
-
-    assert result.allocations[0].cost == 0.0
-    assert [point["nav"] for point in result.series] == pytest.approx([100.0] * len(DAYS))
 
 
 def test_nav_drifts_with_prices():
@@ -144,46 +122,6 @@ def test_exit_position_counts_as_turnover():
     assert result.allocations[1].turnover_pct == pytest.approx(100.0)
 
 
-def test_cash_to_equity_rebalance_is_free():
-    # Turnover is measured over non-cash positions only; equity legs count,
-    # cash legs don't add extra.
-    prices = {"AAA": series(*((day, 10.0) for day in DAYS))}
-    allocations = [
-        AllocationInput(DAYS[0], (cash("USD", 100.0),)),
-        AllocationInput(DAYS[2], (equity("AAA", 50.0), cash("USD", 50.0))),
-    ]
-
-    result = value_portfolio(allocations, cost_bps=10, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-
-    assert result.allocations[1].turnover_pct == pytest.approx(25.0)
-
-
-def test_multi_currency_cash_floats_with_fx():
-    fx = series((DAYS[0], 1.10), (DAYS[1], 1.21), (DAYS[2], 1.10))
-    allocations = [AllocationInput(DAYS[0], (cash("EUR", 100.0),))]
-
-    result = value_portfolio(
-        allocations, cost_bps=10, prices={"EURUSD=X": fx}, calendar=calendar(), as_of=DAYS[2]
-    )
-
-    # No cost on cash; 100 USD -> 90.909 EUR at 1.10
-    assert result.series[0]["nav"] == pytest.approx(100.0)
-    assert result.series[1]["nav"] == pytest.approx(110.0)  # EUR appreciated 10%
-    assert result.series[2]["nav"] == pytest.approx(100.0)
-
-
-def test_mixed_equity_and_foreign_cash():
-    prices = {
-        "AAA": series((DAYS[0], 10.0), (DAYS[1], 10.0)),
-        "EURUSD=X": series((DAYS[0], 1.00), (DAYS[1], 1.05)),
-    }
-    allocations = [AllocationInput(DAYS[0], (equity("AAA", 50.0), cash("EUR", 50.0)))]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[1])
-
-    assert result.series[1]["nav"] == pytest.approx(50.0 + 50.0 * 1.05)
-
-
 def test_effective_date_shifts_to_next_calendar_close():
     # Effective date falls on an unscheduled closure (not in the calendar):
     # the allocation applies at the next actual close.
@@ -200,7 +138,7 @@ def test_future_allocation_is_pending():
     prices = {"AAA": series(*((day, 10.0) for day in DAYS))}
     allocations = [
         AllocationInput(DAYS[0], (equity("AAA", 100.0),)),
-        AllocationInput("2026-02-01", (cash("USD", 100.0),)),
+        AllocationInput("2026-02-01", (equity("BBB", 100.0),)),
     ]
 
     result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
@@ -261,11 +199,11 @@ def test_zero_weight_positions_are_ignored():
 def test_determinism():
     prices = {
         "AAA": series(*((day, 10.0 + i) for i, day in enumerate(DAYS))),
-        "EURUSD=X": series(*((day, 1.1 + i / 100) for i, day in enumerate(DAYS))),
+        "BBB": series(*((day, 20.0 - i / 2) for i, day in enumerate(DAYS))),
     }
     allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 70.0), cash("EUR", 30.0))),
-        AllocationInput(DAYS[2], (equity("AAA", 40.0), cash("EUR", 60.0))),
+        AllocationInput(DAYS[0], (equity("AAA", 70.0), equity("BBB", 30.0))),
+        AllocationInput(DAYS[2], (equity("AAA", 40.0), equity("BBB", 60.0))),
     ]
 
     first = value_portfolio(allocations, cost_bps=25, prices=prices, calendar=calendar(), as_of=DAYS[-1])
