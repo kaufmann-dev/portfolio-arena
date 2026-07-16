@@ -890,7 +890,7 @@
           <label for="np-prompt-notes">Notes <span class="muted">(optional)</span></label>
           <input id="np-prompt-notes" type="text" bind:value={newPromptNotes} />
         </div>
-        <div class="grid-2">
+        <div class="grid-2 weight-grid">
           <div class="field">
             <label for="np-prompt-min">Minimum position weight (%)</label>
             <input
@@ -941,7 +941,7 @@
               <label for="ep-notes-{prompt.id}">Notes</label>
               <input id="ep-notes-{prompt.id}" type="text" bind:value={editPrompt.notes} />
             </div>
-            <div class="grid-2">
+            <div class="grid-2 weight-grid">
               <div class="field">
                 <label for="ep-min-{prompt.id}">Minimum position weight (%)</label>
                 <input
@@ -1240,6 +1240,10 @@
     display: grid;
     grid-template-columns: 1fr 200px;
     gap: 14px;
+  }
+
+  .weight-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .hint {
