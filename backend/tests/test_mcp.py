@@ -52,7 +52,13 @@ class TestMcpTools:
         response = _rpc(client, mcp_headers, "tools/list")
         assert response.status_code == 200, response.text
         names = {tool["name"] for tool in response.json()["result"]["tools"]}
-        assert {"get_portfolio", "get_arena_overview", "create_allocation"} <= names
+        assert {
+            "get_portfolio",
+            "get_arena_overview",
+            "create_allocation",
+            "begin_evaluation_run",
+            "submit_evaluation_allocation",
+        } <= names
         # Key management is never exposed as a tool.
         assert not any("key" in name.lower() for name in names)
 
@@ -73,7 +79,19 @@ class TestMcpTools:
 
     def test_write_roundtrip(self, client, mcp_headers, admin_headers):
         agent = _call_tool(client, mcp_headers, "create_agent", {"name": "MCP Agent"})
-        prompt = _call_tool(client, mcp_headers, "create_prompt", {"name": "MCP Prompt", "text": "Beat SPY."})
+        prompt = _call_tool(
+            client,
+            mcp_headers,
+            "create_prompt",
+            {
+                "name": "MCP Prompt",
+                "text": "Beat SPY.",
+                "allocation_policy": {
+                    "min_position_weight_pct": 1,
+                    "max_position_weight_pct": 100,
+                },
+            },
+        )
         portfolio = _call_tool(
             client,
             mcp_headers,

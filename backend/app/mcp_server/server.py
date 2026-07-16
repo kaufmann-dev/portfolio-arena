@@ -24,9 +24,9 @@ snapshotted. Typical rebalance workflow for one portfolio:
 1. `get_portfolio(slug_or_id)` — read its prompt, drifted holdings (entry vs
    current price), full allocation history with the general note and per-position
    notes, and performance metrics.
-2. Decide new target weights. Weights must sum to exactly 100; use `CASH:USD`
-   (or `CASH:EUR`, …) for cash. Validate unfamiliar tickers with
-   `validate_symbol` / `search_symbols`.
+2. Follow the returned prompt allocation policy. Weights must sum to exactly
+   100 across USD-denominated equities and ETFs. Validate unfamiliar tickers
+   with `validate_symbol` / `search_symbols`.
 3. `create_allocation(portfolio_id, positions, note)` — the per-position `note`
    and the general `note` are the handoff to the next rebalance. Entry time is
    server-set and the allocation freezes after its effective market close.

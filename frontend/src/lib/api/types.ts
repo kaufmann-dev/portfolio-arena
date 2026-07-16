@@ -4,6 +4,17 @@ export interface Ref {
   name: string;
 }
 
+export interface AllocationPolicy {
+  min_position_weight_pct: number;
+  max_position_weight_pct: number;
+  derived_min_positions: number;
+  derived_max_positions: number;
+}
+
+export interface PromptRef extends Ref {
+  allocation_policy: AllocationPolicy;
+}
+
 export interface Metrics {
   has_data: boolean;
   start_date?: string;
@@ -27,7 +38,7 @@ export interface PortfolioSummary {
   slug: string;
   name: string;
   agent: Ref;
-  prompt: Ref | null;
+  prompt: PromptRef | null;
   is_benchmark: boolean;
   status: "active" | "archived";
   cost_bps: number;
@@ -49,7 +60,6 @@ export interface SeriesPoint {
 
 export interface PositionOut {
   symbol: string;
-  instrument: "equity" | "cash";
   weight_pct: number;
   note?: string;
 }
@@ -69,7 +79,6 @@ export interface AllocationOut {
 
 export interface Holding {
   symbol: string;
-  instrument: "equity" | "cash";
   weight_pct: number;
   target_weight_pct: number;
   entry_price?: number | null;
@@ -78,6 +87,7 @@ export interface Holding {
 }
 
 export interface PortfolioDetail extends PortfolioSummary {
+  execution_prompt: string | null;
   series: SeriesPoint[];
   spy_series: SeriesPoint[];
   holdings: Holding[];
@@ -96,6 +106,7 @@ export interface PromptOut {
   name: string;
   text: string;
   notes: string;
+  allocation_policy: AllocationPolicy;
   updated_at?: string;
   portfolio_count?: number;
 }
@@ -124,7 +135,7 @@ export interface CompareResponse {
 
 export interface ResolvedSymbol {
   symbol: string;
-  instrument: "equity" | "cash";
+  security_type: "equity" | "etf";
   name: string;
   currency: string | null;
   exchange: string | null;
@@ -146,4 +157,30 @@ export interface ApiKeyCreated extends ApiKeyOut {
 
 export interface ApiKeysResponse {
   keys: ApiKeyOut[];
+}
+
+export type EvaluationRunStatus = "running" | "succeeded" | "failed" | "skipped";
+
+export interface EvaluationRun {
+  id: number;
+  portfolio: Ref;
+  agent: Ref;
+  scheduled_for: string;
+  model: string;
+  codex_version: string;
+  status: EvaluationRunStatus;
+  attempt_count: number;
+  lease_expires_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  allocation_id: number | null;
+  report: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationRunsResponse {
+  items: EvaluationRun[];
+  next_cursor: string | null;
 }

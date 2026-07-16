@@ -1,6 +1,6 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { ResolvedSymbol } from "../api/types";
+  import type { AllocationPolicy, ResolvedSymbol } from "../api/types";
   import { CircleCheck, ChevronUp, ChevronDown, X, Sigma } from "@lucide/svelte";
 
   export interface AllocationPayload {
@@ -9,6 +9,7 @@
   }
 
   interface Row {
+    id: number;
     symbol: string;
     weight: string;
     note: string;
@@ -24,6 +25,7 @@
     positionsEditable?: boolean;
     submitLabel: string;
     onSubmit: (payload: AllocationPayload) => Promise<void>;
+    policy?: AllocationPolicy;
   }
 
   const {
@@ -32,16 +34,24 @@
     positionsEditable = true,
     submitLabel,
     onSubmit,
+    policy,
   }: Props = $props();
+
+  let nextRowId = 1;
+
+  function emptyRow(): Row {
+    return { id: nextRowId++, symbol: "", weight: "", note: "", status: "idle" };
+  }
 
   function toRows(positions: { symbol: string; weight_pct: number; note?: string }[]): Row[] {
     const rows = positions.map((position): Row => ({
+      id: nextRowId++,
       symbol: position.symbol,
       weight: String(position.weight_pct),
       note: position.note ?? "",
       status: "idle",
     }));
-    return rows.length ? rows : [{ symbol: "", weight: "", note: "", status: "idle" }];
+    return rows.length ? rows : [emptyRow()];
   }
 
   // Initial-value props intentionally seed local state; parents re-mount the
@@ -54,17 +64,21 @@
   let formError = $state("");
 
   let effectivePreview = $state<string | null>(null);
-  $effect(() => {
-    apiJson<{ effective_date: string }>("/api/effective-date")
-      .then((payload) => (effectivePreview = payload.effective_date))
-      .catch(() => (effectivePreview = null));
-  });
+  async function loadEffectivePreview() {
+    try {
+      const payload = await apiJson<{ effective_date: string }>("/api/effective-date");
+      effectivePreview = payload.effective_date;
+    } catch {
+      effectivePreview = null;
+    }
+  }
+  void loadEffectivePreview();
 
   const weightSum = $derived(rows.reduce((sum, row) => sum + (parseFloat(row.weight) || 0), 0));
   const sumOk = $derived(Math.abs(weightSum - 100) < 1e-6);
 
   function addRow() {
-    rows = [...rows, { symbol: "", weight: "", note: "", status: "idle" }];
+    rows = [...rows, emptyRow()];
   }
 
   function removeRow(index: number) {
@@ -135,6 +149,17 @@
       formError = `Weights sum to ${weightSum.toFixed(4)} — they must be exactly 100.`;
       return;
     }
+    if (
+      policy &&
+      positions.some(
+        (position) =>
+          position.weight_pct < policy.min_position_weight_pct ||
+          position.weight_pct > policy.max_position_weight_pct,
+      )
+    ) {
+      formError = `Every position must be between ${policy.min_position_weight_pct}% and ${policy.max_position_weight_pct}%.`;
+      return;
+    }
     submitting = true;
     try {
       await onSubmit({ positions, note });
@@ -149,14 +174,22 @@
 <form onsubmit={submit} class="alloc-form">
   {#if positionsEditable}
     <fieldset>
-      <legend>Positions <span class="muted">(symbols + % of NAV; CASH:USD, CASH:EUR for cash)</span></legend>
+      <legend>
+        Positions <span class="muted">(USD-denominated equities and ETFs; fully invested)</span>
+      </legend>
+      {#if policy}
+        <p class="muted policy-hint">
+          {policy.derived_min_positions}–{policy.derived_max_positions} positions;
+          {policy.min_position_weight_pct}%–{policy.max_position_weight_pct}% each.
+        </p>
+      {/if}
       <div class="rows">
-        {#each rows as row, index (index)}
+        {#each rows as row, index (row.id)}
           <div class="row">
             <div class="cell symbol-cell">
               <input
                 type="text"
-                placeholder="AAPL / SPY / CASH:USD"
+                placeholder="AAPL / SPY / QQQ"
                 bind:value={row.symbol}
                 onblur={() => checkSymbol(index)}
                 aria-label="Symbol for row {index + 1}"
@@ -167,7 +200,7 @@
                   <span class="muted">checking…</span>
                 {:else if row.status === "ok" && row.resolved}
                   <span class="ok"
-                    ><CircleCheck size={14} /> {row.resolved.name} · {row.resolved.instrument}</span
+                    ><CircleCheck size={14} /> {row.resolved.name} · {row.resolved.security_type}</span
                   >
                 {:else if row.status === "error"}
                   <span class="neg">{row.error}</span>

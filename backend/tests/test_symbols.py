@@ -1,13 +1,10 @@
-"""Symbol syntax derivation and position-set validation (pure rules, no network)."""
+"""Symbol syntax and position-set validation (pure rules, no network)."""
 
 import pytest
 
 from app.services.symbols import (
     SymbolValidationError,
-    cash_currency,
     check_syntax,
-    derive_instrument,
-    fx_pair_for,
     normalize_symbol,
     validate_positions,
 )
@@ -18,40 +15,25 @@ class TestSyntax:
         assert normalize_symbol("  aapl ") == "AAPL"
         assert normalize_symbol("cash:eur") == "CASH:EUR"
 
-    def test_instrument_derivation(self):
-        assert derive_instrument("AAPL") == "equity"
-        assert derive_instrument("BRK-B") == "equity"
-        assert derive_instrument("CASH:USD") == "cash"
-        assert derive_instrument("CASH:EUR") == "cash"
-
-    def test_cash_currency(self):
-        assert cash_currency("CASH:EUR") == "EUR"
-        assert cash_currency("CASH:EURO") is None
-        assert cash_currency("AAPL") is None
-
-    def test_fx_pair(self):
-        assert fx_pair_for("EUR") == "EURUSD=X"
-
     def test_index_rejected_with_etf_hint(self):
         with pytest.raises(SymbolValidationError, match="ETF"):
             check_syntax("^GSPC")
 
-    def test_fx_pair_rejected_with_cash_hint(self):
-        with pytest.raises(SymbolValidationError, match="CASH:"):
+    def test_fx_pair_rejected_with_usd_security_hint(self):
+        with pytest.raises(SymbolValidationError, match="USD-denominated"):
             check_syntax("EURUSD=X")
 
     def test_futures_rejected_with_etf_hint(self):
         with pytest.raises(SymbolValidationError, match="roll artifacts"):
             check_syntax("ES=F")
 
-    def test_malformed_cash_rejected(self):
-        with pytest.raises(SymbolValidationError, match="CASH:CCY"):
+    def test_cash_rejected(self):
+        with pytest.raises(SymbolValidationError, match="not supported"):
             check_syntax("CASH:EURO")
 
     def test_plain_symbols_pass(self):
         check_syntax("AAPL")
         check_syntax("BRK-B")
-        check_syntax("CASH:CHF")
 
 
 class TestPositionRules:
@@ -59,7 +41,7 @@ class TestPositionRules:
         validate_positions(
             [
                 {"symbol": "AAPL", "weight_pct": 59.5},
-                {"symbol": "CASH:USD", "weight_pct": 40.5},
+                {"symbol": "MSFT", "weight_pct": 40.5},
             ]
         )
 

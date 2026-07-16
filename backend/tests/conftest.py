@@ -73,7 +73,7 @@ def clean_db(client):
         session.execute(
             text(
                 "TRUNCATE users, settings, agents, prompts, portfolios, allocations, "
-                "positions, price_cache, api_keys RESTART IDENTITY CASCADE"
+                "positions, evaluation_runs, price_cache, api_keys RESTART IDENTITY CASCADE"
             )
         )
         session.commit()
@@ -120,6 +120,20 @@ def stub_yahoo(monkeypatch):
             "currency": "USD",
             "exchangeName": "NasdaqGS",
             "instrumentType": "EQUITY",
+        },
+        "SAP.DE": {
+            "symbol": "SAP.DE",
+            "name": "SAP SE",
+            "currency": "EUR",
+            "exchangeName": "XETRA",
+            "instrumentType": "EQUITY",
+        },
+        "VFIAX": {
+            "symbol": "VFIAX",
+            "name": "Vanguard 500 Index Fund Admiral Shares",
+            "currency": "USD",
+            "exchangeName": "Nasdaq",
+            "instrumentType": "MUTUALFUND",
         },
         "EURUSD=X": {
             "symbol": "EURUSD=X",
@@ -213,7 +227,14 @@ def mcp_headers(api_key) -> dict:
 def sample_prompt(client, admin_headers) -> dict:
     response = client.post(
         "/api/prompts",
-        json={"name": "weekly-manager-v1", "text": "Manage a portfolio to beat SPY."},
+        json={
+            "name": "weekly-manager-v1",
+            "text": "Manage a portfolio to beat SPY.",
+            "allocation_policy": {
+                "min_position_weight_pct": 1,
+                "max_position_weight_pct": 100,
+            },
+        },
         headers=admin_headers,
     )
     assert response.status_code == 201, response.text
@@ -249,7 +270,7 @@ def sample_portfolio(client, admin_headers, sample_agent, sample_prompt) -> dict
         json={
             "positions": [
                 {"symbol": "AAPL", "weight_pct": 60},
-                {"symbol": "CASH:USD", "weight_pct": 40},
+                {"symbol": "MSFT", "weight_pct": 40},
             ],
             "note": "initial",
         },

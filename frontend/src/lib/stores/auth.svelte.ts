@@ -6,6 +6,7 @@ interface LoginResponse {
 }
 
 class AuthStore {
+  #restorePromise: Promise<void> | null = null;
   email = $state<string | null>(null);
   /** true while the stored token is being validated on startup */
   restoring = $state(true);
@@ -14,7 +15,12 @@ class AuthStore {
     return this.email !== null;
   }
 
-  async restore(): Promise<void> {
+  restore(): Promise<void> {
+    this.#restorePromise ??= this.performRestore();
+    return this.#restorePromise;
+  }
+
+  private async performRestore(): Promise<void> {
     if (!getToken()) {
       this.restoring = false;
       return;

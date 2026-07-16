@@ -1,0 +1,35 @@
+FROM node:20-bookworm-slim AS codex
+
+ARG CODEX_VERSION=0.144.5
+RUN npm install --global "@openai/codex@${CODEX_VERSION}"
+
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    CODEX_HOME=/var/lib/codex \
+    EVALUATOR_CONFIG=/app/evaluator.toml
+
+RUN groupadd --gid 10001 evaluator \
+    && useradd --uid 10001 --gid evaluator --create-home evaluator
+
+COPY --from=codex /usr/local/bin/node /usr/local/bin/node
+COPY --from=codex /usr/local/lib/node_modules/@openai /usr/local/lib/node_modules/@openai
+RUN ln --symbolic ../lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
+
+WORKDIR /app
+COPY requirements-evaluator.txt ./
+RUN pip install --no-cache-dir --requirement requirements-evaluator.txt
+
+COPY --chown=evaluator:evaluator evaluator.toml ./
+COPY --chown=evaluator:evaluator backend/app ./backend/app
+RUN mkdir --parents /var/lib/codex && chown evaluator:evaluator /var/lib/codex
+
+USER evaluator
+WORKDIR /app/backend
+VOLUME ["/var/lib/codex"]
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "app.evaluator", "--healthcheck"]
+
+CMD ["python", "-m", "app.evaluator"]

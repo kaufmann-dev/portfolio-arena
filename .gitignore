@@ -10,4 +10,5 @@ frontend/dist/
 
 .env
 .env.*
+!.env.evaluator.example
 .playwright-mcp/

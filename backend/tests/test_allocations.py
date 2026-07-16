@@ -10,7 +10,7 @@ def make_allocation_body(positions=None, **extra):
         "positions": positions
         or [
             {"symbol": "AAPL", "weight_pct": 60},
-            {"symbol": "CASH:USD", "weight_pct": 40},
+            {"symbol": "MSFT", "weight_pct": 40},
         ],
         **extra,
     }
@@ -50,8 +50,8 @@ class TestCreation:
         allocation = sample_portfolio["allocation"]
         assert allocation["effective_date"] >= datetime.now(UTC).date().isoformat()
         assert not allocation["locked"]
-        assert allocation["positions"][0]["instrument"] == "equity"
-        assert allocation["positions"][1]["instrument"] == "cash"
+        assert {position["symbol"] for position in allocation["positions"]} == {"AAPL", "MSFT"}
+        assert all("instrument" not in position for position in allocation["positions"])
 
     def test_default_cost_bps_from_settings(self, sample_portfolio):
         assert sample_portfolio["cost_bps"] == 10
@@ -95,7 +95,7 @@ class TestCreation:
             headers=admin_headers,
         )
         assert response.status_code == 422
-        assert "CASH:" in response.json()["detail"]
+        assert "USD-denominated" in response.json()["detail"]
 
     def test_futures_rejected_with_hint(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
@@ -123,28 +123,63 @@ class TestCreation:
         assert response.status_code == 422
         assert "not found" in response.json()["detail"]
 
-    def test_foreign_cash_resolves_via_fx_pair(self, client, admin_headers, sample_portfolio, sample_prompt):
-        backdate_allocation(sample_portfolio["allocation"]["id"])
+    def test_cash_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(
-                [
-                    {"symbol": "MSFT", "weight_pct": 50},
-                    {"symbol": "CASH:EUR", "weight_pct": 50},
-                ],
-            ),
-            headers=admin_headers,
-        )
-        assert response.status_code == 201, response.text
-
-    def test_unknown_cash_currency_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
-        response = client.post(
-            f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body([{"symbol": "CASH:ZZZ", "weight_pct": 100}]),
+            json=make_allocation_body([{"symbol": "CASH:USD", "weight_pct": 100}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
-        assert "FX rate" in response.json()["detail"]
+        assert "not supported" in response.json()["detail"]
+
+    def test_non_usd_equity_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
+        response = client.post(
+            f"/api/portfolios/{sample_portfolio['id']}/allocations",
+            json=make_allocation_body([{"symbol": "SAP.DE", "weight_pct": 100}]),
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+        assert "USD-denominated" in response.json()["detail"]
+
+    def test_mutual_fund_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
+        response = client.post(
+            f"/api/portfolios/{sample_portfolio['id']}/allocations",
+            json=make_allocation_body([{"symbol": "VFIAX", "weight_pct": 100}]),
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+        assert "equities and ETFs" in response.json()["detail"]
+
+    def test_prompt_position_limits_enforced(self, client, admin_headers, sample_agent):
+        prompt = client.post(
+            "/api/prompts",
+            json={
+                "name": "Concentrated",
+                "text": "Own a focused portfolio.",
+                "allocation_policy": {
+                    "min_position_weight_pct": 40,
+                    "max_position_weight_pct": 60,
+                },
+            },
+            headers=admin_headers,
+        ).json()
+        portfolio = client.post(
+            "/api/portfolios",
+            json={"name": "Policy Test", "agent_id": sample_agent["id"], "prompt_id": prompt["id"]},
+            headers=admin_headers,
+        ).json()
+        response = client.post(
+            f"/api/portfolios/{portfolio['id']}/allocations",
+            json=make_allocation_body(
+                [
+                    {"symbol": "AAPL", "weight_pct": 70},
+                    {"symbol": "MSFT", "weight_pct": 30},
+                ]
+            ),
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+        assert "between 40% and 60%" in response.json()["detail"]
 
     def test_same_effective_date_conflicts(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
@@ -180,7 +215,7 @@ class TestLockEnforcement:
             json={
                 "positions": [
                     {"symbol": "MSFT", "weight_pct": 70},
-                    {"symbol": "CASH:USD", "weight_pct": 30},
+                    {"symbol": "AAPL", "weight_pct": 30},
                 ]
             },
             headers=admin_headers,
@@ -255,13 +290,12 @@ class TestSymbolEndpoint:
         response = client.get("/api/symbols/AAPL", headers=admin_headers)
         assert response.status_code == 200
         payload = response.json()
-        assert payload["instrument"] == "equity"
+        assert payload["security_type"] == "equity"
         assert payload["name"] == "Apple Inc."
 
-    def test_cash_resolution(self, client, admin_headers):
+    def test_cash_rejected(self, client, admin_headers):
         response = client.get("/api/symbols/CASH:EUR", headers=admin_headers)
-        assert response.status_code == 200
-        assert response.json()["instrument"] == "cash"
+        assert response.status_code == 422
 
     def test_rejection_carries_hint(self, client, admin_headers):
         response = client.get("/api/symbols/^GSPC", headers=admin_headers)

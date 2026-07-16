@@ -60,7 +60,7 @@ class Agent(Base):
 
 
 class Prompt(Base):
-    """Prompt texts — plain editable rows; the operator versions them by slug."""
+    """Editable strategy text plus server-enforced position sizing policy."""
 
     __tablename__ = "prompts"
 
@@ -68,6 +68,8 @@ class Prompt(Base):
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    min_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
+    max_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -106,6 +108,11 @@ class Portfolio(Base):
         passive_deletes=True,
         order_by="(Allocation.effective_date, Allocation.entered_at)",
     )
+    evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(
+        back_populates="portfolio",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class Allocation(Base):
@@ -142,7 +149,6 @@ class Position(Base):
     __tablename__ = "positions"
     __table_args__ = (
         CheckConstraint("weight_pct >= 0", name="positions_weight_pct_check"),
-        CheckConstraint("instrument IN ('equity', 'cash')", name="positions_instrument_check"),
         UniqueConstraint("allocation_id", "symbol", name="positions_allocation_id_symbol_key"),
         Index("idx_positions_allocation_id", "allocation_id"),
     )
@@ -152,11 +158,52 @@ class Position(Base):
         Integer, ForeignKey("allocations.id", ondelete="CASCADE"), nullable=False
     )
     symbol: Mapped[str] = mapped_column(Text, nullable=False)
-    instrument: Mapped[str] = mapped_column(Text, nullable=False)
     weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
 
     allocation: Mapped[Allocation] = relationship(back_populates="positions")
+
+
+class EvaluationRun(Base):
+    __tablename__ = "evaluation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed', 'skipped')",
+            name="evaluation_runs_status_check",
+        ),
+        CheckConstraint("attempt_count >= 0", name="evaluation_runs_attempt_count_check"),
+        UniqueConstraint(
+            "portfolio_id", "scheduled_for", name="evaluation_runs_portfolio_session_key"
+        ),
+        Index("idx_evaluation_runs_scheduled_id", "scheduled_for", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
+    )
+    scheduled_for: Mapped[date] = mapped_column(Date, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    codex_version: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    allocation_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("allocations.id", ondelete="SET NULL"), nullable=True
+    )
+    report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    portfolio: Mapped[Portfolio] = relationship(back_populates="evaluation_runs")
+    allocation: Mapped[Allocation | None] = relationship()
 
 
 class ApiKey(Base):
@@ -177,7 +224,7 @@ class ApiKey(Base):
 
 
 class PriceCache(Base):
-    """Daily series per Yahoo symbol — equities (adjusted close) and FX pairs share this table."""
+    """Daily adjusted-close series per USD-denominated equity or ETF."""
 
     __tablename__ = "price_cache"
     __table_args__ = (Index("idx_price_cache_fetched_at", "fetched_at"),)

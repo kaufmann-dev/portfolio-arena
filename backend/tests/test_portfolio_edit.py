@@ -51,7 +51,14 @@ class TestEditPortfolio:
     def test_patch_changes_prompt(self, client, admin_headers, sample_portfolio):
         other = client.post(
             "/api/prompts",
-            json={"name": "weekly-manager-v2", "text": "Be bolder."},
+            json={
+                "name": "weekly-manager-v2",
+                "text": "Be bolder.",
+                "allocation_policy": {
+                    "min_position_weight_pct": 10,
+                    "max_position_weight_pct": 25,
+                },
+            },
             headers=admin_headers,
         ).json()
 

@@ -8,14 +8,14 @@ Each tool opens its own session (FastMCP runs sync tools in a worker thread).
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import session_factory
 from ..models import Agent, Portfolio, Prompt
-from ..schemas import PositionIn
+from ..schemas import AllocationPolicyIn, PositionIn
 from ..services import admin_ops
 from ..services.admin_ops import AdminOpError
 from ..services.arena import compute_valuations, load_portfolios
@@ -175,7 +175,7 @@ def get_prompt(slug_or_id: str) -> dict:
 
 @mcp.tool()
 def search_symbols(query: str) -> dict:
-    """Search the investable universe (equities/ETFs/funds) for tickers matching
+    """Search the investable universe (equities and ETFs) for tickers matching
     a query, filtered to instrument types the arena accepts."""
     return {"results": search_symbols_allowed(query)}
 
@@ -183,15 +183,15 @@ def search_symbols(query: str) -> dict:
 @mcp.tool()
 def validate_symbol(symbol: str) -> dict:
     """Resolve and validate one symbol against Yahoo Finance. Returns its
-    instrument/name/currency/exchange, or errors with a hint (indices, FX pairs,
-    and futures are rejected; use ETFs or CASH:CCY instead)."""
+    security type/name/currency/exchange, or errors with a hint. Non-USD assets,
+    funds, indices, FX pairs, and futures are rejected."""
     try:
         resolved = resolve_symbol(symbol)
     except SymbolValidationError as exc:
         raise ValueError(exc.message) from None
     return {
         "symbol": resolved.symbol,
-        "instrument": resolved.instrument,
+        "security_type": resolved.security_type,
         "name": resolved.name,
         "currency": resolved.currency,
         "exchange": resolved.exchange,
@@ -234,19 +234,40 @@ def delete_agent(agent_id: int) -> dict:
 
 
 @mcp.tool()
-def create_prompt(name: str, text: str, notes: str = "") -> dict:
-    """Create a prompt (its instructions text is stored verbatim)."""
+def create_prompt(
+    name: str, text: str, allocation_policy: AllocationPolicyIn, notes: str = ""
+) -> dict:
+    """Create strategy text with a server-enforced position-sizing policy."""
     with _session() as session:
-        return _guard(admin_ops.create_prompt, session, name=name, text=text, notes=notes)
+        return _guard(
+            admin_ops.create_prompt,
+            session,
+            name=name,
+            text=text,
+            notes=notes,
+            allocation_policy=allocation_policy.model_dump(),
+        )
 
 
 @mcp.tool()
 def update_prompt(
-    prompt_id: int, name: str | None = None, text: str | None = None, notes: str | None = None
+    prompt_id: int,
+    name: str | None = None,
+    text: str | None = None,
+    notes: str | None = None,
+    allocation_policy: AllocationPolicyIn | None = None,
 ) -> dict:
-    """Edit a prompt's name, text, or notes. Omitted fields are left unchanged."""
+    """Edit strategy text, notes, or its position-sizing policy."""
     with _session() as session:
-        return _guard(admin_ops.update_prompt, session, prompt_id, name=name, text=text, notes=notes)
+        return _guard(
+            admin_ops.update_prompt,
+            session,
+            prompt_id,
+            name=name,
+            text=text,
+            notes=notes,
+            allocation_policy=allocation_policy.model_dump() if allocation_policy else None,
+        )
 
 
 @mcp.tool()
@@ -311,10 +332,10 @@ def delete_portfolio(portfolio_id: int) -> dict:
 
 @mcp.tool()
 def create_allocation(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
-    """Enter a rebalance (or the first allocation). `positions` weights must sum
-    to exactly 100; use CASH:USD/CASH:EUR for cash. Each position's `note` and
-    the general `note` are the handoff to the next rebalance. Entry time is
-    server-set; the allocation freezes after its effective market close."""
+    """Enter a rebalance (or the first allocation). Weights must sum to exactly
+    100 and satisfy the portfolio prompt's position limits. Each position's
+    `note` and the general `note` are the handoff to the next rebalance. Entry
+    time is server-set; the allocation freezes after its effective close."""
     with _session() as session:
         return _guard(admin_ops.create_allocation, session, portfolio_id, _positions(positions), note)
 
@@ -336,6 +357,76 @@ def delete_allocation(allocation_id: int) -> dict:
     """Delete a pending (unlocked) allocation. Locked allocations cannot be deleted."""
     with _session() as session:
         return _guard(admin_ops.delete_allocation, session, allocation_id)
+
+
+# --- Automated evaluation runner ------------------------------------------
+
+
+@mcp.tool()
+def begin_evaluation_run(
+    portfolio_slug: str,
+    scheduled_for: date,
+    model: str,
+    codex_version: str,
+) -> dict:
+    """Acquire an evaluation attempt during the server-enforced pre-close window.
+    The result says whether to run, skip, wait for another lease, or stop after
+    exhausting attempts."""
+    with _session() as session:
+        return _guard(
+            admin_ops.begin_evaluation_run,
+            session,
+            portfolio_slug=portfolio_slug,
+            scheduled_for=scheduled_for,
+            model=model,
+            codex_version=codex_version,
+        )
+
+
+@mcp.tool()
+def submit_evaluation_allocation(
+    run_id: int,
+    positions: list[PositionIn],
+    note: str,
+    report: str,
+) -> dict:
+    """Atomically submit a runner proposal and mark its evaluation successful.
+    The server revalidates every symbol, weight, policy limit, lease, and cutoff."""
+    with _session() as session:
+        return _guard(
+            admin_ops.submit_evaluation_allocation,
+            session,
+            run_id=run_id,
+            positions=_positions(positions),
+            note=note,
+            report=report,
+        )
+
+
+@mcp.tool()
+def fail_evaluation_run(run_id: int, error: str) -> dict:
+    """Record a bounded evaluation attempt failure for audit and retry."""
+    with _session() as session:
+        return _guard(admin_ops.fail_evaluation_run, session, run_id=run_id, error=error)
+
+
+@mcp.tool()
+def list_evaluation_runs(
+    portfolio_id: int | None = None,
+    status: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """List evaluation history newest-first with optional filters and cursor pagination."""
+    with _session() as session:
+        return _guard(
+            admin_ops.list_evaluation_runs,
+            session,
+            portfolio_id=portfolio_id,
+            status=status,
+            cursor=cursor,
+            limit=limit,
+        )
 
 
 # --- Writes: settings -------------------------------------------------------

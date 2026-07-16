@@ -1,6 +1,6 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { AllocationOut, PortfolioDetail, PromptOut } from "../api/types";
+  import type { AllocationOut, PortfolioDetail } from "../api/types";
   import { ChevronDown, ChevronRight } from "@lucide/svelte";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import { ageLabel, fmtDate, fmtDateTime, num, pct, pctPoints, signClass } from "../format";
@@ -40,12 +40,10 @@
   }
 
   async function copyPrompt(portfolio: PortfolioDetail) {
-    if (!portfolio.prompt) return;
+    if (!portfolio.execution_prompt) return;
 
     try {
-      const prompt = await apiJson<PromptOut>(`/api/prompts/${portfolio.prompt.slug}`, { auth: false });
-      const text = prompt.text.replace(/<PORTFOLIO_SLUG_OR_ID>/g, portfolio.slug);
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(portfolio.execution_prompt);
       copyResult = { slug: portfolio.slug, status: "copied" };
     } catch {
       copyResult = { slug: portfolio.slug, status: "error" };
@@ -186,7 +184,6 @@
             <thead>
               <tr>
                 <th>Symbol</th>
-                <th>Type</th>
                 <th class="right">Weight</th>
                 <th class="right">Target</th>
                 <th class="right">Drift</th>
@@ -196,7 +193,6 @@
               {#each portfolio.holdings as holding (holding.symbol)}
                 <tr>
                   <td class="num">{holding.symbol}</td>
-                  <td class="muted">{holding.instrument}</td>
                   <td class="right num">{pctPoints(holding.weight_pct)}</td>
                   <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
                   <td class="right num {signClass(holding.weight_pct - holding.target_weight_pct)}">
@@ -265,13 +261,12 @@
                 <div class="table-scroll">
                   <table>
                     <thead>
-                      <tr><th>Symbol</th><th>Type</th><th class="right">Weight</th></tr>
+                      <tr><th>Symbol</th><th class="right">Weight</th></tr>
                     </thead>
                     <tbody>
                       {#each allocation.positions as position (position.symbol)}
                         <tr>
                           <td class="num">{position.symbol}</td>
-                          <td class="muted">{position.instrument}</td>
                           <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
                         </tr>
                       {/each}
