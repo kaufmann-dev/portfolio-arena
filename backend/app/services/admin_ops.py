@@ -462,9 +462,7 @@ def evaluation_run_out(run: EvaluationRun) -> dict:
 
 
 def _run_query():
-    return select(EvaluationRun).options(
-        selectinload(EvaluationRun.portfolio).selectinload(Portfolio.agent)
-    )
+    return select(EvaluationRun).options(selectinload(EvaluationRun.portfolio).selectinload(Portfolio.agent))
 
 
 def _load_evaluation_run(session: Session, run_id: int) -> EvaluationRun:
@@ -486,9 +484,7 @@ def begin_evaluation_run(
     """Acquire one bounded attempt for a portfolio's scheduled evaluation."""
     now = now or datetime.now(UTC)
     portfolio = session.scalars(
-        select(Portfolio)
-        .where(Portfolio.slug == portfolio_slug)
-        .options(selectinload(Portfolio.agent))
+        select(Portfolio).where(Portfolio.slug == portfolio_slug).options(selectinload(Portfolio.agent))
     ).first()
     if portfolio is None:
         raise AdminOpError(404, f"Portfolio '{portfolio_slug}' not found")
@@ -651,9 +647,7 @@ def submit_evaluation_allocation(
     }
 
 
-def fail_evaluation_run(
-    session: Session, *, run_id: int, error: str, now: datetime | None = None
-) -> dict:
+def fail_evaluation_run(session: Session, *, run_id: int, error: str, now: datetime | None = None) -> dict:
     now = now or datetime.now(UTC)
     run = _load_evaluation_run(session, run_id)
     if run.status in {"succeeded", "skipped"}:
@@ -723,9 +717,7 @@ def list_evaluation_runs(
     rows = rows[:limit]
     return {
         "items": [evaluation_run_out(run) for run in rows],
-        "next_cursor": _encode_run_cursor(rows[-1], portfolio_id, status)
-        if has_more and rows
-        else None,
+        "next_cursor": _encode_run_cursor(rows[-1], portfolio_id, status) if has_more and rows else None,
     }
 
 

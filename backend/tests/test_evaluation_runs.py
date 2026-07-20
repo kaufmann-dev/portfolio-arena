@@ -77,9 +77,7 @@ def test_evaluation_window_is_server_enforced(sample_portfolio):
             _begin(session, sample_portfolio, close_at(SCHEDULED_FOR) - timedelta(minutes=10))
 
 
-def test_evaluation_history_is_admin_only_and_cursor_paginated(
-    client, admin_headers, sample_portfolio
-):
+def test_evaluation_history_is_admin_only_and_cursor_paginated(client, admin_headers, sample_portfolio):
     from app.db import session_factory
 
     with session_factory()() as session:

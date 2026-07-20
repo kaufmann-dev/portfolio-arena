@@ -1,5 +1,5 @@
-"""Idempotent seeding on every start: admin user, default settings, and the
-benchmark agent/prompt/portfolios. Benchmark *allocations* are created lazily
+"""Idempotent seeding on every start: default settings and the benchmark
+agent/prompt/portfolios. Benchmark *allocations* are created lazily
 (services/benchmarks.py) once the first real portfolio exists."""
 
 import logging
@@ -9,26 +9,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from .config import BENCHMARK_AGENT_SLUG, BENCHMARK_PROMPT_SLUG, BENCHMARKS, get_settings
-from .models import Agent, Portfolio, Prompt, Setting, User
-from .security import hash_password
+from .models import Agent, Portfolio, Prompt, Setting
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_COST_BPS_KEY = "default_cost_bps"
-
-
-def seed_users(session: Session) -> None:
-    settings = get_settings()
-    session.execute(
-        pg_insert(User)
-        .values(
-            email=settings.admin_email,
-            password_hash=hash_password(settings.admin_password),
-            role="admin",
-        )
-        .on_conflict_do_nothing(index_elements=["email"])
-    )
-    session.commit()
 
 
 def seed_settings(session: Session) -> None:
@@ -77,6 +62,5 @@ def seed_benchmarks(session: Session) -> None:
 
 
 def run_seed(session: Session) -> None:
-    seed_users(session)
     seed_settings(session)
     seed_benchmarks(session)

@@ -1,6 +1,6 @@
 """Shared fixtures: a real PostgreSQL (testcontainers, or TEST_DATABASE_URL),
-the app under TestClient with lifespan (migrations + seed), an admin token,
-and stubbed Yahoo fetching (tests never hit the network).
+the app under TestClient with lifespan (migrations + seed), a local admin
+session, and stubbed Yahoo fetching (tests never hit the network).
 
 Environment must be configured before any `app.*` import, because Settings
 is cached at first use.
@@ -9,9 +9,14 @@ is cached at first use.
 import os
 from pathlib import Path
 
-os.environ.setdefault("ARENA_JWT_SECRET", "test-secret-0123456789abcdef0123456789abcdef")
-os.environ.setdefault("ARENA_ADMIN_EMAIL", "admin@test.local")
-os.environ.setdefault("ARENA_ADMIN_PASSWORD", "admin-password")
+os.environ.setdefault("ARENA_PUBLIC_URL", "https://testserver")
+os.environ.setdefault("ARENA_OIDC_ISSUER_URL", "https://idp.test/application/o/portfolio-arena")
+os.environ.setdefault("ARENA_OIDC_CLIENT_ID", "portfolio-arena-test")
+os.environ.setdefault("ARENA_OIDC_CLIENT_SECRET", "test-client-secret")
+os.environ.setdefault(
+    "ARENA_OIDC_STATE_SECRET",
+    "test-state-secret-0123456789abcdef0123456789abcdef",
+)
 os.environ.setdefault("ARENA_DB_CONNECT_RETRIES", "3")
 os.environ.setdefault("ARENA_DB_CONNECT_RETRY_DELAY", "0.2")
 
@@ -25,8 +30,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-ADMIN_EMAIL = os.environ["ARENA_ADMIN_EMAIL"]
-ADMIN_PASSWORD = os.environ["ARENA_ADMIN_PASSWORD"]
+PUBLIC_URL = os.environ["ARENA_PUBLIC_URL"]
 
 
 @pytest.fixture(scope="session")
@@ -54,7 +58,7 @@ def client(database_url):
     from app.main import app
 
     dispose_engine()
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url=PUBLIC_URL) as test_client:
         yield test_client
     dispose_engine()
 
@@ -63,6 +67,7 @@ def client(database_url):
 def clean_db(client):
     """Reset all tables to the freshly-seeded state before each test."""
     from app.db import session_factory
+    from app.oidc import get_oidc_client
     from app.ratelimit import limiter
     from app.seed import run_seed
     from app.services import price_cache
@@ -72,7 +77,7 @@ def clean_db(client):
     with session_factory()() as session:
         session.execute(
             text(
-                "TRUNCATE users, settings, agents, prompts, portfolios, allocations, "
+                "TRUNCATE auth_sessions, settings, agents, prompts, portfolios, allocations, "
                 "positions, evaluation_runs, price_cache, api_keys RESTART IDENTITY CASCADE"
             )
         )
@@ -80,6 +85,8 @@ def clean_db(client):
         run_seed(session)
     with price_cache._failure_cache_lock:
         price_cache._failure_cache.clear()
+    get_oidc_client.cache_clear()
+    client.cookies.clear()
     yield
 
 
@@ -196,15 +203,22 @@ def stub_yahoo(monkeypatch):
 
 
 @pytest.fixture
-def admin_token(client) -> str:
-    response = client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
-    assert response.status_code == 200, response.text
-    return response.json()["token"]
+def admin_headers(client) -> dict:
+    from app.config import APP_SESSION_COOKIE
+    from app.db import session_factory
+    from app.security import create_auth_session
 
-
-@pytest.fixture
-def admin_headers(admin_token) -> dict:
-    return {"Authorization": f"Bearer {admin_token}"}
+    with session_factory()() as session:
+        raw_token = create_auth_session(
+            session,
+            subject="oidc-admin-subject",
+            display_name="admin@test.local",
+            id_token="test-id-token",
+        )
+    return {
+        "Cookie": f"{APP_SESSION_COOKIE}={raw_token}",
+        "Origin": PUBLIC_URL,
+    }
 
 
 @pytest.fixture

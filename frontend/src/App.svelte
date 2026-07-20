@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Landmark, Sun, Moon } from "@lucide/svelte";
+  import { onMount } from "svelte";
 
+  import { apiFetch } from "./lib/api/client";
   import { auth } from "./lib/stores/auth.svelte";
   import { link, router } from "./lib/stores/router.svelte";
   import { theme } from "./lib/stores/theme.svelte";
@@ -11,10 +13,29 @@
   import Admin from "./lib/pages/Admin.svelte";
   import About from "./lib/pages/About.svelte";
 
-  $effect(() => {
+  const ACTIVITY_INTERVAL_MS = 5 * 60 * 1000;
+  const ACTIVITY_EVENT_TYPES = new Set(["pointerdown", "keydown", "click"]);
+  let lastActivitySentAt = Number.NEGATIVE_INFINITY;
+
+  function reportActivity(event: Event): void {
+    if (!event.isTrusted || !ACTIVITY_EVENT_TYPES.has(event.type) || !auth.isAuthenticated) return;
+
+    const now = performance.now();
+    if (now - lastActivitySentAt < ACTIVITY_INTERVAL_MS) return;
+    lastActivitySentAt = now;
+
+    void apiFetch("/api/auth/activity", {
+      method: "POST",
+      headers: { "X-Portfolio-Arena-Activity": "1" },
+    }).catch(() => undefined);
+  }
+
+  onMount(() => {
     void auth.restore();
   });
 </script>
+
+<svelte:window onpointerdown={reportActivity} onkeydown={reportActivity} onclick={reportActivity} />
 
 <div class="shell">
   <header class="topbar">
@@ -32,8 +53,13 @@
       </a>
     </nav>
     <div class="topbar-right">
-      {#if auth.isAdmin}
-        <span class="muted session-email">{auth.email}</span>
+      {#if !auth.restoring && auth.isAuthenticated}
+        <span class="muted session-name">{auth.displayName}</span>
+        <form class="logout-form" method="POST" action="/api/auth/logout">
+          <button class="btn small" type="submit">Log out</button>
+        </form>
+      {:else if !auth.restoring}
+        <a class="btn small" href="/api/auth/login">Sign in</a>
       {/if}
       <button
         class="btn small"
@@ -139,8 +165,12 @@
     gap: 10px;
   }
 
-  .session-email {
+  .session-name {
     font-size: 12.5px;
+  }
+
+  .logout-form {
+    margin: 0;
   }
 
   main {
@@ -155,7 +185,7 @@
   }
 
   @media (max-width: 640px) {
-    .session-email {
+    .session-name {
       display: none;
     }
   }

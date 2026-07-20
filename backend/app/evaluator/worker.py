@@ -195,9 +195,7 @@ async def run_codex(settings: EvaluatorSettings, job: PortfolioJob) -> Proposal:
         except TimeoutError:
             process.kill()
             await process.wait()
-            raise RuntimeError(
-                f"Codex attempt exceeded {settings.attempt_timeout_seconds} seconds"
-            ) from None
+            raise RuntimeError(f"Codex attempt exceeded {settings.attempt_timeout_seconds} seconds") from None
         if process.returncode != 0:
             detail = (stderr or stdout).decode(errors="replace").strip()
             raise RuntimeError(detail[-4000:] or f"Codex exited with {process.returncode}")

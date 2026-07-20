@@ -8,7 +8,7 @@ submits each validated allocation before the close and records the complete run 
 Platform API key is used. Manual prompt-copy and MCP workflows remain available.
 
 The app simulates the allocations as paper portfolios from Yahoo Finance data and tracks them live
-against SPY on a public leaderboard. It is an *arena*: honest, deterministic measurement — not
+against SPY on a public leaderboard. It is an _arena_: honest, deterministic measurement — not
 trading and not advice.
 
 ## Architecture
@@ -16,13 +16,15 @@ trading and not advice.
 - **Backend** — FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (`backend/`). Serves the built SPA
   with fallback routing.
 - **Frontend** — Svelte 5 + Vite + TypeScript SPA (`frontend/`), built to `frontend/dist/`.
+- **Admin authentication** — confidential OpenID Connect Authorization Code + PKCE, backed by
+  opaque server-side sessions. Public leaderboard and detail views remain anonymous.
 - **Prices** — Yahoo Finance chart endpoint (daily adjusted closes), fetched in parallel with
   httpx and cached in Postgres with a ~1h TTL.
 - **Evaluator** — a separate `Dockerfile.evaluator` worker invokes `codex exec` with ChatGPT auth,
   read-only Arena/Massive tools, and live web search. The runner alone receives Arena write tools.
 - **No stored NAVs.** Every NAV series is recomputed on request from the
   entered allocations + cached price series. Adjusted closes change retroactively
-  (dividends/splits), so recomputation is *more* correct than snapshotting.
+  (dividends/splits), so recomputation is _more_ correct than snapshotting.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
   endpoint exposing the full app surface as tools, including the evaluator lease/submission
   protocol. See below.
@@ -74,7 +76,43 @@ per-portfolio history) — **except** API-key management, which stays in the adm
   `fail_evaluation_run` enforce the time window, lease, two-attempt limit, and atomic submission.
   `list_evaluation_runs` exposes the persisted audit history.
 - **Connecting a client.** e.g. `claude mcp add --transport http arena https://<host>/mcp
-  --header "Authorization: Bearer <key>"`.
+--header "Authorization: Bearer <key>"`.
+
+## Authentication Setup
+
+Admin sign-in uses the provider's Authorization Code flow with PKCE S256, then creates an opaque
+database-backed Portfolio Arena session. The provider access policy is the sole admin admission
+control: the app deliberately has no identity or claim allowlist, so every identity admitted by
+that policy receives admin access.
+
+- **Public Client: Off** — the FastAPI server securely stores a client secret.
+- **Callback path:** `/api/auth/callback`
+- **Application logout path:** `/api/auth/logout`
+- **Post-logout callback path:** `/api/auth/logged-out` (then returns to `/`)
+- **Scopes:** `openid email profile` (no `offline_access` or refresh tokens)
+- **Authentication environment variables:** all five authentication variables
+  (`ARENA_PUBLIC_URL` and the four `ARENA_OIDC_*` variables) documented under
+  [Environment Variables](#environment-variables) are required.
+
+Create a confidential OIDC web client at the provider, enable Authorization Code and PKCE S256,
+and register these exact URLs, replacing the example origin with `ARENA_PUBLIC_URL`:
+
+```text
+Redirect URI: https://arena.example.com/api/auth/callback
+Post-logout redirect URI: https://arena.example.com/api/auth/logged-out
+```
+
+Both the public application URL and issuer URL must use HTTPS outside loopback development;
+plain HTTP is accepted only for `localhost`, `127.0.0.1`, or `::1` during local setup.
+
+The discovery document must advertise an `end_session_endpoint`. Browser sessions use an HttpOnly,
+SameSite=Lax cookie, expire after 24 hours without authenticated user-driven activity, and have a
+seven-day absolute lifetime. While signed in, the SPA reports trusted pointer, keyboard, or click
+events to a dedicated same-origin endpoint at most once every five minutes. That endpoint is the only
+operation that extends the idle deadline; passive page loads, session probes, normal API requests,
+and MCP/API-key traffic do not. The server retains only the ID token needed for provider logout; it
+discards access and refresh tokens. After deploying this migration, remove the obsolete
+`ARENA_JWT_SECRET`, `ARENA_ADMIN_EMAIL`, and `ARENA_ADMIN_PASSWORD` variables.
 
 ## Automated Evaluator
 
@@ -117,6 +155,10 @@ When upgrading an existing Arena database, migration `0006` intentionally aborts
 positions exist. Back up the database and resolve those rows before deploying; the migration will
 not silently rewrite the experiment's history.
 
+Migration `0007` preserves portfolios, allocations, prompts, agents, settings, evaluation history,
+price data, and MCP API keys. It removes only the obsolete local-password user table and replaces it
+with short-lived browser-session records; existing JWT browser sessions stop working immediately.
+
 ## Development
 
 ```sh
@@ -126,7 +168,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 #   podman run -d --name arena-pg -e POSTGRES_PASSWORD=arena -e POSTGRES_DB=arena \
 #     -p 5432:5432 postgres:16-alpine)
 export DATABASE_URL=postgresql://postgres:arena@localhost:5432/arena
-export ARENA_JWT_SECRET=dev-secret ARENA_ADMIN_EMAIL=admin@example.com ARENA_ADMIN_PASSWORD=dev-password
+export ARENA_PUBLIC_URL=http://localhost:5173
+export ARENA_OIDC_ISSUER_URL=https://identity.example.com/application/o/portfolio-arena
+export ARENA_OIDC_CLIENT_ID=portfolio-arena-local
+export ARENA_OIDC_CLIENT_SECRET=set-locally
+export ARENA_OIDC_STATE_SECRET="$(openssl rand -hex 32)"
 cd backend && ../.venv/bin/uvicorn app.main:app --reload
 
 # Frontend dev server (proxies /api to :8000)
@@ -162,12 +208,14 @@ reuse an existing database. Yahoo is stubbed in tests; nothing hits the network.
 
 Web app:
 
-| Variable               | Purpose                      |
-| ---------------------- | ---------------------------- |
-| `DATABASE_URL`         | PostgreSQL connection URL    |
-| `ARENA_JWT_SECRET`     | JWT signing secret           |
-| `ARENA_ADMIN_EMAIL`    | Initial admin login email    |
-| `ARENA_ADMIN_PASSWORD` | Initial admin login password |
+| Variable                   | Purpose                                                |
+| -------------------------- | ------------------------------------------------------ |
+| `DATABASE_URL`             | PostgreSQL connection URL                              |
+| `ARENA_PUBLIC_URL`         | Canonical externally reachable origin, with no path    |
+| `ARENA_OIDC_ISSUER_URL`    | OIDC issuer URL used for discovery                     |
+| `ARENA_OIDC_CLIENT_ID`     | Confidential OIDC client ID                            |
+| `ARENA_OIDC_CLIENT_SECRET` | Confidential OIDC client secret                        |
+| `ARENA_OIDC_STATE_SECRET`  | Random secret of at least 32 characters for OIDC state |
 
 Evaluator:
 
@@ -201,5 +249,5 @@ Evaluator:
 ## Non-goals (v1)
 
 No broker integration, OpenAI Platform API execution, shorts or leverage, options/futures,
-intraday prices, cash positions, OpenCode automation, multi-user accounts, external notifications,
-historical backtesting, or significance testing beyond the age badge.
+intraday prices, cash positions, OpenCode automation, application-managed user accounts, external
+notifications, historical backtesting, or significance testing beyond the age badge.

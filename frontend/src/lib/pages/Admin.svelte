@@ -21,27 +21,6 @@
   type Tab = "allocation" | "automation" | "portfolio" | "agents" | "prompts" | "keys" | "settings";
   let tab = $state<Tab>("allocation");
 
-  // ── Login ────────────────────────────────────
-  let email = $state("");
-  let password = $state("");
-  let loginError = $state("");
-  let loggingIn = $state(false);
-
-  async function login(event: SubmitEvent) {
-    event.preventDefault();
-    loggingIn = true;
-    loginError = "";
-    try {
-      await auth.login(email, password);
-      await loadAll();
-      password = "";
-    } catch (e) {
-      loginError = e instanceof Error ? e.message : "Login failed";
-    } finally {
-      loggingIn = false;
-    }
-  }
-
   // ── Shared data ──────────────────────────────
   let portfolios = $state<PortfolioSummary[]>([]);
   let prompts = $state<PromptOut[]>([]);
@@ -57,9 +36,9 @@
 
   async function loadAll() {
     const [leaderboard, promptsPayload, agentsPayload] = await Promise.all([
-      apiJson<LeaderboardResponse>("/api/leaderboard", { auth: false }),
-      apiJson<{ prompts: PromptOut[] }>("/api/prompts", { auth: false }),
-      apiJson<{ agents: AgentOut[] }>("/api/agents", { auth: false }),
+      apiJson<LeaderboardResponse>("/api/leaderboard"),
+      apiJson<{ prompts: PromptOut[] }>("/api/prompts"),
+      apiJson<{ agents: AgentOut[] }>("/api/agents"),
     ]);
     portfolios = leaderboard.portfolios;
     prompts = promptsPayload.prompts;
@@ -67,13 +46,13 @@
   }
 
   async function refreshPrompts() {
-    const payload = await apiJson<{ prompts: PromptOut[] }>("/api/prompts", { auth: false });
+    const payload = await apiJson<{ prompts: PromptOut[] }>("/api/prompts");
     prompts = payload.prompts;
   }
 
   onMount(() => {
     void auth.restore().then(() => {
-      if (auth.isAdmin) void loadAll();
+      if (auth.isAuthenticated) void loadAll();
     });
   });
 
@@ -427,8 +406,6 @@
 
   // ── Tab 4: settings ──────────────────────────
   let defaultCostBps = $state<string>("");
-  let currentPassword = $state("");
-  let newPassword = $state("");
   let settingsError = $state("");
 
   async function loadSettings() {
@@ -457,22 +434,6 @@
     }
   }
 
-  async function changePassword(event: SubmitEvent) {
-    event.preventDefault();
-    settingsError = "";
-    try {
-      await putJson("/api/auth/password", {
-        current_password: currentPassword,
-        new_password: newPassword,
-      });
-      currentPassword = "";
-      newPassword = "";
-      flash("Password changed.");
-    } catch (e) {
-      settingsError = e instanceof Error ? e.message : "Password change failed";
-    }
-  }
-
   async function clearCache() {
     const result = await del<{ deleted: number }>("/api/prices/cache");
     flash(`Price cache cleared (${result.deleted} entries).`);
@@ -481,36 +442,17 @@
 
 {#if auth.restoring}
   <div class="loading-block"><span class="spinner" aria-hidden="true"></span></div>
-{:else if !auth.isAdmin}
+{:else if !auth.isAuthenticated}
   <div class="login-wrap">
-    <form class="card login" onsubmit={login}>
-      <h1>Admin login</h1>
-      <div class="field">
-        <label for="login-email">Email</label>
-        <input id="login-email" type="email" bind:value={email} autocomplete="username" required />
-      </div>
-      <div class="field">
-        <label for="login-password">Password</label>
-        <input
-          id="login-password"
-          type="password"
-          bind:value={password}
-          autocomplete="current-password"
-          required
-        />
-      </div>
-      {#if loginError}
-        <div class="error-box" role="alert">{loginError}</div>
-      {/if}
-      <button class="btn primary" type="submit" disabled={loggingIn}>
-        {loggingIn ? "Signing in…" : "Sign in"}
-      </button>
-    </form>
+    <section class="card login">
+      <h1>Admin access</h1>
+      <p class="muted">Sign in with the configured identity provider to manage Portfolio Arena.</p>
+      <a class="btn primary" href="/api/auth/login">Sign in</a>
+    </section>
   </div>
 {:else}
   <div class="admin-head">
     <h1>Admin</h1>
-    <button class="btn small" onclick={() => auth.logout()}>Log out</button>
   </div>
 
   {#if notice}
@@ -1077,55 +1019,25 @@
       </div>
     </section>
   {:else}
-    <div class="manage-grid">
-      <section class="card">
-        <h2>Defaults</h2>
-        <form onsubmit={saveSettings}>
-          <div class="field">
-            <label for="set-cost">Default cost bps for new portfolios</label>
-            <input id="set-cost" type="number" min="0" bind:value={defaultCostBps} />
-          </div>
-          <button class="btn primary" type="submit">Save settings</button>
-        </form>
+    <section class="card">
+      <h2>Defaults</h2>
+      <form onsubmit={saveSettings}>
+        <div class="field">
+          <label for="set-cost">Default cost bps for new portfolios</label>
+          <input id="set-cost" type="number" min="0" bind:value={defaultCostBps} />
+        </div>
+        <button class="btn primary" type="submit">Save settings</button>
+      </form>
+      {#if settingsError}
+        <div class="error-box" role="alert">{settingsError}</div>
+      {/if}
 
-        <h2 class="spaced">Price cache</h2>
-        <p class="muted cache-note">
-          Series are cached for an hour. Clearing forces a fresh Yahoo fetch on the next request.
-        </p>
-        <button class="btn" onclick={clearCache}>Clear price cache</button>
-      </section>
-
-      <section class="card">
-        <h2>Change password</h2>
-        <form onsubmit={changePassword}>
-          <div class="field">
-            <label for="pw-current">Current password</label>
-            <input
-              id="pw-current"
-              type="password"
-              bind:value={currentPassword}
-              autocomplete="current-password"
-              required
-            />
-          </div>
-          <div class="field">
-            <label for="pw-new">New password <span class="muted">(min 8 chars)</span></label>
-            <input
-              id="pw-new"
-              type="password"
-              bind:value={newPassword}
-              autocomplete="new-password"
-              minlength="8"
-              required
-            />
-          </div>
-          <button class="btn primary" type="submit">Change password</button>
-        </form>
-        {#if settingsError}
-          <div class="error-box" role="alert">{settingsError}</div>
-        {/if}
-      </section>
-    </div>
+      <h2 class="spaced">Price cache</h2>
+      <p class="muted cache-note">
+        Series are cached for an hour. Clearing forces a fresh Yahoo fetch on the next request.
+      </p>
+      <button class="btn" onclick={clearCache}>Clear price cache</button>
+    </section>
   {/if}
 {/if}
 
@@ -1257,13 +1169,6 @@
     white-space: nowrap;
   }
 
-  .manage-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    align-items: start;
-  }
-
   .manage-row {
     display: flex;
     align-items: start;
@@ -1334,7 +1239,6 @@
   }
 
   @media (max-width: 800px) {
-    .manage-grid,
     .grid-2 {
       grid-template-columns: 1fr;
     }

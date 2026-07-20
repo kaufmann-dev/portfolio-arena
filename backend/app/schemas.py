@@ -6,17 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class CurrentUser(BaseModel):
-    email: str
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class PasswordChangeRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=8)
+    display_name: str
 
 
 class AgentCreate(BaseModel):

@@ -16,41 +16,37 @@
     portfolios: PortfolioSummary[];
   }
 
-  let data = $state<Payload | null>(null);
-  let error = $state("");
-
-  $effect(() => {
-    data = null;
-    error = "";
-    apiJson<Payload>(`/api/agents/${slug}`, { auth: false })
-      .then((payload) => (data = payload))
-      .catch((e) => (error = e.message));
-  });
+  function requestErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : "Could not load this agent.";
+  }
 </script>
 
-{#if error}
-  <div class="error-box">{error}</div>
-{:else if !data}
-  <div class="loading-block"><span class="spinner" aria-hidden="true"></span> Loading agent…</div>
-{:else}
-  <nav class="crumbs" aria-label="Breadcrumb">
-    <a href="/" onclick={(e) => link(e, "/")}>Leaderboard</a>
-    <span aria-hidden="true">/</span>
-    <span>Agent</span>
-  </nav>
-  <h1>{data.agent.name}</h1>
-  {#if data.agent.notes}
-    <p class="muted">{data.agent.notes}</p>
-  {/if}
+{#key slug}
+  {@const request = apiJson<Payload>(`/api/agents/${slug}`)}
+  {#await request}
+    <div class="loading-block"><span class="spinner" aria-hidden="true"></span> Loading agent…</div>
+  {:then data}
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="/" onclick={(e) => link(e, "/")}>Leaderboard</a>
+      <span aria-hidden="true">/</span>
+      <span>Agent</span>
+    </nav>
+    <h1>{data.agent.name}</h1>
+    {#if data.agent.notes}
+      <p class="muted">{data.agent.notes}</p>
+    {/if}
 
-  <section>
-    <h2>
-      Portfolios by this agent
-      <span class="muted">— does it work across prompts?</span>
-    </h2>
-    <PortfolioTable rows={data.portfolios} />
-  </section>
-{/if}
+    <section>
+      <h2>
+        Portfolios by this agent
+        <span class="muted">— does it work across prompts?</span>
+      </h2>
+      <PortfolioTable rows={data.portfolios} />
+    </section>
+  {:catch error}
+    <div class="error-box">{requestErrorMessage(error)}</div>
+  {/await}
+{/key}
 
 <style>
   .crumbs {

@@ -1,4 +1,5 @@
 """Validation for USD-denominated equities and ETFs."""
+
 from dataclasses import dataclass
 
 from . import yahoo

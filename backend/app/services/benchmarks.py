@@ -45,9 +45,7 @@ def ensure_benchmark_allocations(session: Session) -> None:
                 effective_date=earliest,
                 note="System benchmark allocation.",
             )
-            allocation.positions.append(
-                Position(symbol=benchmark["symbol"], weight_pct=100)
-            )
+            allocation.positions.append(Position(symbol=benchmark["symbol"], weight_pct=100))
             session.add(allocation)
             changed = True
         else:
