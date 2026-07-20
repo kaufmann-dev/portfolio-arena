@@ -56,9 +56,7 @@
 </script>
 
 {#key slug}
-  {@const request = apiJson<{ as_of: string | null; portfolio: PortfolioDetail }>(`/api/portfolios/${slug}`, {
-    auth: false,
-  })}
+  {@const request = apiJson<{ as_of: string | null; portfolio: PortfolioDetail }>(`/api/portfolios/${slug}`)}
   {#await request}
     <div class="loading-block"><span class="spinner" aria-hidden="true"></span> Valuing portfolio…</div>
   {:then data}

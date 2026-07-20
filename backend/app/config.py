@@ -2,15 +2,18 @@
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_DIR.parent
 
-JWT_ALGORITHM = "HS256"
-JWT_TTL_SECONDS = 86400
+APP_SESSION_COOKIE = "portfolio_arena_session"
+OIDC_FLOW_COOKIE = "portfolio_arena_oidc_flow"
+SESSION_IDLE_SECONDS = 24 * 60 * 60
+SESSION_ABSOLUTE_SECONDS = 7 * 24 * 60 * 60
 
 PRICE_FETCH_MAX_WORKERS = 16
 PRICE_FETCH_TIMEOUT_SECONDS = 8
@@ -28,13 +31,25 @@ BENCHMARK_AGENT_SLUG = "benchmark"
 BENCHMARK_PROMPT_SLUG = "buy-and-hold"
 
 TOO_EARLY_AGE_DAYS = 183  # portfolios younger than ~6 months are "too early to judge"
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _require_https_outside_loopback(value: str, variable_name: str) -> None:
+    parsed = urlsplit(value)
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
+        return
+    raise ValueError(f"{variable_name} must use HTTPS outside loopback development")
 
 
 class Settings(BaseSettings):
     database_url: str = Field(validation_alias="DATABASE_URL")
-    jwt_secret: str = Field(validation_alias="ARENA_JWT_SECRET")
-    admin_email: str = Field(validation_alias="ARENA_ADMIN_EMAIL")
-    admin_password: str = Field(validation_alias="ARENA_ADMIN_PASSWORD")
+    public_url: str = Field(validation_alias="ARENA_PUBLIC_URL")
+    oidc_issuer_url: str = Field(validation_alias="ARENA_OIDC_ISSUER_URL")
+    oidc_client_id: str = Field(min_length=1, validation_alias="ARENA_OIDC_CLIENT_ID")
+    oidc_client_secret: SecretStr = Field(min_length=1, validation_alias="ARENA_OIDC_CLIENT_SECRET")
+    oidc_state_secret: SecretStr = Field(min_length=32, validation_alias="ARENA_OIDC_STATE_SECRET")
 
     default_cost_bps: int = Field(default=10, validation_alias="ARENA_DEFAULT_COST_BPS")
     db_connect_retries: int = Field(default=30, validation_alias="ARENA_DB_CONNECT_RETRIES")
@@ -51,6 +66,47 @@ class Settings(BaseSettings):
             if value.startswith(prefix):
                 return "postgresql+psycopg2://" + value[len(prefix) :]
         return value
+
+    @field_validator("public_url")
+    @classmethod
+    def _normalize_public_url(cls, value: str) -> str:
+        normalized = value.rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            "\\" in normalized
+            or parsed.scheme not in ("http", "https")
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("ARENA_PUBLIC_URL must be an http(s) origin without a path")
+        _require_https_outside_loopback(normalized, "ARENA_PUBLIC_URL")
+        return normalized
+
+    @field_validator("oidc_issuer_url")
+    @classmethod
+    def _normalize_oidc_issuer_url(cls, value: str) -> str:
+        normalized = value.rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            "\\" in normalized
+            or parsed.scheme not in ("http", "https")
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("ARENA_OIDC_ISSUER_URL must be an http(s) URL")
+        _require_https_outside_loopback(normalized, "ARENA_OIDC_ISSUER_URL")
+        return normalized
+
+    @property
+    def secure_cookies(self) -> bool:
+        return self.public_url.startswith("https://")
 
 
 @lru_cache

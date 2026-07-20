@@ -234,9 +234,7 @@ def delete_agent(agent_id: int) -> dict:
 
 
 @mcp.tool()
-def create_prompt(
-    name: str, text: str, allocation_policy: AllocationPolicyIn, notes: str = ""
-) -> dict:
+def create_prompt(name: str, text: str, allocation_policy: AllocationPolicyIn, notes: str = "") -> dict:
     """Create strategy text with a server-enforced position-sizing policy."""
     with _session() as session:
         return _guard(

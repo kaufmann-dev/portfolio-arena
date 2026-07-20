@@ -4,6 +4,10 @@ export interface Ref {
   name: string;
 }
 
+export interface AuthMe {
+  displayName: string;
+}
+
 export interface AllocationPolicy {
   min_position_weight_pct: number;
   max_position_weight_pct: number;

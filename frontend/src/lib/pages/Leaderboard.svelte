@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+
   import { apiJson } from "../api/client";
   import type { CompareResponse, LeaderboardResponse, PortfolioSummary } from "../api/types";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
@@ -13,26 +15,36 @@
   let compareData = $state<CompareResponse | null>(null);
   let compareLoading = $state(false);
 
-  $effect(() => {
-    apiJson<LeaderboardResponse>("/api/leaderboard", { auth: false })
-      .then((payload) => (data = payload))
-      .catch((e) => (error = e.message));
+  onMount(() => {
+    void loadLeaderboard();
   });
 
-  const agents = $derived.by(() => {
-    const map = new Map<string, string>();
-    for (const row of data?.portfolios ?? []) {
-      if (!row.is_benchmark) map.set(row.agent.slug, row.agent.name);
+  async function loadLeaderboard() {
+    try {
+      data = await apiJson<LeaderboardResponse>("/api/leaderboard");
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Could not load the leaderboard.";
     }
-    return [...map.entries()];
+  }
+
+  const agents = $derived.by(() => {
+    const entries: [string, string][] = [];
+    for (const row of data?.portfolios ?? []) {
+      if (!row.is_benchmark && !entries.some(([slug]) => slug === row.agent.slug)) {
+        entries.push([row.agent.slug, row.agent.name]);
+      }
+    }
+    return entries;
   });
 
   const prompts = $derived.by(() => {
-    const map = new Map<string, string>();
+    const entries: [string, string][] = [];
     for (const row of data?.portfolios ?? []) {
-      if (row.prompt && !row.is_benchmark) map.set(row.prompt.slug, row.prompt.name);
+      if (row.prompt && !row.is_benchmark && !entries.some(([slug]) => slug === row.prompt?.slug)) {
+        entries.push([row.prompt.slug, row.prompt.name]);
+      }
     }
-    return [...map.entries()];
+    return entries;
   });
 
   const rows = $derived.by(() => {
@@ -46,19 +58,26 @@
 
   function toggleCompare(slug: string) {
     selected = selected.includes(slug) ? selected.filter((s) => s !== slug) : [...selected, slug];
+    void loadComparison();
   }
 
-  $effect(() => {
-    if (selected.length < 2) {
+  async function loadComparison() {
+    const slugs = selected;
+    if (slugs.length < 2) {
       compareData = null;
+      compareLoading = false;
       return;
     }
     compareLoading = true;
-    apiJson<CompareResponse>(`/api/compare?slugs=${selected.join(",")}`, { auth: false })
-      .then((payload) => (compareData = payload))
-      .catch((e) => (error = e.message))
-      .finally(() => (compareLoading = false));
-  });
+    try {
+      const payload = await apiJson<CompareResponse>(`/api/compare?slugs=${slugs.join(",")}`);
+      if (selected === slugs) compareData = payload;
+    } catch (e) {
+      if (selected === slugs) error = e instanceof Error ? e.message : "Could not compare portfolios.";
+    } finally {
+      if (selected === slugs) compareLoading = false;
+    }
+  }
 
   const compareSeries = $derived.by((): ChartSeries[] => {
     if (!compareData) return [];

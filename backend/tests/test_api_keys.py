@@ -1,4 +1,4 @@
-"""API-key management: JWT-admin only, plaintext shown once, revocation."""
+"""API-key management: browser-admin only, plaintext shown once, revocation."""
 
 
 class TestApiKeyManagement:
@@ -26,7 +26,7 @@ class TestApiKeyManagement:
 
 
 class TestApiKeyAuthBoundaries:
-    def test_management_requires_jwt(self, client):
+    def test_management_requires_browser_session(self, client):
         assert client.get("/api/keys").status_code == 401
         assert client.post("/api/keys", json={"name": "x"}).status_code == 401
 

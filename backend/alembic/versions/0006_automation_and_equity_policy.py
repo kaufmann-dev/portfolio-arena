@@ -104,22 +104,16 @@ def upgrade() -> None:
             name="evaluation_runs_status_check",
         ),
         sa.CheckConstraint("attempt_count >= 0", name="evaluation_runs_attempt_count_check"),
-        sa.UniqueConstraint(
-            "portfolio_id", "scheduled_for", name="evaluation_runs_portfolio_session_key"
-        ),
+        sa.UniqueConstraint("portfolio_id", "scheduled_for", name="evaluation_runs_portfolio_session_key"),
     )
-    op.create_index(
-        "idx_evaluation_runs_scheduled_id", "evaluation_runs", ["scheduled_for", "id"]
-    )
+    op.create_index("idx_evaluation_runs_scheduled_id", "evaluation_runs", ["scheduled_for", "id"])
 
 
 def downgrade() -> None:
     op.drop_index("idx_evaluation_runs_scheduled_id", table_name="evaluation_runs")
     op.drop_table("evaluation_runs")
     op.add_column("positions", sa.Column("instrument", sa.Text(), nullable=False, server_default="equity"))
-    op.create_check_constraint(
-        "positions_instrument_check", "positions", "instrument IN ('equity', 'cash')"
-    )
+    op.create_check_constraint("positions_instrument_check", "positions", "instrument IN ('equity', 'cash')")
     op.drop_constraint("prompts_position_weights_check", "prompts", type_="check")
     op.drop_column("prompts", "max_position_weight_pct")
     op.drop_column("prompts", "min_position_weight_pct")

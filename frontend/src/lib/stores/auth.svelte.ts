@@ -1,18 +1,20 @@
-import { apiJson, getToken, postJson, removeToken, setToken, setUnauthorizedHandler } from "../api/client";
-
-interface LoginResponse {
-  token: string;
-  email: string;
-}
+import { apiJson, setUnauthorizedCallback } from "../api/client";
+import type { AuthMe } from "../api/types";
 
 class AuthStore {
   #restorePromise: Promise<void> | null = null;
-  email = $state<string | null>(null);
-  /** true while the stored token is being validated on startup */
+  displayName = $state<string | null>(null);
+  /** true while the cookie-backed session is being checked on startup */
   restoring = $state(true);
 
-  get isAdmin(): boolean {
-    return this.email !== null;
+  constructor() {
+    setUnauthorizedCallback(() => {
+      this.displayName = null;
+    });
+  }
+
+  get isAuthenticated(): boolean {
+    return this.displayName !== null;
   }
 
   restore(): Promise<void> {
@@ -21,32 +23,15 @@ class AuthStore {
   }
 
   private async performRestore(): Promise<void> {
-    if (!getToken()) {
-      this.restoring = false;
-      return;
-    }
     try {
-      const me = await apiJson<{ email: string }>("/api/auth/me");
-      this.email = me.email;
+      const me = await apiJson<AuthMe>("/api/auth/me");
+      this.displayName = me.displayName;
     } catch {
-      this.email = null;
+      this.displayName = null;
     } finally {
       this.restoring = false;
     }
   }
-
-  async login(email: string, password: string): Promise<void> {
-    const data = await postJson<LoginResponse>("/api/auth/login", { email, password }, { auth: false });
-    setToken(data.token);
-    this.email = data.email;
-  }
-
-  logout(): void {
-    removeToken();
-    this.email = null;
-  }
 }
 
 export const auth = new AuthStore();
-
-setUnauthorizedHandler(() => auth.logout());

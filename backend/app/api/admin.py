@@ -1,4 +1,4 @@
-"""Admin write endpoints (JWT bearer). All experiment-integrity logic lives in
+"""Admin write endpoints (browser session). All experiment-integrity logic lives in
 ``services/admin_ops.py`` and is shared with the MCP tools; these handlers only
 translate request bodies and ``AdminOpError`` into HTTP."""
 

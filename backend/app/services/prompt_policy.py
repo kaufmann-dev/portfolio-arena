@@ -24,9 +24,7 @@ def validate_position_weights(prompt: Prompt, positions: list[dict]) -> None:
     for position in positions:
         weight = float(position["weight_pct"])
         if weight < minimum or weight > maximum:
-            raise ValueError(
-                f"{position['symbol']} weight must be between {minimum:g}% and {maximum:g}%."
-            )
+            raise ValueError(f"{position['symbol']} weight must be between {minimum:g}% and {maximum:g}%.")
 
 
 def manual_execution_prompt(portfolio: Portfolio) -> str:
@@ -43,9 +41,9 @@ Strategy:
 
 Allocation policy:
 - Invest exactly 100% across USD-denominated equities and ETFs.
-- Use between {policy['derived_min_positions']} and {policy['derived_max_positions']} positions.
-- Every position must be between {policy['min_position_weight_pct']:g}% and
-  {policy['max_position_weight_pct']:g}% of NAV.
+- Use between {policy["derived_min_positions"]} and {policy["derived_max_positions"]} positions.
+- Every position must be between {policy["min_position_weight_pct"]:g}% and
+  {policy["max_position_weight_pct"]:g}% of NAV.
 - Do not use cash, mutual funds, options, futures, indices, FX, short positions, or leverage.
 - Validate unfamiliar symbols before submitting.
 

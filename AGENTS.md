@@ -13,8 +13,8 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   `cd backend && ../.venv/bin/ruff check . && ../.venv/bin/ruff format .`.
 - Frontend: `cd frontend && npm run check && npm run build` (svelte-check + production build).
   There are no frontend unit tests; `check` + `build` is the verification.
-- Running the backend needs `DATABASE_URL`, `ARENA_JWT_SECRET`, `ARENA_ADMIN_EMAIL`,
-  `ARENA_ADMIN_PASSWORD` (see `README.md` Development).
+- Running the backend needs `DATABASE_URL`, `ARENA_PUBLIC_URL`, and the four required
+  `ARENA_OIDC_*` variables (see `README.md` Development).
 
 ## Project Structure
 
@@ -23,7 +23,7 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   never stored; every request recomputes from allocations + cached price series. Keep it pure.
 - API routers: `backend/app/api/public.py` (read-only, no auth, rate-limited),
   `backend/app/api/admin.py` (writes, guarded by `Depends(require_admin)`), `auth.py`,
-  `keys.py` (API-key management, JWT-only). Response shaping is shared in
+  `keys.py` (API-key management, browser-admin-session only). Response shaping is shared in
   `backend/app/services/serialize.py`.
 - All write/integrity logic lives once in `backend/app/services/admin_ops.py` (raising
   `AdminOpError`); the admin router and the MCP tools are thin callers of it. Put new write

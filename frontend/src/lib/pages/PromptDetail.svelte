@@ -22,7 +22,7 @@
 </script>
 
 {#key slug}
-  {@const request = apiJson<Payload>(`/api/prompts/${slug}`, { auth: false })}
+  {@const request = apiJson<Payload>(`/api/prompts/${slug}`)}
   {#await request}
     <div class="loading-block"><span class="spinner" aria-hidden="true"></span> Loading prompt…</div>
   {:then data}

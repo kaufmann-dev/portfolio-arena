@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -23,17 +24,24 @@ class Base(DeclarativeBase):
     pass
 
 
-class User(Base):
-    __tablename__ = "users"
-    __table_args__ = (CheckConstraint("role IN ('admin')", name="users_role_check"),)
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        Index("idx_auth_sessions_last_seen_at", "last_seen_at"),
+        Index("idx_auth_sessions_absolute_expires_at", "absolute_expires_at"),
+    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(Text, nullable=False, server_default="admin")
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    id_token: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Setting(Base):
@@ -172,9 +180,7 @@ class EvaluationRun(Base):
             name="evaluation_runs_status_check",
         ),
         CheckConstraint("attempt_count >= 0", name="evaluation_runs_attempt_count_check"),
-        UniqueConstraint(
-            "portfolio_id", "scheduled_for", name="evaluation_runs_portfolio_session_key"
-        ),
+        UniqueConstraint("portfolio_id", "scheduled_for", name="evaluation_runs_portfolio_session_key"),
         Index("idx_evaluation_runs_scheduled_id", "scheduled_for", "id"),
     )
 

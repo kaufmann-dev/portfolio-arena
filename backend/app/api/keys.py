@@ -1,4 +1,4 @@
-"""API-key management (JWT admin only). Keys authenticate the MCP server, so
+"""API-key management (browser admin session only). Keys authenticate the MCP server, so
 key management itself is deliberately *not* exposed as an MCP tool — it can only
 be done here, from the admin panel."""
 
