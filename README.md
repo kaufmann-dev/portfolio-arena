@@ -84,8 +84,8 @@ Admin login uses OIDC Authorization Code + PKCE (`S256`) and stores a server-sid
 admin-only access; provider policy defines who is admitted.
 
 - **Public Client:** Off (the backend stores a client secret).
-- **Callback URL:** `${ARENA_PUBLIC_URL}/api/auth/callback`
-- **Logout Callback URL:** `${ARENA_PUBLIC_URL}/api/auth/logged-out`
+- **Callback URL:** `/api/auth/callback`
+- **Logout Callback URL:** `/api/auth/logged-out`
 - **Authentication environment variables:** `ARENA_PUBLIC_URL`, `ARENA_OIDC_ISSUER_URL`,
   `ARENA_OIDC_CLIENT_ID`, `ARENA_OIDC_CLIENT_SECRET`, `ARENA_OIDC_STATE_SECRET` (all required),
   documented in [Environment Variables](#environment-variables).
