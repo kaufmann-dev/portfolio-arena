@@ -21,7 +21,7 @@ def get_oidc_client() -> StarletteOAuth2App:
         client_kwargs={
             "scope": OIDC_SCOPES,
             "code_challenge_method": "S256",
-            "token_endpoint_auth_method": "client_secret_basic",
+            "token_endpoint_auth_method": "client_secret_post",
         },
     )
     assert client is not None
