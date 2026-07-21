@@ -222,7 +222,7 @@ def test_oidc_client_is_confidential_and_never_requests_refresh_tokens():
 
     oidc = get_oidc_client()
     assert oidc.client_secret == "test-client-secret"
-    assert oidc.client_kwargs["token_endpoint_auth_method"] == "client_secret_basic"
+    assert oidc.client_kwargs["token_endpoint_auth_method"] == "client_secret_post"
     assert oidc.client_kwargs["code_challenge_method"] == "S256"
     assert OIDC_SCOPES == "openid email profile"
     assert "offline_access" not in OIDC_SCOPES
