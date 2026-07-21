@@ -80,39 +80,15 @@ per-portfolio history) — **except** API-key management, which stays in the adm
 
 ## Authentication Setup
 
-Admin sign-in uses the provider's Authorization Code flow with PKCE S256, then creates an opaque
-database-backed Portfolio Arena session. The provider access policy is the sole admin admission
-control: the app deliberately has no identity or claim allowlist, so every identity admitted by
-that policy receives admin access.
+Admin login uses OIDC Authorization Code + PKCE (`S256`) and stores a server-side opaque session for
+admin-only access; provider policy defines who is admitted.
 
-- **Public Client: Off** — the FastAPI server securely stores a client secret.
-- **Callback path:** `/api/auth/callback`
-- **Application logout path:** `/api/auth/logout`
-- **Post-logout callback path:** `/api/auth/logged-out` (then returns to `/`)
-- **Scopes:** `openid email profile` (no `offline_access` or refresh tokens)
-- **Authentication environment variables:** all five authentication variables
-  (`ARENA_PUBLIC_URL` and the four `ARENA_OIDC_*` variables) documented under
-  [Environment Variables](#environment-variables) are required.
-
-Create a confidential OIDC web client at the provider, enable Authorization Code and PKCE S256,
-and register these exact URLs, replacing the example origin with `ARENA_PUBLIC_URL`:
-
-```text
-Redirect URI: https://arena.example.com/api/auth/callback
-Post-logout redirect URI: https://arena.example.com/api/auth/logged-out
-```
-
-Both the public application URL and issuer URL must use HTTPS outside loopback development;
-plain HTTP is accepted only for `localhost`, `127.0.0.1`, or `::1` during local setup.
-
-The discovery document must advertise an `end_session_endpoint`. Browser sessions use an HttpOnly,
-SameSite=Lax cookie, expire after 24 hours without authenticated user-driven activity, and have a
-seven-day absolute lifetime. While signed in, the SPA reports trusted pointer, keyboard, or click
-events to a dedicated same-origin endpoint at most once every five minutes. That endpoint is the only
-operation that extends the idle deadline; passive page loads, session probes, normal API requests,
-and MCP/API-key traffic do not. The server retains only the ID token needed for provider logout; it
-discards access and refresh tokens. After deploying this migration, remove the obsolete
-`ARENA_JWT_SECRET`, `ARENA_ADMIN_EMAIL`, and `ARENA_ADMIN_PASSWORD` variables.
+- **Public Client:** Off (the backend stores a client secret).
+- **Callback URL:** `${ARENA_PUBLIC_URL}/api/auth/callback`
+- **Logout Callback URL:** `${ARENA_PUBLIC_URL}/api/auth/logged-out`
+- **Authentication environment variables:** `ARENA_PUBLIC_URL`, `ARENA_OIDC_ISSUER_URL`,
+  `ARENA_OIDC_CLIENT_ID`, `ARENA_OIDC_CLIENT_SECRET`, `ARENA_OIDC_STATE_SECRET` (all required),
+  documented in [Environment Variables](#environment-variables).
 
 ## Automated Evaluator
 
@@ -211,11 +187,11 @@ Web app:
 | Variable                   | Purpose                                                |
 | -------------------------- | ------------------------------------------------------ |
 | `DATABASE_URL`             | PostgreSQL connection URL                              |
-| `ARENA_PUBLIC_URL`         | Canonical externally reachable origin, with no path    |
-| `ARENA_OIDC_ISSUER_URL`    | OIDC issuer URL used for discovery                     |
-| `ARENA_OIDC_CLIENT_ID`     | Confidential OIDC client ID                            |
-| `ARENA_OIDC_CLIENT_SECRET` | Confidential OIDC client secret                        |
-| `ARENA_OIDC_STATE_SECRET`  | Random secret of at least 32 characters for OIDC state |
+| `ARENA_PUBLIC_URL`         | Canonical externally reachable origin, with no path    (**required**) |
+| `ARENA_OIDC_ISSUER_URL`    | OIDC issuer URL used for discovery                    (**required**) |
+| `ARENA_OIDC_CLIENT_ID`     | Confidential OIDC client ID                           (**required**) |
+| `ARENA_OIDC_CLIENT_SECRET` | Confidential OIDC client secret                       (**required**) |
+| `ARENA_OIDC_STATE_SECRET`  | Random secret of at least 32 characters for OIDC state (**required**) |
 
 Evaluator:
 
