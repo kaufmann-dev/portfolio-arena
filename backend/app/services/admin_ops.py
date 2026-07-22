@@ -19,6 +19,7 @@ from ..seed import DEFAULT_COST_BPS_KEY
 from ..util import slugify
 from .arena import compute_valuations, load_portfolios
 from .benchmarks import ensure_benchmark_allocations
+from .evaluation_schedule import evaluation_window
 from .prompt_policy import allocation_policy_out, validate_position_weights
 from .serialize import serialize_allocation, serialize_detail
 from .symbols import (
@@ -27,11 +28,9 @@ from .symbols import (
     resolve_symbol,
     validate_positions,
 )
-from .trading_calendar import close_at, effective_date_for, is_locked, is_trading_day
+from .trading_calendar import effective_date_for, is_locked, is_trading_day
 
 DEFAULT_COST_BPS_FALLBACK = 10
-EVALUATION_START_BEFORE_CLOSE = timedelta(minutes=90)
-EVALUATION_CUTOFF_BEFORE_CLOSE = timedelta(minutes=10)
 EVALUATION_LEASE = timedelta(minutes=30)
 EVALUATION_MAX_ATTEMPTS = 2
 EVALUATION_ERROR_MAX_LENGTH = 4000
@@ -423,11 +422,6 @@ def delete_allocation(session: Session, allocation_id: int) -> dict:
 # --- Automated evaluation runs ---------------------------------------------
 
 
-def _evaluation_window(scheduled_for: date) -> tuple[datetime, datetime]:
-    close = close_at(scheduled_for)
-    return close - EVALUATION_START_BEFORE_CLOSE, close - EVALUATION_CUTOFF_BEFORE_CLOSE
-
-
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -493,7 +487,7 @@ def begin_evaluation_run(
     if not is_trading_day(scheduled_for):
         raise AdminOpError(422, f"{scheduled_for.isoformat()} is not a scheduled NYSE trading day")
 
-    starts_at, deadline_at = _evaluation_window(scheduled_for)
+    starts_at, deadline_at = evaluation_window(scheduled_for)
     if now < starts_at:
         raise AdminOpError(409, f"Evaluation window opens at {starts_at.isoformat()}")
     if now >= deadline_at:
@@ -617,7 +611,7 @@ def submit_evaluation_allocation(
         raise AdminOpError(409, f"Evaluation run is {run.status}, not running")
     if run.lease_expires_at is None or now >= run.lease_expires_at:
         raise AdminOpError(409, "Evaluation run lease expired")
-    _, deadline_at = _evaluation_window(run.scheduled_for)
+    _, deadline_at = evaluation_window(run.scheduled_for)
     if now >= deadline_at:
         raise AdminOpError(409, f"Evaluation cutoff passed at {deadline_at.isoformat()}")
 

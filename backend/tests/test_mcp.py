@@ -56,11 +56,17 @@ class TestMcpTools:
             "get_portfolio",
             "get_arena_overview",
             "create_allocation",
+            "get_evaluation_schedule",
             "begin_evaluation_run",
             "submit_evaluation_allocation",
         } <= names
         # Key management is never exposed as a tool.
         assert not any("key" in name.lower() for name in names)
+
+    def test_evaluation_schedule(self, client, mcp_headers):
+        data = _call_tool(client, mcp_headers, "get_evaluation_schedule")
+        assert set(data) == {"server_time", "scheduled_for", "opens_at", "cutoff_at", "state"}
+        assert data["state"] in {"upcoming", "open"}
 
     def test_arena_overview(self, client, mcp_headers, sample_portfolio):
         data = _call_tool(client, mcp_headers, "get_arena_overview")
