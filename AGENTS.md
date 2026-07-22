@@ -30,6 +30,9 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   rules there, not in a router.
 - Admin-only fields (per-position `note`, holding `entry_price`/`current_price`) are gated
   behind the `admin=True` flag in `services/serialize.py`. Never expose them from `public.py`.
+- `backend/app/services/evaluation_schedule.py` is Arena's evaluator-facing scheduling authority.
+  Keep the MCP schedule response and server-side evaluation cutoff enforcement on this shared
+  service; external evaluator projects must not duplicate its calendar logic.
 - MCP server: `backend/app/mcp_server/` (FastMCP, mounted at `/mcp` in `main.py`). It exposes
   the full app surface as tools — everything an admin/visitor can do **except** API-key
   management — authenticated by an API key (`Authorization: Bearer <key>` or `X-API-Key`, no

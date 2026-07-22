@@ -20,6 +20,7 @@ from ..services import admin_ops
 from ..services.admin_ops import AdminOpError
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import ensure_benchmark_allocations
+from ..services.evaluation_schedule import get_evaluation_schedule as evaluation_schedule
 from ..services.serialize import serialize_summary
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
 from ..services.trading_calendar import effective_date_for
@@ -358,6 +359,14 @@ def delete_allocation(allocation_id: int) -> dict:
 
 
 # --- Automated evaluation runner ------------------------------------------
+
+
+@mcp.tool()
+def get_evaluation_schedule() -> dict:
+    """Return Arena's next actionable evaluation session and server-owned window.
+    Before the window it is upcoming, during the window it is open, and after
+    cutoff or on a non-trading day the next NYSE session is returned."""
+    return evaluation_schedule()
 
 
 @mcp.tool()
