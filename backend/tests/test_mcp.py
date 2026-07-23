@@ -73,6 +73,11 @@ class TestMcpTools:
         assert {
             "get_portfolio",
             "get_arena_overview",
+            "list_harnesses",
+            "list_models",
+            "create_model",
+            "update_model",
+            "delete_model",
             "create_allocation",
             "get_evaluator_dashboard",
             "configure_portfolio_evaluator",
@@ -106,7 +111,22 @@ class TestMcpTools:
             assert stripped not in portfolio
 
     def test_write_roundtrip(self, client, mcp_headers, admin_headers):
-        agent = _call_tool(client, mcp_headers, "create_agent", {"name": "MCP Agent"})
+        model = _call_tool(
+            client,
+            mcp_headers,
+            "create_model",
+            {"name": "MCP Model", "capabilities": []},
+        )
+        agent = _call_tool(
+            client,
+            mcp_headers,
+            "create_agent",
+            {
+                "model_id": model["id"],
+                "harness": None,
+                "reasoning_effort": None,
+            },
+        )
         prompt = _call_tool(
             client,
             mcp_headers,

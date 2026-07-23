@@ -41,9 +41,9 @@ class ClaimedRun(BaseModel):
     id: int
     portfolio: PortfolioRef
     trigger_kind: Literal["scheduled", "manual", "retry"]
-    model: str
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"]
-    service_tier: Literal["standard", "fast"]
+    harness: Literal["codex"]
+    execution_model_id: str
+    reasoning_effort: str | None
     timeout_seconds: int
     deadline_at: datetime | None
 
@@ -65,7 +65,7 @@ class RunCancelled(RuntimeError):
 @dataclass
 class WorkerState:
     status: str = "starting"
-    codex_version: str | None = None
+    harness_version: str | None = None
     authenticated: bool = False
     active_run_count: int = 0
     last_error: str | None = None
@@ -224,21 +224,10 @@ async def run_codex(
             "--sandbox",
             "read-only",
             "--model",
-            run.model,
-            "--config",
-            f'model_reasoning_effort="{run.reasoning_effort}"',
+            run.execution_model_id,
         ]
-        if run.service_tier == "fast":
-            command.extend(
-                [
-                    "--config",
-                    'service_tier="fast"',
-                    "--config",
-                    "features.fast_mode=true",
-                ]
-            )
-        else:
-            command.extend(["--config", "features.fast_mode=false"])
+        if run.reasoning_effort is not None:
+            command.extend(["--config", f'model_reasoning_effort="{run.reasoning_effort}"'])
         command.extend(
             [
                 "--cd",
@@ -345,7 +334,7 @@ async def scheduler(
                 state.authenticated = False
                 state.last_error = "MASSIVE_API_KEY is required."
             else:
-                state.codex_version = await codex_version()
+                state.harness_version = await codex_version()
                 state.authenticated = await codex_is_authenticated()
                 if not state.authenticated:
                     state.status = "authentication_required"
@@ -358,7 +347,8 @@ async def scheduler(
                             "/claim",
                             {
                                 "worker_id": instance_id,
-                                "codex_version": state.codex_version,
+                                "harness": "codex",
+                                "harness_version": state.harness_version,
                                 "limit": 20,
                             },
                         )
@@ -399,8 +389,9 @@ async def heartbeat_loop(
                 "/heartbeat",
                 {
                     "instance_id": instance_id,
+                    "harness": "codex",
                     "status": state.status,
-                    "codex_version": state.codex_version,
+                    "harness_version": state.harness_version,
                     "authenticated": state.authenticated,
                     "active_run_count": state.active_run_count,
                     "last_error": state.last_error,
@@ -417,7 +408,7 @@ def worker_state_payload(state: WorkerState) -> dict[str, Any]:
     """Return a stable snapshot for focused unit tests."""
     return {
         "status": state.status,
-        "codex_version": state.codex_version,
+        "harness_version": state.harness_version,
         "authenticated": state.authenticated,
         "active_run_count": state.active_run_count,
         "last_error": state.last_error,

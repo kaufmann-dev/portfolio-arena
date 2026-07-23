@@ -9,14 +9,37 @@ class CurrentUser(BaseModel):
     display_name: str
 
 
-class AgentCreate(BaseModel):
+class ModelHarnessCapabilityIn(BaseModel):
+    harness: str = Field(min_length=1, max_length=50)
+    execution_model_id: str = Field(min_length=1, max_length=200)
+    reasoning_efforts: list[str] = Field(max_length=20)
+
+
+class ModelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    slug: str | None = None
+    notes: str = ""
+    capabilities: list[ModelHarnessCapabilityIn] = Field(max_length=20)
+
+
+class ModelPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    notes: str | None = None
+    capabilities: list[ModelHarnessCapabilityIn] | None = Field(default=None, max_length=20)
+
+
+class AgentCreate(BaseModel):
+    model_id: int
+    harness: str | None = Field(default=None, max_length=50)
+    reasoning_effort: str | None = Field(default=None, max_length=50)
     slug: str | None = None
     notes: str = ""
 
 
 class AgentPatch(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=200)
+    model_id: int
+    harness: str | None = Field(default=None, max_length=50)
+    reasoning_effort: str | None = Field(default=None, max_length=50)
     notes: str | None = None
 
 
@@ -94,8 +117,6 @@ class EvaluatorSettingsUpdate(BaseModel):
     poll_seconds: int = Field(ge=10, le=300)
     attempt_timeout_seconds: int = Field(ge=60, le=1500)
     max_attempts: int = Field(ge=1, le=5)
-    reasoning_effort: str = Field(pattern="^(low|medium|high|xhigh)$")
-    service_tier: str = Field(pattern="^(standard|fast)$")
     start_before_close_minutes: int = Field(ge=15, le=240)
     cutoff_before_close_minutes: int = Field(ge=0, le=60)
 
@@ -108,7 +129,6 @@ class EvaluatorSettingsUpdate(BaseModel):
 
 class PortfolioEvaluatorConfigUpdate(BaseModel):
     enabled: bool
-    model: str = Field(max_length=200)
     weekdays: list[int] = Field(max_length=5)
 
     @model_validator(mode="after")
@@ -117,8 +137,6 @@ class PortfolioEvaluatorConfigUpdate(BaseModel):
             raise ValueError("Evaluator weekdays must be unique.")
         if any(day < 0 or day > 4 for day in self.weekdays):
             raise ValueError("Evaluator weekdays must be between 0 and 4.")
-        if self.enabled and not self.model.strip():
-            raise ValueError("Enabled evaluator configurations require a model.")
         return self
 
 
@@ -128,8 +146,9 @@ class EvaluationRunsCreate(BaseModel):
 
 class EvaluatorHeartbeatIn(BaseModel):
     instance_id: str = Field(min_length=1, max_length=64)
+    harness: str = Field(min_length=1, max_length=50)
     status: str = Field(min_length=1, max_length=50)
-    codex_version: str | None = Field(default=None, max_length=200)
+    harness_version: str | None = Field(default=None, max_length=200)
     authenticated: bool
     active_run_count: int = Field(ge=0, le=100)
     last_error: str | None = Field(default=None, max_length=4000)
@@ -137,7 +156,8 @@ class EvaluatorHeartbeatIn(BaseModel):
 
 class EvaluatorClaimIn(BaseModel):
     worker_id: str = Field(min_length=1, max_length=64)
-    codex_version: str = Field(min_length=1, max_length=200)
+    harness: str = Field(min_length=1, max_length=50)
+    harness_version: str = Field(min_length=1, max_length=200)
     limit: int = Field(ge=1, le=20)
 
 

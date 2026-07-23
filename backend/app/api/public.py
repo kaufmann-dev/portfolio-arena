@@ -2,13 +2,14 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_session
-from ..models import Agent, Portfolio, Prompt
+from ..models import Agent, ModelDefinition, Portfolio, Prompt
 from ..ratelimit import limiter
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import ensure_benchmark_allocations
+from ..services.model_catalog import agent_out
 from ..services.prompt_policy import allocation_policy_out
 from ..services.serialize import serialize_detail, serialize_summary
 from ..services.valuation import rebase_series
@@ -146,7 +147,11 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
 @router.get("/agents")
 @limiter.limit("60/minute")
 def list_agents(request: Request, session: Session = Depends(get_session)):
-    agents = session.scalars(select(Agent).order_by(Agent.slug)).all()
+    agents = session.scalars(
+        select(Agent)
+        .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
+        .order_by(Agent.slug)
+    ).all()
     portfolios = session.scalars(select(Portfolio)).all()
     by_agent: dict[int, list[Portfolio]] = {}
     for portfolio in portfolios:
@@ -154,10 +159,7 @@ def list_agents(request: Request, session: Session = Depends(get_session)):
     return {
         "agents": [
             {
-                "id": agent.id,
-                "slug": agent.slug,
-                "name": agent.name,
-                "notes": agent.notes,
+                **agent_out(agent),
                 "portfolios": [
                     {"id": p.id, "slug": p.slug, "name": p.name, "status": p.status}
                     for p in by_agent.get(agent.id, [])
@@ -171,7 +173,11 @@ def list_agents(request: Request, session: Session = Depends(get_session)):
 @router.get("/agents/{slug}")
 @limiter.limit("60/minute")
 def agent_detail(slug: str, request: Request, session: Session = Depends(get_session)):
-    agent = session.scalars(select(Agent).where(Agent.slug == slug)).first()
+    agent = session.scalars(
+        select(Agent)
+        .where(Agent.slug == slug)
+        .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
+    ).first()
     if agent is None:
         raise HTTPException(404, "Agent not found")
 
@@ -179,13 +185,7 @@ def agent_detail(slug: str, request: Request, session: Session = Depends(get_ses
     own = [p for p in portfolios if p.agent_id == agent.id]
     return {
         "as_of": valuations.as_of,
-        "agent": {
-            "id": agent.id,
-            "slug": agent.slug,
-            "name": agent.name,
-            "notes": agent.notes,
-            "created_at": agent.created_at.isoformat(),
-        },
+        "agent": {**agent_out(agent), "created_at": agent.created_at.isoformat()},
         "portfolios": [
             serialize_summary(valuations.by_portfolio_id[p.id], valuations)
             for p in own

@@ -24,7 +24,6 @@ def test_selected_holiday_weekday_shifts_to_next_trading_day():
     friday_only = PortfolioEvaluatorConfig(
         portfolio_id=1,
         enabled=True,
-        model="test-model",
         weekdays=[4],
     )
 
@@ -35,7 +34,6 @@ def test_shifted_and_regular_cadence_deduplicate_to_one_session():
     friday_and_monday = PortfolioEvaluatorConfig(
         portfolio_id=1,
         enabled=True,
-        model="test-model",
         weekdays=[0, 4],
     )
 
@@ -46,7 +44,6 @@ def test_empty_weekday_selection_is_manual_only():
     manual = PortfolioEvaluatorConfig(
         portfolio_id=1,
         enabled=True,
-        model="test-model",
         weekdays=[],
     )
 

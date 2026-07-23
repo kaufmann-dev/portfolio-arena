@@ -76,6 +76,10 @@
           <a href="/agent/{portfolio.agent.slug}" onclick={(e) => link(e, `/agent/${portfolio.agent.slug}`)}
             >{portfolio.agent.name}</a
           >
+          <span class="muted">
+            · {portfolio.agent.model.name} · {portfolio.agent.harness?.name ?? "No supported harness"}
+            {portfolio.agent.reasoning_effort ? ` · ${portfolio.agent.reasoning_effort}` : ""}
+          </span>
           {#if portfolio.prompt}
             · prompt
             <a

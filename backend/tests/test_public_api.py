@@ -98,6 +98,11 @@ class TestPromptsAndAgents:
     def test_agent_detail_lists_portfolios(self, client, sample_portfolio, sample_agent):
         payload = client.get(f"/api/agents/{sample_agent['slug']}").json()
         assert find(payload["portfolios"], sample_portfolio["slug"]) is not None
+        assert payload["agent"]["name"] == "GPT-5.6 Sol (Codex, Extra high)"
+        assert payload["agent"]["model"]["name"] == "GPT-5.6 Sol"
+        assert payload["agent"]["harness"] == {"id": "codex", "name": "Codex"}
+        assert payload["agent"]["execution_model_id"] == "gpt-5.6-sol"
+        assert payload["agent"]["reasoning_effort"] == "xhigh"
 
     def test_prompt_editing_reflected_publicly(self, client, admin_headers, sample_prompt):
         client.patch(

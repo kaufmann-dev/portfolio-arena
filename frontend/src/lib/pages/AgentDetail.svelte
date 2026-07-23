@@ -32,6 +32,16 @@
       <span>Agent</span>
     </nav>
     <h1>{data.agent.name}</h1>
+    <p class="muted execution">
+      {data.agent.model.name}
+      · {data.agent.harness?.name ?? "No supported harness"}
+      {#if data.agent.execution_model_id}
+        · <span class="num">{data.agent.execution_model_id}</span>
+      {/if}
+      {#if data.agent.reasoning_effort}
+        · {data.agent.reasoning_effort}
+      {/if}
+    </p>
     {#if data.agent.notes}
       <p class="muted">{data.agent.notes}</p>
     {/if}
@@ -65,6 +75,10 @@
   h2 {
     font-size: 15px;
     margin: 0 0 10px;
+  }
+
+  .execution {
+    margin: 4px 0;
   }
 
   section {

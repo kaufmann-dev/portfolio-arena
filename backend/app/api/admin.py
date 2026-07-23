@@ -19,6 +19,8 @@ from ..schemas import (
     AllocationUpdate,
     EvaluationRunsCreate,
     EvaluatorSettingsUpdate,
+    ModelCreate,
+    ModelPatch,
     PortfolioCreate,
     PortfolioEvaluatorConfigUpdate,
     PortfolioPatch,
@@ -29,6 +31,7 @@ from ..schemas import (
 from ..security import require_admin
 from ..services import admin_ops, evaluator, price_cache
 from ..services.admin_ops import AdminOpError
+from ..services.harnesses import harnesses_out
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
 from ..services.trading_calendar import effective_date_for
 
@@ -51,17 +54,76 @@ def _positions(body: AllocationCreate | AllocationUpdate) -> list[dict] | None:
     return [{"symbol": p.symbol, "weight_pct": p.weight_pct, "note": p.note} for p in body.positions]
 
 
-# --- Agents -----------------------------------------------------------------
+# --- Models and agents ------------------------------------------------------
+
+
+@router.get("/harnesses")
+def list_harnesses():
+    return harnesses_out()
+
+
+@router.get("/models")
+def list_models(session: Session = Depends(get_session)):
+    return admin_ops.list_models(session)
+
+
+@router.post("/models", status_code=201)
+def create_model(body: ModelCreate, session: Session = Depends(get_session)):
+    return _run(
+        admin_ops.create_model,
+        session,
+        name=body.name,
+        slug=body.slug,
+        notes=body.notes,
+        capabilities=[capability.model_dump() for capability in body.capabilities],
+    )
+
+
+@router.patch("/models/{model_id}")
+def patch_model(model_id: int, body: ModelPatch, session: Session = Depends(get_session)):
+    return _run(
+        admin_ops.update_model,
+        session,
+        model_id,
+        name=body.name,
+        notes=body.notes,
+        capabilities=(
+            [capability.model_dump() for capability in body.capabilities]
+            if body.capabilities is not None
+            else None
+        ),
+    )
+
+
+@router.delete("/models/{model_id}")
+def delete_model(model_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.delete_model, session, model_id)
 
 
 @router.post("/agents", status_code=201)
 def create_agent(body: AgentCreate, session: Session = Depends(get_session)):
-    return _run(admin_ops.create_agent, session, name=body.name, slug=body.slug, notes=body.notes)
+    return _run(
+        admin_ops.create_agent,
+        session,
+        model_id=body.model_id,
+        harness=body.harness,
+        reasoning_effort=body.reasoning_effort,
+        slug=body.slug,
+        notes=body.notes,
+    )
 
 
 @router.patch("/agents/{agent_id}")
 def patch_agent(agent_id: int, body: AgentPatch, session: Session = Depends(get_session)):
-    return _run(admin_ops.update_agent, session, agent_id, name=body.name, notes=body.notes)
+    return _run(
+        admin_ops.update_agent,
+        session,
+        agent_id,
+        model_id=body.model_id,
+        harness=body.harness,
+        reasoning_effort=body.reasoning_effort,
+        notes=body.notes,
+    )
 
 
 @router.delete("/agents/{agent_id}")
