@@ -115,6 +115,7 @@ required = true
 
 [mcp_servers.massive]
 command = "mcp_massive"
+default_tools_approval_mode = "approve"
 required = true
 """
     (settings.codex_home / "config.toml").write_text(config)

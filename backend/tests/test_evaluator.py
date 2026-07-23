@@ -49,7 +49,7 @@ def test_generated_codex_config_is_read_only_and_internal(tmp_path):
 
     assert 'default_permissions = ":read-only"' in config
     assert 'url = "http://127.0.0.1:8000/mcp"' in config
-    assert 'default_tools_approval_mode = "approve"' in config
+    assert config.count('default_tools_approval_mode = "approve"') == 2
     assert "submit_evaluation" not in config
     assert "internal-secret" not in config
     assert "massive-secret" not in config
