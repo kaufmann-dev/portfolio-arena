@@ -31,6 +31,7 @@ CODEX = HarnessDefinition(
         ReasoningEffort("medium", "Medium"),
         ReasoningEffort("high", "High"),
         ReasoningEffort("xhigh", "Extra high"),
+        ReasoningEffort("ultra", "Ultra"),
     ),
 )
 

@@ -962,7 +962,7 @@
                   placeholder="gpt-5.6-sol"
                 />
               </div>
-              <span class="field-label">Supported reasoning efforts</span>
+              <span class="field-label">Supported reasoning efforts for this model on {harness.name}</span>
               <div class="check-group">
                 {#each harness.reasoning_efforts as effort (effort.id)}
                   <label>
@@ -977,7 +977,8 @@
                 {/each}
               </div>
               <p class="muted hint">
-                Leave every effort unchecked when this model exposes no effort control.
+                Select only the efforts this model exposes through {harness.name}. Leave every effort
+                unchecked when this model exposes no effort control.
               </p>
             {/if}
           </fieldset>
@@ -1025,7 +1026,8 @@
                       bind:value={capability.execution_model_id}
                     />
                   </div>
-                  <span class="field-label">Supported reasoning efforts</span>
+                  <span class="field-label">Supported reasoning efforts for this model on {harness.name}</span
+                  >
                   <div class="check-group">
                     {#each harness.reasoning_efforts as effort (effort.id)}
                       <label>
