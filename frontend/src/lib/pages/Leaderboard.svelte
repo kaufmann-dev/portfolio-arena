@@ -123,7 +123,6 @@
 <section class="leaderboard-page" aria-labelledby="leaderboard-title">
   <header class="page-head">
     <div>
-      <p class="eyebrow">Public standings</p>
       <h1 id="leaderboard-title">Leaderboard</h1>
       <p class="lede">
         Can LLMs pick portfolios that beat SPY? Paper portfolios measured on total return, net of transaction
@@ -187,7 +186,6 @@
       <section class="comparison-panel" aria-labelledby="comparison-title" aria-busy={compareLoading}>
         <header class="comparison-head">
           <div>
-            <p class="eyebrow">Track record overlay</p>
             <h2 id="comparison-title">
               {#if compareData}
                 Rebased to 100 at {compareData.start}
@@ -238,15 +236,6 @@
     margin-bottom: 0;
   }
 
-  .eyebrow {
-    margin: 0 0 6px;
-    color: var(--text-tertiary);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.13em;
-    text-transform: uppercase;
-  }
-
   h1 {
     margin: 0;
     font-size: clamp(32px, 5vw, 58px);
@@ -289,7 +278,7 @@
     display: grid;
     gap: 14px;
     padding: 16px 0;
-    border-block: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .filter-controls {

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { AlertTriangle } from "@lucide/svelte";
   import { AlertDialog } from "bits-ui";
 
   interface Props {
@@ -31,10 +30,6 @@
         if (busy) event.preventDefault();
       }}
     >
-      <div class="dialog-kicker">
-        <AlertTriangle size={16} strokeWidth={1.8} aria-hidden="true" />
-        Destructive action
-      </div>
       <AlertDialog.Title class="dialog-title">{title}</AlertDialog.Title>
       <AlertDialog.Description class="dialog-description">{description}</AlertDialog.Description>
       <div class="dialog-actions">
