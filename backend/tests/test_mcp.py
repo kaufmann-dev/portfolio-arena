@@ -38,6 +38,24 @@ class TestMcpAuth:
         client.delete(f"/api/keys/{created['id']}", headers=admin_headers)
         assert _rpc(client, self._headers(created["key"]), "tools/list").status_code == 401
 
+    def test_internal_worker_token_can_only_call_read_tools(self, client):
+        headers = self._headers("test-internal-worker-token")
+        allowed = _rpc(
+            client,
+            headers,
+            "tools/call",
+            {"name": "get_effective_date", "arguments": {}},
+        )
+        assert allowed.status_code == 200
+
+        blocked = _rpc(
+            client,
+            headers,
+            "tools/call",
+            {"name": "create_agent", "arguments": {"name": "not allowed"}},
+        )
+        assert blocked.status_code == 403
+
 
 class TestMcpTools:
     def test_endpoint_works_without_trailing_slash(self, client, mcp_headers):
@@ -56,17 +74,21 @@ class TestMcpTools:
             "get_portfolio",
             "get_arena_overview",
             "create_allocation",
-            "get_evaluation_schedule",
-            "begin_evaluation_run",
-            "submit_evaluation_allocation",
+            "get_evaluator_dashboard",
+            "configure_portfolio_evaluator",
+            "run_evaluations",
+            "cancel_evaluation_run",
+            "retry_evaluation_run",
+            "list_evaluation_runs",
         } <= names
         # Key management is never exposed as a tool.
         assert not any("key" in name.lower() for name in names)
 
-    def test_evaluation_schedule(self, client, mcp_headers):
-        data = _call_tool(client, mcp_headers, "get_evaluation_schedule")
-        assert set(data) == {"server_time", "scheduled_for", "opens_at", "cutoff_at", "state"}
-        assert data["state"] in {"upcoming", "open"}
+    def test_evaluator_dashboard(self, client, mcp_headers):
+        data = _call_tool(client, mcp_headers, "get_evaluator_dashboard")
+        assert set(data) == {"settings", "portfolios", "runtime"}
+        assert data["settings"]["enabled"] is True
+        assert data["runtime"]["online"] is False
 
     def test_arena_overview(self, client, mcp_headers, sample_portfolio):
         data = _call_tool(client, mcp_headers, "get_arena_overview")

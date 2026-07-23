@@ -1,0 +1,8 @@
+{
+  "name": "portfolio-arena-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@openai/codex": "0.144.5"
+  }
+}

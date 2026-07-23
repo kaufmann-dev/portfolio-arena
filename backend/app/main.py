@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from sqlalchemy import text
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -77,6 +78,12 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(api_router)
+
+    @app.get("/api/health")
+    def health():
+        with session_factory()() as session:
+            session.execute(text("SELECT 1"))
+        return {"status": "ok"}
 
     # Mount before the SPA catch-all: routes match in registration order, so the
     # catch-all would otherwise swallow GET /mcp and serve index.html.

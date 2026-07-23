@@ -5,6 +5,8 @@ package. Every MCP request must present a valid API key — there is no anonymou
 access — checked by a thin ASGI wrapper around the streamable-HTTP app.
 """
 
+import json
+import secrets
 from datetime import UTC, datetime
 
 import anyio
@@ -13,8 +15,18 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ..config import get_settings
 from ..db import session_factory
 from ..security import resolve_api_key
+
+INTERNAL_READ_TOOLS = frozenset(
+    {
+        "get_portfolio",
+        "get_effective_date",
+        "validate_symbol",
+        "search_symbols",
+    }
+)
 
 INSTRUCTIONS = """\
 Portfolio Arena tracks AI-managed stock portfolios against SPY/RSP benchmarks.
@@ -55,7 +67,15 @@ def _extract_key(headers: list[tuple[bytes, bytes]]) -> str | None:
     return header_map.get("x-api-key", "").strip() or None
 
 
-def _authenticate(raw: str) -> bool:
+def _is_internal_key(raw: str) -> bool:
+    internal_key = get_settings().internal_mcp_api_key
+    return internal_key is not None and secrets.compare_digest(
+        raw,
+        internal_key.get_secret_value(),
+    )
+
+
+def _authenticate_api_key(raw: str) -> bool:
     """Verify the key and stamp last_used_at. Runs in a worker thread (psycopg2
     is blocking), so it opens and closes its own session."""
     session = session_factory()()
@@ -68,6 +88,46 @@ def _authenticate(raw: str) -> bool:
         return True
     finally:
         session.close()
+
+
+async def _buffer_request(receive: Receive) -> tuple[bytes, Receive]:
+    messages = []
+    body = bytearray()
+    while True:
+        message = await receive()
+        messages.append(message)
+        if message["type"] != "http.request":
+            break
+        body.extend(message.get("body", b""))
+        if not message.get("more_body", False):
+            break
+
+    index = 0
+
+    async def replay() -> dict:
+        nonlocal index
+        if index < len(messages):
+            message = messages[index]
+            index += 1
+            return message
+        return await receive()
+
+    return bytes(body), replay
+
+
+def _internal_calls_are_read_only(body: bytes) -> bool:
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return True
+    messages = payload if isinstance(payload, list) else [payload]
+    for message in messages:
+        if not isinstance(message, dict) or message.get("method") != "tools/call":
+            continue
+        params = message.get("params")
+        if not isinstance(params, dict) or params.get("name") not in INTERNAL_READ_TOOLS:
+            return False
+    return True
 
 
 class ApiKeyAuth:
@@ -86,10 +146,20 @@ class ApiKeyAuth:
         if scope["path"] == "":
             scope = {**scope, "path": "/"}
         raw = _extract_key(scope.get("headers", []))
-        if not raw or not await anyio.to_thread.run_sync(_authenticate, raw):
+        is_internal = bool(raw and _is_internal_key(raw))
+        if not raw or (not is_internal and not await anyio.to_thread.run_sync(_authenticate_api_key, raw)):
             response = JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
             await response(scope, receive, send)
             return
+        if is_internal and scope["method"] == "POST":
+            body, receive = await _buffer_request(receive)
+            if not _internal_calls_are_read_only(body):
+                response = JSONResponse(
+                    {"detail": "The internal evaluator token is read-only"},
+                    status_code=403,
+                )
+                await response(scope, receive, send)
+                return
         await self.app(scope, receive, send)
 
 

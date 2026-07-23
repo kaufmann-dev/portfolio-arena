@@ -2,10 +2,10 @@
 
 A self-hosted web app that runs a long-term experiment: **can LLMs pick portfolios that beat SPY?**
 
-Portfolio Arena is evaluator-agnostic: it exposes an authenticated MCP contract for scheduling and
-submitting automated evaluations without containing or deploying an evaluator itself. The companion
-[Portfolio Arena Evaluator](https://github.com/kaufmann-dev/portfolio-arena-evaluator) is one client
-of that contract. Manual prompt-copy and MCP workflows remain available.
+Portfolio Arena includes a website-controlled Codex evaluator. One Nixpacks deployment starts the
+web app, scheduler, and evaluator worker together; the admin panel controls models, weekdays,
+concurrency, execution settings, immediate runs, cancellation, retries, and history. Manual
+allocation and authenticated MCP workflows remain available.
 
 The app simulates the allocations as paper portfolios from Yahoo Finance data and tracks them live
 against SPY on a public leaderboard. It is an _arena_: honest, deterministic measurement — not
@@ -16,6 +16,10 @@ trading and not advice.
 - **Backend** — FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (`backend/`). Serves the built SPA
   with fallback routing.
 - **Frontend** — Svelte 5 + Vite + TypeScript SPA (`frontend/`), built to `frontend/dist/`.
+- **Evaluator** — an integrated Codex worker (`backend/app/evaluator/`) whose configuration, queue,
+  leases, and history live in PostgreSQL. It uses Massive and live web search for current research.
+- **Production supervisor** — one Nixpacks start command launches FastAPI and the evaluator worker,
+  restarts the worker if it fails, and shuts both down together.
 - **Admin authentication** — confidential OpenID Connect Authorization Code + PKCE, backed by
   opaque server-side sessions. Public leaderboard and detail views remain anonymous.
 - **Prices** — Yahoo Finance chart endpoint (daily adjusted closes), fetched in parallel with
@@ -24,8 +28,8 @@ trading and not advice.
   entered allocations + cached price series. Adjusted closes change retroactively
   (dividends/splits), so recomputation is _more_ correct than snapshotting.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
-  endpoint exposing the full app surface as tools, including the evaluator lease/submission
-  protocol. See below.
+  endpoint exposing the full app surface as tools, including evaluator administration. The
+  worker-only queue and submission protocol is private to the deployment.
 
 ## Experiment-integrity rules (enforced in code)
 
@@ -70,11 +74,9 @@ per-portfolio history) — **except** API-key management, which stays in the adm
   rebalance one portfolio (strategy and structured policy, drifted holdings with entry/current
   prices, the full allocation history with general and per-position notes, performance metrics).
   `get_arena_overview()` compares every portfolio's performance at once.
-- **Automation tools.** `get_evaluation_schedule` returns Arena's server time and next actionable
-  NYSE session (`scheduled_for`, `opens_at`, `cutoff_at`, and `state`).
-  `begin_evaluation_run`, `submit_evaluation_allocation`, and `fail_evaluation_run` enforce the
-  window, lease, two-attempt limit, and atomic submission. `list_evaluation_runs` exposes the
-  persisted audit history also shown in the admin evaluation-history UI.
+- **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
+  `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
+  `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
 - **Connecting a client.** e.g. `claude mcp add --transport http arena https://<host>/mcp
 --header "Authorization: Bearer <key>"`.
 
@@ -92,18 +94,24 @@ admin-only access; provider policy defines who is admitted.
 
 ## Evaluator Integration
 
-Arena is the sole scheduling authority. `get_evaluation_schedule()` returns `server_time`,
-`scheduled_for`, `opens_at`, `cutoff_at`, and `state` (`upcoming` or `open`). Before a trading-day
-window opens it returns that day's upcoming session; while the window is active it returns that
-session as open; after cutoff and on non-trading days it returns the next session. Scheduled close
-times include NYSE holidays, daylight-saving changes, and early closes.
+The evaluator is part of Portfolio Arena. Its global and per-portfolio settings are stored in
+PostgreSQL and edited from the admin **Automation** tab. A portfolio can run on any selected Monday
+through Friday, or remain manual-only with no selected weekdays. If a selected day is an NYSE
+holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected
+days converge on the same session. Scheduled close times honor early closes and daylight-saving
+changes.
 
-External evaluators choose their own portfolio/model pairs and poll this tool. Arena retains all
-leases, attempt limits, cutoff enforcement, proposal and symbol validation, atomic submission,
-persistence, and evaluation history. The repositories share no source package; their only boundary
-is the authenticated MCP contract. See the standalone
-[Portfolio Arena Evaluator](https://github.com/kaufmann-dev/portfolio-arena-evaluator) for the Codex
-worker, Podman setup, and deployment instructions.
+The website can queue an enabled portfolio at any time. Each run captures the model, reasoning,
+service tier, timeout, attempt limit, and submission deadline in effect when it is queued. Pausing
+stops new claims while active work finishes. Queued work can be cancelled immediately; running work
+receives a cancellation request and its Codex process is terminated. Failed runs can be retried
+manually. All paths use the same server-side proposal and symbol validation and atomic allocation
+write.
+
+Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
+the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
+deployment-only: `MASSIVE_API_KEY` is passed to the worker but removed from the web process, and the
+internal worker bearer token is generated in memory at startup.
 
 When upgrading an existing Arena database, migration `0006` intentionally aborts if historical cash
 positions exist. Back up the database and resolve those rows before deploying; the migration will
@@ -149,13 +157,17 @@ reuse an existing database. Yahoo is stubbed in tests; nothing hits the network.
 
 - Create one application from `kaufmann-dev/portfolio-arena` with Build Pack `Nixpacks` and Base
   Directory `/`.
-- Attach a PostgreSQL resource, configure a public domain, and use `GET /api/leaderboard` as the
-  health check.
-- The tracked `nixpacks.toml` builds the SPA, runs migrations, and starts FastAPI on Coolify's
-  injected `PORT`.
-- Deploy an evaluator independently. The companion
-  [Portfolio Arena Evaluator](https://github.com/kaufmann-dev/portfolio-arena-evaluator) documents
-  its separate Dockerfile application and persistent Codex storage.
+- Attach a PostgreSQL resource, configure a public domain, and set the health-check path to
+  `/api/health`.
+- Add persistent storage at `/var/lib/codex`. After the first deployment, open the application's
+  terminal and run `CODEX_HOME=/var/lib/codex codex login --device-auth`; the login survives
+  redeployments in that volume.
+- Set the required variables below. Coolify injects `PORT`; no custom start command or Dockerfile is
+  needed.
+- Deploy. The tracked `nixpacks.toml` builds the SPA and starts one supervisor that runs migrations,
+  FastAPI, the scheduler, and the evaluator worker automatically.
+- When replacing the former two-application setup, stop the old standalone evaluator before
+  deploying this version so both schedulers cannot create work during the cutover.
 
 ### Environment Variables
 
@@ -171,18 +183,20 @@ Web app:
 | `ARENA_OIDC_CLIENT_ID`     | Confidential OIDC client ID                           (**required**)  |
 | `ARENA_OIDC_CLIENT_SECRET` | Confidential OIDC client secret                       (**required**)  |
 | `ARENA_OIDC_STATE_SECRET`  | Random secret of at least 32 characters for OIDC state (**required**) |
+| `MASSIVE_API_KEY`          | Massive market-data credential used only by the evaluator worker      |
 
 **Optional**
 
 Web app:
 
-| Variable                        | Default | Purpose                             |
-| ------------------------------- | ------- | ----------------------------------- |
-| `ARENA_DEFAULT_COST_BPS`        | `10`    | Default cost bps for new portfolios |
-| `ARENA_DB_CONNECT_RETRIES`      | `30`    | Retries before failing startup      |
-| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`   | Seconds between retries             |
-| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`  | Price cache TTL                     |
-| `PORT`                          | `8000`  | Listen port                         |
+| Variable                        | Default          | Purpose                                       |
+| ------------------------------- | ---------------- | --------------------------------------------- |
+| `ARENA_DEFAULT_COST_BPS`        | `10`             | Default cost bps for new portfolios           |
+| `ARENA_DB_CONNECT_RETRIES`      | `30`             | Retries before failing startup                |
+| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`            | Seconds between retries                       |
+| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`           | Price cache TTL                               |
+| `CODEX_HOME`                    | `/var/lib/codex` | Codex authentication and generated config dir |
+| `PORT`                          | `8000`           | Listen port; normally injected by Coolify     |
 
 ## Non-goals (v1)
 

@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from .config import BENCHMARK_AGENT_SLUG, BENCHMARK_PROMPT_SLUG, BENCHMARKS, get_settings
-from .models import Agent, Portfolio, Prompt, Setting
+from .models import Agent, EvaluatorSettings, Portfolio, Prompt, Setting
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ def seed_settings(session: Session) -> None:
         .values(key=DEFAULT_COST_BPS_KEY, value=str(get_settings().default_cost_bps))
         .on_conflict_do_nothing(index_elements=["key"])
     )
+    session.execute(pg_insert(EvaluatorSettings).values(id=1).on_conflict_do_nothing(index_elements=["id"]))
     session.commit()
 
 

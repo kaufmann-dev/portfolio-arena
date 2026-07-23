@@ -8,7 +8,7 @@ Each tool opens its own session (FastMCP runs sync tools in a worker thread).
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,11 +16,10 @@ from sqlalchemy.orm import Session
 from ..db import session_factory
 from ..models import Agent, Portfolio, Prompt
 from ..schemas import AllocationPolicyIn, PositionIn
-from ..services import admin_ops
+from ..services import admin_ops, evaluator
 from ..services.admin_ops import AdminOpError
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import ensure_benchmark_allocations
-from ..services.evaluation_schedule import get_evaluation_schedule as evaluation_schedule
 from ..services.serialize import serialize_summary
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
 from ..services.trading_calendar import effective_date_for
@@ -358,63 +357,83 @@ def delete_allocation(allocation_id: int) -> dict:
         return _guard(admin_ops.delete_allocation, session, allocation_id)
 
 
-# --- Automated evaluation runner ------------------------------------------
+# --- Evaluator control -----------------------------------------------------
 
 
 @mcp.tool()
-def get_evaluation_schedule() -> dict:
-    """Return Arena's next actionable evaluation session and server-owned window.
-    Before the window it is upcoming, during the window it is open, and after
-    cutoff or on a non-trading day the next NYSE session is returned."""
-    return evaluation_schedule()
+def get_evaluator_dashboard() -> dict:
+    """Read evaluator settings, per-portfolio configuration, and live worker status."""
+    with _session() as session:
+        return evaluator.get_dashboard(session)
 
 
 @mcp.tool()
-def begin_evaluation_run(
-    portfolio_slug: str,
-    scheduled_for: date,
+def update_evaluator_settings(
+    enabled: bool,
+    max_concurrency: int,
+    poll_seconds: int,
+    attempt_timeout_seconds: int,
+    max_attempts: int,
+    reasoning_effort: str,
+    service_tier: str,
+    start_before_close_minutes: int,
+    cutoff_before_close_minutes: int,
+) -> dict:
+    """Update global evaluator scheduling and execution settings."""
+    with _session() as session:
+        return _guard(
+            evaluator.update_settings,
+            session,
+            enabled=enabled,
+            max_concurrency=max_concurrency,
+            poll_seconds=poll_seconds,
+            attempt_timeout_seconds=attempt_timeout_seconds,
+            max_attempts=max_attempts,
+            reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
+            start_before_close_minutes=start_before_close_minutes,
+            cutoff_before_close_minutes=cutoff_before_close_minutes,
+        )
+
+
+@mcp.tool()
+def configure_portfolio_evaluator(
+    portfolio_id: int,
+    enabled: bool,
     model: str,
-    codex_version: str,
+    weekdays: list[int],
 ) -> dict:
-    """Acquire an evaluation attempt during the server-enforced pre-close window.
-    The result says whether to run, skip, wait for another lease, or stop after
-    exhausting attempts."""
+    """Enable or disable one portfolio, select its model, and choose weekdays 0-4."""
     with _session() as session:
         return _guard(
-            admin_ops.begin_evaluation_run,
+            evaluator.update_portfolio_config,
             session,
-            portfolio_slug=portfolio_slug,
-            scheduled_for=scheduled_for,
+            portfolio_id=portfolio_id,
+            enabled=enabled,
             model=model,
-            codex_version=codex_version,
+            weekdays=weekdays,
         )
 
 
 @mcp.tool()
-def submit_evaluation_allocation(
-    run_id: int,
-    positions: list[PositionIn],
-    note: str,
-    report: str,
-) -> dict:
-    """Atomically submit a runner proposal and mark its evaluation successful.
-    The server revalidates every symbol, weight, policy limit, lease, and cutoff."""
+def run_evaluations(portfolio_ids: list[int]) -> dict:
+    """Queue immediate evaluations for enabled portfolios."""
     with _session() as session:
-        return _guard(
-            admin_ops.submit_evaluation_allocation,
-            session,
-            run_id=run_id,
-            positions=_positions(positions),
-            note=note,
-            report=report,
-        )
+        return _guard(evaluator.enqueue_manual_runs, session, portfolio_ids=portfolio_ids)
 
 
 @mcp.tool()
-def fail_evaluation_run(run_id: int, error: str) -> dict:
-    """Record a bounded evaluation attempt failure for audit and retry."""
+def cancel_evaluation_run(run_id: int) -> dict:
+    """Cancel queued work or request cancellation of a running Codex process."""
     with _session() as session:
-        return _guard(admin_ops.fail_evaluation_run, session, run_id=run_id, error=error)
+        return _guard(evaluator.cancel_run, session, run_id=run_id)
+
+
+@mcp.tool()
+def retry_evaluation_run(run_id: int) -> dict:
+    """Queue a fresh immediate retry linked to a failed evaluation run."""
+    with _session() as session:
+        return _guard(evaluator.retry_run, session, run_id=run_id)
 
 
 @mcp.tool()
@@ -427,7 +446,7 @@ def list_evaluation_runs(
     """List evaluation history newest-first with optional filters and cursor pagination."""
     with _session() as session:
         return _guard(
-            admin_ops.list_evaluation_runs,
+            evaluator.list_runs,
             session,
             portfolio_id=portfolio_id,
             status=status,

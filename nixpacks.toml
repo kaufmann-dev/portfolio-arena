@@ -1,11 +1,17 @@
 # Polyglot build: Python API (root requirements.txt) that serves a built
 # Vite/Svelte frontend. The Python provider installs requirements.txt; the Node
-# provider (pinned by .nvmrc) provides node/npm for the frontend build below.
+# provider (pinned by .nvmrc) installs Codex and builds the frontend.
 providers = ["python", "node"]
+
+[phases.setup]
+# Keep the Python toolchain on the same Nixpkgs revision selected by the Node
+# 24 provider. Mixed revisions can expose incompatible libstdc++/ICU versions.
+nixpkgsArchive = "23f9169c4ccce521379e602cc82ed873a1f1b52b"
 
 [phases.build]
 cmds = ["cd frontend && npm ci && npm run build"]
 
-# Run pending Alembic migrations, then launch the API (which serves frontend/dist).
+# Launch one supervisor that starts the web API and integrated evaluator worker.
+# FastAPI's lifespan runs pending Alembic migrations before becoming healthy.
 [start]
-cmd = "cd backend && python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+cmd = "cd backend && python -m app.production"
