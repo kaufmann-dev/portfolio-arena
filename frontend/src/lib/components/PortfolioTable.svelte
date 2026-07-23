@@ -366,14 +366,6 @@
     background: var(--bg-surface-hover);
   }
 
-  .ranking-table tr.benchmark {
-    background: var(--bg-inset);
-  }
-
-  .ranking-table tr.benchmark:hover {
-    background: var(--bg-surface-hover);
-  }
-
   .rank-column {
     width: 54px;
     color: var(--text-tertiary);
@@ -547,7 +539,6 @@
 
     .rank-card.benchmark {
       border-color: var(--border-strong);
-      background: var(--bg-inset);
     }
 
     .rank-card-head {
@@ -627,10 +618,6 @@
       min-width: 0;
       padding: 8px 9px;
       background: var(--bg-surface);
-    }
-
-    .rank-card.benchmark .mobile-metric {
-      background: var(--bg-inset);
     }
 
     .mobile-metric dd {
