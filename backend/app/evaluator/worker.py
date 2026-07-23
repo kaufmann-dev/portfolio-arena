@@ -114,7 +114,9 @@ default_tools_approval_mode = "approve"
 required = true
 
 [mcp_servers.massive]
-command = "mcp_massive"
+command = "/bin/bash"
+args = ["-lc", "exec mcp_massive"]
+env_vars = ["MASSIVE_API_KEY"]
 default_tools_approval_mode = "approve"
 required = true
 """

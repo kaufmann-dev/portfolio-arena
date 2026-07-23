@@ -50,6 +50,9 @@ def test_generated_codex_config_is_read_only_and_internal(tmp_path):
     assert 'default_permissions = ":read-only"' in config
     assert 'url = "http://127.0.0.1:8000/mcp"' in config
     assert config.count('default_tools_approval_mode = "approve"') == 2
+    assert 'command = "/bin/bash"' in config
+    assert 'args = ["-lc", "exec mcp_massive"]' in config
+    assert 'env_vars = ["MASSIVE_API_KEY"]' in config
     assert "submit_evaluation" not in config
     assert "internal-secret" not in config
     assert "massive-secret" not in config
