@@ -14,6 +14,7 @@
     weight: string;
     note: string;
     status: "idle" | "checking" | "ok" | "error";
+    validationRequestId: number;
     resolved?: ResolvedSymbol;
     error?: string;
   }
@@ -40,7 +41,14 @@
   let nextRowId = 1;
 
   function emptyRow(): Row {
-    return { id: nextRowId++, symbol: "", weight: "", note: "", status: "idle" };
+    return {
+      id: nextRowId++,
+      symbol: "",
+      weight: "",
+      note: "",
+      status: "idle",
+      validationRequestId: 0,
+    };
   }
 
   function toRows(positions: { symbol: string; weight_pct: number; note?: string }[]): Row[] {
@@ -50,6 +58,7 @@
       weight: String(position.weight_pct),
       note: position.note ?? "",
       status: "idle",
+      validationRequestId: 0,
     }));
     return rows.length ? rows : [emptyRow()];
   }
@@ -94,23 +103,37 @@
     rows = next;
   }
 
-  async function checkSymbol(index: number) {
-    const row = rows[index];
+  function updateSymbol(row: Row, value: string): void {
+    row.validationRequestId += 1;
+    row.symbol = value;
+    row.status = "idle";
+    row.resolved = undefined;
+    row.error = undefined;
+  }
+
+  async function checkSymbol(row: Row) {
     const symbol = row.symbol.trim().toUpperCase();
+    const requestId = ++row.validationRequestId;
+    row.symbol = symbol;
+    row.resolved = undefined;
+    row.error = undefined;
+
     if (!symbol) {
       row.status = "idle";
-      row.resolved = undefined;
       return;
     }
-    row.symbol = symbol;
+
     row.status = "checking";
     try {
-      row.resolved = await apiJson<ResolvedSymbol>(`/api/symbols/${encodeURIComponent(symbol)}`);
+      const resolved = await apiJson<ResolvedSymbol>(`/api/symbols/${encodeURIComponent(symbol)}`);
+      if (row.validationRequestId !== requestId) return;
+
+      row.resolved = resolved;
       row.status = "ok";
-      row.error = undefined;
     } catch (e) {
+      if (row.validationRequestId !== requestId) return;
+
       row.status = "error";
-      row.resolved = undefined;
       row.error = e instanceof Error ? e.message : "Symbol validation failed";
     }
   }
@@ -171,90 +194,112 @@
   }
 </script>
 
-<form onsubmit={submit} class="alloc-form">
+<form onsubmit={submit} class="alloc-form" aria-busy={submitting}>
   {#if positionsEditable}
-    <fieldset>
-      <legend>
-        Positions <span class="muted">(USD-denominated equities and ETFs; fully invested)</span>
-      </legend>
+    <fieldset class="positions-fieldset">
+      <legend class="positions-legend">Target positions</legend>
+      <div class="positions-head">
+        <div>
+          <span class="positions-title" aria-hidden="true">Target positions</span>
+          <p class="muted">USD-denominated equities and ETFs · fully invested</p>
+        </div>
+        <span class={["weight-total", "num", sumOk ? "ok" : "neg"]} aria-live="polite">
+          <Sigma size={15} strokeWidth={1.8} aria-hidden="true" />
+          {weightSum.toFixed(4).replace(/\.?0+$/, "")}%
+        </span>
+      </div>
       {#if policy}
-        <p class="muted policy-hint">
-          {policy.derived_min_positions}–{policy.derived_max_positions} positions;
-          {policy.min_position_weight_pct}%–{policy.max_position_weight_pct}% each.
-        </p>
+        <div class="policy-strip">
+          <span><strong>{policy.derived_min_positions}–{policy.derived_max_positions}</strong> positions</span
+          >
+          <span
+            ><strong>{policy.min_position_weight_pct}%–{policy.max_position_weight_pct}%</strong> each</span
+          >
+        </div>
       {/if}
       <div class="rows">
         {#each rows as row, index (row.id)}
-          <div class="row">
-            <div class="cell symbol-cell">
+          <article class="position-row">
+            <div class="position-index num" aria-hidden="true">{String(index + 1).padStart(2, "0")}</div>
+            <div class="symbol-cell">
+              <label for="symbol-{row.id}">Symbol</label>
               <input
+                id="symbol-{row.id}"
                 type="text"
-                placeholder="AAPL / SPY / QQQ"
-                bind:value={row.symbol}
-                onblur={() => checkSymbol(index)}
+                placeholder="AAPL"
+                value={row.symbol}
+                oninput={(event) => updateSymbol(row, event.currentTarget.value)}
+                onblur={() => checkSymbol(row)}
                 aria-label="Symbol for row {index + 1}"
-                class:invalid={row.status === "error"}
+                class={row.status === "error" ? "invalid" : undefined}
               />
-              <div class="resolution" aria-live="polite">
+              <div class="resolution" aria-live="polite" aria-atomic="true">
                 {#if row.status === "checking"}
                   <span class="muted">checking…</span>
                 {:else if row.status === "ok" && row.resolved}
-                  <span class="ok"
-                    ><CircleCheck size={14} /> {row.resolved.name} · {row.resolved.security_type}</span
-                  >
+                  <span class="ok">
+                    <CircleCheck size={14} aria-hidden="true" />
+                    {row.resolved.name} · {row.resolved.security_type}
+                  </span>
                 {:else if row.status === "error"}
                   <span class="neg">{row.error}</span>
                 {/if}
               </div>
             </div>
-            <input
-              class="weight"
-              type="number"
-              step="0.0001"
-              min="0"
-              placeholder="%"
-              bind:value={row.weight}
-              aria-label="Weight percent for row {index + 1}"
-            />
+            <div class="weight-cell">
+              <label for="weight-{row.id}">Weight %</label>
+              <input
+                id="weight-{row.id}"
+                class="weight"
+                type="number"
+                step="0.0001"
+                min="0"
+                placeholder="0"
+                bind:value={row.weight}
+                aria-label="Weight percent for row {index + 1}"
+              />
+            </div>
             <div class="row-actions">
               <button
                 type="button"
-                class="btn small"
+                class="btn small icon-btn"
                 onclick={() => move(index, -1)}
                 aria-label="Move row {index + 1} up"
                 disabled={index === 0}><ChevronUp size={14} /></button
               >
               <button
                 type="button"
-                class="btn small"
+                class="btn small icon-btn"
                 onclick={() => move(index, 1)}
                 aria-label="Move row {index + 1} down"
                 disabled={index === rows.length - 1}><ChevronDown size={14} /></button
               >
               <button
                 type="button"
-                class="btn small danger"
+                class="btn small danger icon-btn"
                 onclick={() => removeRow(index)}
                 aria-label="Remove row {index + 1}"><X size={14} /></button
               >
             </div>
-            <input
-              class="pos-note"
-              type="text"
-              placeholder="Agent note for this position (passed to the next cycle)"
-              bind:value={row.note}
-              aria-label="Agent note for row {index + 1}"
-            />
-          </div>
+            <div class="note-cell">
+              <label for="position-note-{row.id}">Handoff note <span class="muted">optional</span></label>
+              <input
+                id="position-note-{row.id}"
+                class="pos-note"
+                type="text"
+                placeholder="Why this position belongs in the portfolio"
+                bind:value={row.note}
+                aria-label="Agent note for row {index + 1}"
+              />
+            </div>
+          </article>
         {/each}
       </div>
       <div class="rows-footer">
         <button type="button" class="btn small" onclick={addRow}>+ Add position</button>
-        <span class="sum num" class:ok={sumOk} class:neg={!sumOk} aria-live="polite">
-          <Sigma size={14} />
-          {weightSum.toFixed(4).replace(/\.?0+$/, "")}%
-          {#if !sumOk}(must be exactly 100){/if}
-        </span>
+        {#if !sumOk}
+          <span class="sum-message neg">Weights must total exactly 100%.</span>
+        {/if}
         <button type="button" class="btn small" onclick={normalize} disabled={weightSum <= 0}>
           Normalize to 100
         </button>
@@ -267,8 +312,12 @@
   {/if}
 
   <div class="field">
-    <label for="alloc-note">Notes <span class="muted">(optional)</span></label>
-    <textarea id="alloc-note" bind:value={note} rows="4"></textarea>
+    <label for="alloc-note">Allocation handoff <span class="muted">optional</span></label>
+    <textarea
+      id="alloc-note"
+      bind:value={note}
+      rows="4"
+      placeholder="Summarize the thesis, changes, and what the next evaluation should watch."></textarea>
   </div>
 
   {#if formError}
@@ -289,46 +338,102 @@
 
 <style>
   .alloc-form {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  fieldset {
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius);
-    padding: 14px;
-  }
-
-  legend {
-    padding: 0 6px;
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-secondary);
-  }
-
-  .rows {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .row {
     display: grid;
-    grid-template-columns: minmax(200px, 1fr) 110px auto;
-    gap: 8px;
-    align-items: start;
+    gap: 22px;
   }
 
-  .weight {
-    text-align: right;
+  .positions-fieldset {
+    padding: 0;
+    border: 0;
+  }
+
+  .positions-title {
+    display: block;
+    padding: 0;
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 680;
+  }
+
+  .positions-legend {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .positions-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border-strong);
+  }
+
+  .positions-head p {
+    margin-top: 3px;
+    font-size: 12px;
+  }
+
+  .weight-total {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .policy-strip {
+    display: flex;
+    gap: 18px;
+    padding: 10px 0;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 12px;
+  }
+
+  .policy-strip strong {
+    color: var(--text-primary);
     font-family: var(--font-mono);
   }
 
+  .rows {
+    display: grid;
+  }
+
+  .position-row {
+    display: grid;
+    grid-template-columns: 40px minmax(180px, 0.8fr) 120px auto minmax(220px, 1.2fr);
+    gap: 10px;
+    align-items: start;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .position-index {
+    padding-top: 31px;
+    color: var(--text-tertiary);
+    font-size: 11px;
+  }
+
+  .symbol-cell,
+  .weight-cell,
+  .note-cell {
+    min-width: 0;
+  }
+
+  .weight {
+    font-family: var(--font-mono);
+    text-align: right;
+  }
+
   .pos-note {
-    grid-column: 1 / -1;
     font-size: 12.5px;
   }
 
@@ -337,40 +442,46 @@
   }
 
   .resolution {
+    min-height: 18px;
+    margin-top: 4px;
     font-size: 12px;
-    min-height: 16px;
-    margin-top: 3px;
   }
 
   .ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     color: var(--pos);
   }
 
   .row-actions {
     display: flex;
     gap: 4px;
-    padding-top: 3px;
+    padding-top: 27px;
+  }
+
+  .row-actions .icon-btn {
+    min-width: 34px;
   }
 
   .rows-footer {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-top: 12px;
+    padding-top: 14px;
     flex-wrap: wrap;
   }
 
-  .sum {
-    font-weight: 600;
+  .sum-message {
     margin-left: auto;
+    font-size: 12px;
   }
 
   .locked-note {
-    padding: 10px 12px;
+    padding: 12px 14px;
+    color: var(--warn);
     background: var(--warn-bg);
     border: 1px solid var(--warn);
-    border-radius: var(--radius-sm);
-    color: var(--warn);
   }
 
   .submit-line {
@@ -380,13 +491,68 @@
     flex-wrap: wrap;
   }
 
-  @media (max-width: 560px) {
-    .row {
-      grid-template-columns: 1fr 90px;
+  @media (max-width: 900px) {
+    .position-row {
+      grid-template-columns: 32px minmax(0, 1fr) 100px auto;
+    }
+
+    .note-cell {
+      grid-column: 2 / -1;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .positions-head {
+      align-items: center;
+    }
+
+    .policy-strip {
+      display: grid;
+      gap: 4px;
+    }
+
+    .position-row {
+      grid-template-columns: minmax(0, 1fr) 92px;
+      padding: 16px 0;
+    }
+
+    .position-index {
+      display: none;
     }
 
     .row-actions {
       grid-column: 1 / -1;
+      grid-row: 2;
+      padding-top: 0;
+    }
+
+    .note-cell {
+      grid-column: 1 / -1;
+      grid-row: 3;
+    }
+
+    .row-actions .icon-btn {
+      width: 44px;
+      min-width: 44px;
+    }
+
+    .rows-footer {
+      align-items: stretch;
+    }
+
+    .rows-footer .btn {
+      flex: 1;
+    }
+
+    .sum-message {
+      width: 100%;
+      margin-left: 0;
+      order: -1;
+    }
+
+    .submit-line {
+      align-items: stretch;
+      flex-direction: column;
     }
   }
 </style>
