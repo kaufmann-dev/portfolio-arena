@@ -4,6 +4,11 @@ import math
 
 from ..models import Portfolio, Prompt
 
+PORTFOLIO_LIFECYCLE_INSTRUCTION = (
+    "If the returned allocation history is empty, construct the portfolio's initial allocation. "
+    "Otherwise, manage and rebalance the existing portfolio; do not rebuild it from scratch."
+)
+
 
 def allocation_policy_from_limits(minimum: float, maximum: float) -> dict:
     return {
@@ -41,8 +46,8 @@ def manual_execution_prompt(portfolio: Portfolio) -> str:
     return f"""Evaluate and rebalance the Portfolio Arena portfolio `{portfolio.slug}`.
 
 First call `get_portfolio` with `{portfolio.slug}`. Treat its current holdings, allocation history,
-notes, effective date, and performance as the authoritative state. Manage the existing portfolio;
-do not rebuild it from scratch.
+notes, effective date, and performance as the authoritative state.
+{PORTFOLIO_LIFECYCLE_INSTRUCTION}
 
 Strategy:
 {prompt.text.strip()}

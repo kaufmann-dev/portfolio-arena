@@ -78,8 +78,9 @@ def get_portfolio(slug_or_id: str) -> dict:
         portfolio_id = _resolve_portfolio(session, slug_or_id).id
         detail = _guard(admin_ops.portfolio_admin_detail, session, portfolio_id)
         payload = detail["portfolio"]
-        # Drop token-heavy chart data the rebalancing agent doesn't need.
-        for key in ("series", "spy_series", "sparkline", "stale_days"):
+        # Drop presentation data and the caller-facing manual prompt. Automated
+        # and manual callers already receive their own execution instructions.
+        for key in ("execution_prompt", "series", "spy_series", "sparkline", "stale_days"):
             payload.pop(key, None)
         prompt_payload = payload.get("prompt")
         prompt_id = prompt_payload.get("id") if prompt_payload else None

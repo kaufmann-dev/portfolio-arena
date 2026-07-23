@@ -107,7 +107,7 @@ class TestMcpTools:
         assert portfolio["prompt"]["text"]  # full prompt text, for the rebalancing agent
         assert portfolio["allocations"]  # history with notes
         assert "next_entry" in portfolio
-        for stripped in ("series", "spy_series", "sparkline", "stale_days"):
+        for stripped in ("execution_prompt", "series", "spy_series", "sparkline", "stale_days"):
             assert stripped not in portfolio
 
     def test_benchmark_portfolio_uses_hardcoded_strategy(

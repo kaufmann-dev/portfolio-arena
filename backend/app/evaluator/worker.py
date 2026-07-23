@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from ..services.prompt_policy import PORTFOLIO_LIFECYCLE_INSTRUCTION
 from .config import EvaluatorRuntimeSettings
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,25 @@ class ProposalPosition(BaseModel):
 
 
 class Proposal(BaseModel):
-    positions: list[ProposalPosition] = Field(min_length=1)
+    status: Literal["proposal", "blocked"]
+    positions: list[ProposalPosition]
     note: str = Field(max_length=4000)
     report: str = Field(max_length=20_000)
+    error: str = Field(max_length=4000)
+
+    @model_validator(mode="after")
+    def validate_status_payload(self):
+        if self.status == "proposal":
+            if not self.positions:
+                raise ValueError("A proposal must contain at least one position")
+            if self.error:
+                raise ValueError("A proposal cannot contain an error")
+        else:
+            if self.positions:
+                raise ValueError("A blocked result cannot contain positions")
+            if not self.error.strip():
+                raise ValueError("A blocked result must explain the error")
+        return self
 
 
 class PortfolioRef(BaseModel):
@@ -62,6 +79,10 @@ class RunCancelled(RuntimeError):
     """The administrator or scheduled cutoff cancelled an active process."""
 
 
+class EvaluationBlocked(RuntimeError):
+    """Codex could not produce a valid portfolio proposal."""
+
+
 @dataclass
 class WorkerState:
     status: str = "starting"
@@ -89,6 +110,7 @@ default_permissions = ":read-only"
 url = {_toml_string(settings.internal_mcp_url)}
 bearer_token_env_var = "ARENA_INTERNAL_MCP_API_KEY"
 enabled_tools = ["get_portfolio", "get_effective_date", "validate_symbol", "search_symbols"]
+default_tools_approval_mode = "approve"
 required = true
 
 [mcp_servers.massive]
@@ -165,17 +187,22 @@ def evaluator_prompt(run: ClaimedRun) -> str:
 Evaluate the existing Portfolio Arena portfolio `{run.portfolio.slug}` and produce its next allocation.
 
 Call the Portfolio Arena `get_portfolio` tool first and treat the returned strategy, allocation
-policy, holdings, notes, history, performance, and effective date as authoritative. Research all
-decision-relevant current information with Massive and live web search. Every current holding must
-re-earn its place, but continuity is useful when the thesis still holds.
+policy, holdings, notes, history, performance, and effective date as authoritative.
+{PORTFOLIO_LIFECYCLE_INSTRUCTION}
+Research all decision-relevant current information with Massive and live web search. Every current
+holding must re-earn its place, but continuity is useful when the thesis still holds.
 
 Produce a proposal that obeys the returned allocation policy exactly. Use only USD-denominated
 equities and ETFs accepted by Portfolio Arena. Do not use cash, mutual funds, options, futures,
-indices, FX, shorts, or leverage. Validate unfamiliar symbols. Do not call any write tool: the
+indices, FX, shorts, or leverage. Validate every final symbol. Do not call any write tool: the
 worker will validate and submit your final structured proposal atomically.
 
 The report should briefly explain the portfolio-level decision, key evidence, material risks, and
 what would change the next evaluation. Position notes should be concise handoff context.
+
+Return `status` as `proposal` with an empty `error` for a valid allocation. If `get_portfolio`
+fails or no valid allocation can be produced, return `status` as `blocked`, no positions, and a
+concise `error`; never invent a placeholder symbol.
 """
 
 
@@ -283,6 +310,8 @@ async def evaluate_run(
 ) -> None:
     try:
         proposal = await run_codex(settings, run)
+        if proposal.status == "blocked":
+            raise EvaluationBlocked(proposal.error)
         await internal_request(
             settings,
             "POST",
