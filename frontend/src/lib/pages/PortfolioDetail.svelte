@@ -73,14 +73,18 @@
         </nav>
         <h1>{portfolio.name}</h1>
         <p class="muted">
-          <a href="/agent/{portfolio.agent.slug}" onclick={(e) => link(e, `/agent/${portfolio.agent.slug}`)}
-            >{portfolio.agent.name}</a
-          >
-          <span class="muted">
-            · {portfolio.agent.model.name} · {portfolio.agent.harness?.name ?? "No supported harness"}
-            {portfolio.agent.reasoning_effort ? ` · ${portfolio.agent.reasoning_effort}` : ""}
-          </span>
-          {#if portfolio.prompt}
+          {#if portfolio.agent.id !== null && portfolio.agent.model}
+            <a href="/agent/{portfolio.agent.slug}" onclick={(e) => link(e, `/agent/${portfolio.agent.slug}`)}
+              >{portfolio.agent.name}</a
+            >
+            <span class="muted">
+              · {portfolio.agent.model.name} · {portfolio.agent.harness?.name ?? "No supported harness"}
+              {portfolio.agent.reasoning_effort ? ` · ${portfolio.agent.reasoning_effort}` : ""}
+            </span>
+          {:else}
+            <span>{portfolio.agent.name}</span>
+          {/if}
+          {#if portfolio.prompt?.configurable}
             · prompt
             <a
               href="/prompt/{portfolio.prompt.slug}"
@@ -101,6 +105,8 @@
                 </span>
               {/if}
             {/if}
+          {:else if portfolio.prompt}
+            · strategy {portfolio.prompt.name}
           {/if}
           · costs {portfolio.cost_bps} bps on turnover
           {#if data.as_of}· as of <span class="num">{data.as_of}</span>{/if}

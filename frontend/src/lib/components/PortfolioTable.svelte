@@ -122,15 +122,21 @@
             </span>
           </td>
           <td>
-            <a href="/agent/{row.agent.slug}" onclick={(e) => link(e, `/agent/${row.agent.slug}`)}>
-              {row.agent.name}
-            </a>
+            {#if row.agent.id !== null}
+              <a href="/agent/{row.agent.slug}" onclick={(e) => link(e, `/agent/${row.agent.slug}`)}>
+                {row.agent.name}
+              </a>
+            {:else}
+              <span>{row.agent.name}</span>
+            {/if}
           </td>
           <td>
-            {#if row.prompt}
+            {#if row.prompt?.configurable}
               <a href="/prompt/{row.prompt.slug}" onclick={(e) => link(e, `/prompt/${row.prompt!.slug}`)}>
                 {row.prompt.name}
               </a>
+            {:else if row.prompt}
+              <span>{row.prompt.name}</span>
             {:else}
               <span class="muted">—</span>
             {/if}

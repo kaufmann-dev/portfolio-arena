@@ -64,7 +64,9 @@
     <ol>
       <li>
         An <strong>agent</strong> (a model + harness + optional reasoning profile, e.g. "GPT-5.6 Sol (Codex,
-        Extra high)") is paired with a fixed <strong>prompt</strong> to form a <strong>portfolio</strong>.
+        Extra high)") is paired with a fixed <strong>prompt</strong> to form a <strong>portfolio</strong>. SPY
+        and RSP benchmarks instead use a hardcoded identity and buy-and-hold strategy, so they do not appear
+        in the configurable Agents, Models, or Prompts catalogs.
       </li>
       <li>
         On a selected weekday cadence, the evaluator gives Codex the fixed prompt and current holdings and

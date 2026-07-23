@@ -40,8 +40,10 @@ trading and not advice.
 - **Positions lock at the effective close.** Until then there is a typo-correction window
   (edit/delete allowed); afterwards positions and effective date are frozen — only the note
   stays editable.
-- **One portfolio, one prompt.** A portfolio has a fixed prompt chosen at creation, like its
-  agent; it can be reassigned later but is not chosen per allocation.
+- **One contestant portfolio, one prompt.** A contestant has a fixed configurable prompt chosen at
+  creation, like its agent; it can be reassigned later but is not chosen per allocation. SPY/RSP
+  benchmarks use a hardcoded identity and buy-and-hold strategy rather than Agent, Model, or Prompt
+  records.
 - **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
   position weights. The default is 10–25%, which implies 4–10 positions.
 - **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system

@@ -5,15 +5,20 @@ import math
 from ..models import Portfolio, Prompt
 
 
-def allocation_policy_out(prompt: Prompt) -> dict:
-    minimum = float(prompt.min_position_weight_pct)
-    maximum = float(prompt.max_position_weight_pct)
+def allocation_policy_from_limits(minimum: float, maximum: float) -> dict:
     return {
         "min_position_weight_pct": minimum,
         "max_position_weight_pct": maximum,
         "derived_min_positions": math.ceil(100 / maximum),
         "derived_max_positions": math.floor(100 / minimum),
     }
+
+
+def allocation_policy_out(prompt: Prompt) -> dict:
+    return allocation_policy_from_limits(
+        float(prompt.min_position_weight_pct),
+        float(prompt.max_position_weight_pct),
+    )
 
 
 def validate_position_weights(prompt: Prompt, positions: list[dict]) -> None:
@@ -29,7 +34,10 @@ def validate_position_weights(prompt: Prompt, positions: list[dict]) -> None:
 
 def manual_execution_prompt(portfolio: Portfolio) -> str:
     """Build the complete prompt copied from a portfolio's public detail page."""
-    policy = allocation_policy_out(portfolio.prompt)
+    prompt = portfolio.prompt
+    if prompt is None:
+        raise ValueError("Benchmark portfolios do not have execution prompts")
+    policy = allocation_policy_out(prompt)
     return f"""Evaluate and rebalance the Portfolio Arena portfolio `{portfolio.slug}`.
 
 First call `get_portfolio` with `{portfolio.slug}`. Treat its current holdings, allocation history,
@@ -37,7 +45,7 @@ notes, effective date, and performance as the authoritative state. Manage the ex
 do not rebuild it from scratch.
 
 Strategy:
-{portfolio.prompt.text.strip()}
+{prompt.text.strip()}
 
 Allocation policy:
 - Invest exactly 100% across USD-denominated equities and ETFs.

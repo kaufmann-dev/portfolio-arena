@@ -153,13 +153,18 @@ class Portfolio(Base):
     __table_args__ = (
         CheckConstraint("status IN ('active', 'archived')", name="portfolios_status_check"),
         CheckConstraint("cost_bps >= 0", name="portfolios_cost_bps_check"),
+        CheckConstraint(
+            "(is_benchmark AND agent_id IS NULL AND prompt_id IS NULL) OR "
+            "(NOT is_benchmark AND agent_id IS NOT NULL AND prompt_id IS NOT NULL)",
+            name="portfolios_identity_assignment_check",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
-    prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
+    agent_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"), nullable=True)
+    prompt_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=True)
     cost_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     is_benchmark: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
@@ -167,8 +172,8 @@ class Portfolio(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    agent: Mapped[Agent] = relationship(back_populates="portfolios")
-    prompt: Mapped[Prompt] = relationship(back_populates="portfolios")
+    agent: Mapped[Agent | None] = relationship(back_populates="portfolios")
+    prompt: Mapped[Prompt | None] = relationship(back_populates="portfolios")
     allocations: Mapped[list["Allocation"]] = relationship(
         back_populates="portfolio",
         cascade="all, delete-orphan",
