@@ -245,7 +245,7 @@
   }
 
   .lede {
-    max-width: 700px;
+    max-width: none;
     margin-top: 14px;
     color: var(--text-secondary);
     font-size: 15px;
@@ -418,6 +418,12 @@
   @keyframes pulse {
     50% {
       opacity: 0.35;
+    }
+  }
+
+  @media (min-width: 1000px) {
+    .lede {
+      white-space: nowrap;
     }
   }
 
