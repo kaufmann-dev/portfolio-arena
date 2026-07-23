@@ -20,7 +20,7 @@ from ..schemas import AllocationPolicyIn, PositionIn
 from ..services import admin_ops, evaluator
 from ..services.admin_ops import AdminOpError
 from ..services.arena import compute_valuations, load_portfolios
-from ..services.benchmarks import ensure_benchmark_allocations
+from ..services.benchmarks import reconcile_benchmark_allocations
 from ..services.harnesses import harnesses_out
 from ..services.model_catalog import agent_out
 from ..services.serialize import serialize_summary
@@ -107,7 +107,8 @@ def get_arena_overview() -> dict:
     metrics, return vs SPY, volatility, age, and allocation count — the
     leaderboard view, for judging which portfolios are performing."""
     with _session() as session:
-        ensure_benchmark_allocations(session)
+        if reconcile_benchmark_allocations(session):
+            session.commit()
         portfolios = load_portfolios(session)
         valuations = compute_valuations(session, portfolios)
         rows = []

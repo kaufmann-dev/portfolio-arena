@@ -47,8 +47,9 @@ trading and not advice.
 - **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
   position weights. The default is 10–25%, which implies 4–10 positions.
 - **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system
-  portfolios whose single 100% allocation is auto-aligned to the earliest real portfolio
-  inception, valued by the same code path at zero cost.
+  portfolios whose single 100% allocation is auto-aligned to the earliest surviving real
+  portfolio inception and cleared when no real allocation history remains, valued by the same
+  code path at zero cost.
 - **Costs on turnover.** Every trade pays a flat fee (default 10 bps of traded notional, frozen
   per portfolio at creation). Initial deployment pays one side; rebalances pay both sides.
 - **Notes.** Each allocation has an optional free-text note (e.g. the model's regime call).

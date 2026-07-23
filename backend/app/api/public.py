@@ -8,7 +8,7 @@ from ..db import get_session
 from ..models import Agent, ModelDefinition, Portfolio, Prompt
 from ..ratelimit import limiter
 from ..services.arena import compute_valuations, load_portfolios
-from ..services.benchmarks import ensure_benchmark_allocations
+from ..services.benchmarks import reconcile_benchmark_allocations
 from ..services.model_catalog import agent_out
 from ..services.prompt_policy import allocation_policy_out
 from ..services.serialize import serialize_detail, serialize_summary
@@ -18,8 +18,9 @@ router = APIRouter(prefix="/api")
 
 
 def _valuations(session: Session):
-    """Benchmark seeding must precede loading so new allocations are included."""
-    ensure_benchmark_allocations(session)
+    """Benchmark reconciliation must precede loading so changes are included."""
+    if reconcile_benchmark_allocations(session):
+        session.commit()
     portfolios = load_portfolios(session)
     return portfolios, compute_valuations(session, portfolios)
 

@@ -43,6 +43,29 @@ class TestDeletePortfolio:
         rows = client.get("/api/leaderboard").json()["portfolios"]
         assert all(p["id"] != sample_portfolio["id"] for p in rows)
 
+    def test_delete_last_portfolio_clears_benchmark_history(
+        self,
+        client,
+        admin_headers,
+        sample_portfolio,
+    ):
+        from .util import backdate_allocation
+
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        seeded = client.get("/api/leaderboard").json()["portfolios"]
+        assert all(row["allocation_count"] == 1 for row in seeded if row["is_benchmark"])
+
+        response = client.delete(f"/api/portfolios/{sample_portfolio['id']}", headers=admin_headers)
+        assert response.status_code == 200, response.text
+
+        benchmarks = [
+            row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]
+        ]
+        assert len(benchmarks) == 2
+        assert all(row["allocation_count"] == 0 for row in benchmarks)
+        assert all(row["inception"] is None for row in benchmarks)
+        assert all(row["metrics"]["has_data"] is False for row in benchmarks)
+
     def test_delete_benchmark_blocked(self, client, admin_headers):
         rows = client.get("/api/leaderboard").json()["portfolios"]
         benchmark = next(p for p in rows if p["is_benchmark"])

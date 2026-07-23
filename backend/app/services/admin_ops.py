@@ -28,7 +28,7 @@ from ..models import (
 from ..seed import DEFAULT_COST_BPS_KEY
 from ..util import slugify
 from .arena import compute_valuations, load_portfolios
-from .benchmarks import ensure_benchmark_allocations
+from .benchmarks import reconcile_benchmark_allocations
 from .errors import AdminOpError
 from .harnesses import supports_automation
 from .model_catalog import (
@@ -505,6 +505,8 @@ def update_portfolio(
 def delete_portfolio(session: Session, portfolio_id: int) -> dict:
     portfolio = writable_portfolio(session, portfolio_id)
     session.delete(portfolio)  # allocations + positions cascade
+    session.flush()
+    reconcile_benchmark_allocations(session)
     session.commit()
     return {"ok": True}
 
@@ -512,7 +514,8 @@ def delete_portfolio(session: Session, portfolio_id: int) -> dict:
 def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
     """Admin view: public detail plus the handoff fields (per-position notes,
     holding entry/current prices)."""
-    ensure_benchmark_allocations(session)
+    if reconcile_benchmark_allocations(session):
+        session.commit()
     portfolios = load_portfolios(session)
     valuations = compute_valuations(session, portfolios)
     match = next((p for p in portfolios if p.id == portfolio_id), None)
@@ -606,6 +609,8 @@ def create_allocation(session: Session, portfolio_id: int, positions: list[dict]
 
     allocation = _new_allocation(portfolio, normalized, note, now, effective)
     session.add(allocation)
+    session.flush()
+    reconcile_benchmark_allocations(session)
     session.commit()
     return serialize_allocation(reload_allocation(session, allocation.id), admin=True)
 
@@ -657,6 +662,8 @@ def delete_allocation(session: Session, allocation_id: int) -> dict:
     if is_locked(allocation.effective_date, datetime.now(UTC)):
         raise AdminOpError(403, "This allocation is locked: its effective close has passed.")
     session.delete(allocation)
+    session.flush()
+    reconcile_benchmark_allocations(session)
     session.commit()
     return {"ok": True}
 

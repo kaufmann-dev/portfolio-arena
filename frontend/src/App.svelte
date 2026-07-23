@@ -63,10 +63,6 @@
     link(event, path);
   }
 
-  function submitLogout(event: Event): void {
-    (event.currentTarget as HTMLElement).closest("form")?.requestSubmit();
-  }
-
   function focusRoute(element: HTMLElement): void {
     if (hasMountedRoute) {
       element.focus({ preventScroll: true });
@@ -137,9 +133,13 @@
                     </DropdownMenu.Item>
                     <DropdownMenu.Separator class="account-separator" />
                     <form method="POST" action="/api/auth/logout">
-                      <DropdownMenu.Item class="account-item danger-item" onSelect={submitLogout}>
-                        <LogOut size={16} aria-hidden="true" />
-                        Log out
+                      <DropdownMenu.Item class="account-item danger-item">
+                        {#snippet child({ props })}
+                          <button {...props} type="submit">
+                            <LogOut size={16} aria-hidden="true" />
+                            Log out
+                          </button>
+                        {/snippet}
                       </DropdownMenu.Item>
                     </form>
                   </DropdownMenu.Group>
@@ -436,11 +436,13 @@
   }
 
   :global(.account-item) {
+    width: 100%;
     min-height: 40px;
     padding: 8px 10px;
     display: flex;
     align-items: center;
     gap: 9px;
+    text-align: left;
     outline: none;
     color: var(--text-secondary);
     cursor: pointer;

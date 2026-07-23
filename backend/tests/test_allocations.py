@@ -244,6 +244,23 @@ class TestLockEnforcement:
         response = client.delete(f"/api/allocations/{allocation_id}", headers=admin_headers)
         assert response.status_code == 403
 
+    def test_delete_last_pending_allocation_clears_benchmarks(
+        self,
+        client,
+        admin_headers,
+        sample_portfolio,
+    ):
+        response = client.delete(
+            f"/api/allocations/{sample_portfolio['allocation']['id']}",
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+
+        benchmarks = [
+            row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]
+        ]
+        assert all(row["allocation_count"] == 0 for row in benchmarks)
+
     def test_locked_metadata_still_editable(self, client, admin_headers, sample_portfolio):
         allocation_id = sample_portfolio["allocation"]["id"]
         backdate_allocation(allocation_id)
