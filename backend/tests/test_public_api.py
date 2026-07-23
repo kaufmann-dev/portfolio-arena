@@ -1,6 +1,8 @@
 """Public reads: leaderboard, portfolio detail, compare, prompts, agents,
 benchmark auto-seeding."""
 
+from datetime import UTC, datetime, timedelta
+
 from .util import backdate_allocation
 
 
@@ -41,6 +43,111 @@ class TestLeaderboard:
         # Benchmarks are cost-free: SPY tracks itself exactly.
         assert spy["metrics"]["vs_spy"] == 0 or abs(spy["metrics"]["vs_spy"]) < 1e-9
         assert spy["cost_bps"] == 0
+
+    def test_benchmarks_move_to_later_surviving_inception(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+        sample_prompt,
+        sample_portfolio,
+    ):
+        later_portfolio = client.post(
+            "/api/portfolios",
+            json={
+                "name": "Later Portfolio",
+                "agent_id": sample_agent["id"],
+                "prompt_id": sample_prompt["id"],
+            },
+            headers=admin_headers,
+        ).json()
+        later_allocation = client.post(
+            f"/api/portfolios/{later_portfolio['id']}/allocations",
+            json={"positions": [{"symbol": "AAPL", "weight_pct": 100}], "note": "later"},
+            headers=admin_headers,
+        ).json()
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        later_date = backdate_allocation(later_allocation["id"], days_back=20)
+
+        client.get("/api/leaderboard")
+        response = client.delete(
+            f"/api/portfolios/{sample_portfolio['id']}",
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+
+        rows = client.get("/api/leaderboard").json()["portfolios"]
+        benchmarks = [row for row in rows if row["is_benchmark"]]
+        assert len(benchmarks) == 2
+        assert all(row["inception"] == later_date.isoformat() for row in benchmarks)
+        assert all(row["allocation_count"] == 1 for row in benchmarks)
+
+    def test_archived_history_keeps_benchmark_inception(
+        self,
+        client,
+        admin_headers,
+        sample_portfolio,
+    ):
+        inception = backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        response = client.patch(
+            f"/api/portfolios/{sample_portfolio['id']}",
+            json={"status": "archived"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+
+        benchmarks = [
+            row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]
+        ]
+        assert all(row["inception"] == inception.isoformat() for row in benchmarks)
+
+    def test_benchmark_reconciliation_repairs_duplicates_and_holdings(
+        self,
+        client,
+        sample_portfolio,
+    ):
+        inception = backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        client.get("/api/leaderboard")
+
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        from app.db import session_factory
+        from app.models import Allocation, Portfolio, Position
+        from app.services.benchmarks import BENCHMARK_ALLOCATION_NOTE
+
+        with session_factory()() as session:
+            spy = session.scalars(
+                select(Portfolio)
+                .where(Portfolio.slug == "spy-buy-and-hold")
+                .options(selectinload(Portfolio.allocations).selectinload(Allocation.positions))
+            ).one()
+            spy.allocations[0].note = "corrupt"
+            spy.allocations[0].positions[0].symbol = "AAPL"
+            duplicate = Allocation(
+                portfolio_id=spy.id,
+                entered_at=datetime.now(UTC) + timedelta(seconds=1),
+                effective_date=inception,
+                note="duplicate",
+            )
+            duplicate.positions.append(Position(symbol="SPY", weight_pct=100))
+            session.add(duplicate)
+            session.commit()
+
+        client.get("/api/leaderboard")
+
+        with session_factory()() as session:
+            spy = session.scalars(
+                select(Portfolio)
+                .where(Portfolio.slug == "spy-buy-and-hold")
+                .options(selectinload(Portfolio.allocations).selectinload(Allocation.positions))
+            ).one()
+            assert len(spy.allocations) == 1
+            assert spy.allocations[0].effective_date == inception
+            assert spy.allocations[0].note == BENCHMARK_ALLOCATION_NOTE
+            assert len(spy.allocations[0].positions) == 1
+            assert spy.allocations[0].positions[0].symbol == "SPY"
+            assert float(spy.allocations[0].positions[0].weight_pct) == 100
 
     def test_pending_allocation_has_no_data(self, client, sample_portfolio):
         payload = client.get("/api/leaderboard").json()
