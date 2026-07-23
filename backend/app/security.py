@@ -117,6 +117,18 @@ def require_same_origin(request: Request) -> None:
         raise HTTPException(403, "Invalid request origin")
 
 
+def require_internal_worker(request: Request) -> None:
+    configured = get_settings().internal_mcp_api_key
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if (
+        configured is None
+        or scheme.lower() != "bearer"
+        or not token
+        or not secrets.compare_digest(token, configured.get_secret_value())
+    ):
+        raise HTTPException(401, "Invalid internal worker token")
+
+
 def _load_active_auth_session(
     request: Request,
     session: Session,

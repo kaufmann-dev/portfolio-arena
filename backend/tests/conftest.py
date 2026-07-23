@@ -19,6 +19,7 @@ os.environ.setdefault(
 )
 os.environ.setdefault("ARENA_DB_CONNECT_RETRIES", "3")
 os.environ.setdefault("ARENA_DB_CONNECT_RETRY_DELAY", "0.2")
+os.environ.setdefault("ARENA_INTERNAL_MCP_API_KEY", "test-internal-worker-token")
 
 # Let testcontainers talk to podman when no docker daemon is configured.
 _PODMAN_SOCK = Path(f"/run/user/{os.getuid()}/podman/podman.sock")
@@ -78,7 +79,8 @@ def clean_db(client):
         session.execute(
             text(
                 "TRUNCATE auth_sessions, settings, agents, prompts, portfolios, allocations, "
-                "positions, evaluation_runs, price_cache, api_keys RESTART IDENTITY CASCADE"
+                "positions, evaluation_runs, evaluator_settings, portfolio_evaluator_configs, "
+                "evaluator_instances, price_cache, api_keys RESTART IDENTITY CASCADE"
             )
         )
         session.commit()

@@ -634,7 +634,7 @@
       {/if}
     </section>
   {:else if tab === "automation"}
-    <AutomationPanel portfolios={contestants} />
+    <AutomationPanel />
   {:else if tab === "portfolio"}
     <section class="card">
       <h2>New portfolio</h2>

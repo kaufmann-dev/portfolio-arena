@@ -1,46 +1,53 @@
-"""Arena-owned evaluation-window selection."""
+"""Evaluator cadence and configurable NYSE-window selection."""
 
-from datetime import UTC, date, datetime, time
+from datetime import date, time
 
-from app.services.evaluation_schedule import evaluation_window, get_evaluation_schedule
+from app.models import EvaluatorSettings, PortfolioEvaluatorConfig
+from app.services.evaluator import evaluation_window, is_due_on
 from app.services.trading_calendar import NY
 
 
-def ny(year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime:
-    return datetime(year, month, day, hour, minute, tzinfo=NY)
+def test_early_close_window_uses_configured_offsets():
+    settings = EvaluatorSettings(
+        id=1,
+        start_before_close_minutes=120,
+        cutoff_before_close_minutes=15,
+    )
+
+    opens_at, cutoff_at = evaluation_window(date(2026, 11, 27), settings)
+
+    assert opens_at.astimezone(NY).time() == time(11)
+    assert cutoff_at.astimezone(NY).time() == time(12, 45)
 
 
-def test_before_open_returns_todays_upcoming_session():
-    schedule = get_evaluation_schedule(ny(2026, 7, 20, 12))
+def test_selected_holiday_weekday_shifts_to_next_trading_day():
+    friday_only = PortfolioEvaluatorConfig(
+        portfolio_id=1,
+        enabled=True,
+        model="test-model",
+        weekdays=[4],
+    )
 
-    assert schedule["scheduled_for"] == "2026-07-20"
-    assert schedule["state"] == "upcoming"
-    assert schedule["server_time"] == ny(2026, 7, 20, 12).astimezone(UTC).isoformat()
-
-
-def test_during_window_returns_todays_open_session():
-    schedule = get_evaluation_schedule(ny(2026, 7, 20, 15))
-
-    assert schedule["scheduled_for"] == "2026-07-20"
-    assert schedule["state"] == "open"
+    assert is_due_on(friday_only, date(2026, 7, 6))
 
 
-def test_at_cutoff_returns_next_session():
-    schedule = get_evaluation_schedule(ny(2026, 7, 20, 15, 50))
+def test_shifted_and_regular_cadence_deduplicate_to_one_session():
+    friday_and_monday = PortfolioEvaluatorConfig(
+        portfolio_id=1,
+        enabled=True,
+        model="test-model",
+        weekdays=[0, 4],
+    )
 
-    assert schedule["scheduled_for"] == "2026-07-21"
-    assert schedule["state"] == "upcoming"
-
-
-def test_non_trading_day_returns_next_session():
-    schedule = get_evaluation_schedule(ny(2026, 7, 18, 12))
-
-    assert schedule["scheduled_for"] == "2026-07-20"
-    assert schedule["state"] == "upcoming"
+    assert is_due_on(friday_and_monday, date(2026, 7, 6))
 
 
-def test_early_close_window_uses_scheduled_close():
-    opens_at, cutoff_at = evaluation_window(date(2026, 11, 27))
+def test_empty_weekday_selection_is_manual_only():
+    manual = PortfolioEvaluatorConfig(
+        portfolio_id=1,
+        enabled=True,
+        model="test-model",
+        weekdays=[],
+    )
 
-    assert opens_at.astimezone(NY).time() == time(11, 30)
-    assert cutoff_at.astimezone(NY).time() == time(12, 50)
+    assert not is_due_on(manual, date(2026, 7, 6))

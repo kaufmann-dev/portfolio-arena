@@ -163,15 +163,70 @@ export interface ApiKeysResponse {
   keys: ApiKeyOut[];
 }
 
-export type EvaluationRunStatus = "running" | "succeeded" | "failed" | "skipped";
+export type EvaluationRunStatus =
+  "queued" | "running" | "cancel_requested" | "cancelled" | "succeeded" | "failed" | "skipped";
+
+export type EvaluationTriggerKind = "scheduled" | "manual" | "retry";
+export type EvaluatorReasoningEffort = "low" | "medium" | "high" | "xhigh";
+export type EvaluatorServiceTier = "standard" | "fast";
+
+export interface EvaluatorSettings {
+  enabled: boolean;
+  max_concurrency: number;
+  poll_seconds: number;
+  attempt_timeout_seconds: number;
+  max_attempts: number;
+  reasoning_effort: EvaluatorReasoningEffort;
+  service_tier: EvaluatorServiceTier;
+  start_before_close_minutes: number;
+  cutoff_before_close_minutes: number;
+  updated_at: string;
+}
+
+export interface EvaluatorPortfolioRef extends Ref {
+  status: "active" | "archived";
+}
+
+export interface PortfolioEvaluatorConfig {
+  portfolio: EvaluatorPortfolioRef;
+  enabled: boolean;
+  model: string;
+  weekdays: number[];
+  updated_at: string | null;
+}
+
+export interface EvaluatorRuntime {
+  online: boolean;
+  status: string;
+  authenticated: boolean;
+  codex_version: string | null;
+  active_run_count: number;
+  last_heartbeat_at: string | null;
+  last_error: string | null;
+  instance_count: number;
+}
+
+export interface EvaluatorDashboard {
+  settings: EvaluatorSettings;
+  portfolios: PortfolioEvaluatorConfig[];
+  runtime: EvaluatorRuntime;
+}
 
 export interface EvaluationRun {
   id: number;
   portfolio: Ref;
   agent: Ref;
-  scheduled_for: string;
+  trigger_kind: EvaluationTriggerKind;
+  retry_of_run_id: number | null;
+  scheduled_for: string | null;
+  deadline_at: string | null;
   model: string;
-  codex_version: string;
+  reasoning_effort: EvaluatorReasoningEffort;
+  service_tier: EvaluatorServiceTier;
+  timeout_seconds: number;
+  max_attempts: number;
+  codex_version: string | null;
+  worker_id: string | null;
   status: EvaluationRunStatus;
   attempt_count: number;
   lease_expires_at: string | null;
@@ -187,4 +242,15 @@ export interface EvaluationRun {
 export interface EvaluationRunsResponse {
   items: EvaluationRun[];
   next_cursor: string | null;
+}
+
+export interface EvaluationQueueItem {
+  portfolio_id: number;
+  action: "queued" | "existing" | "rejected";
+  reason: string | null;
+  run: EvaluationRun | null;
+}
+
+export interface EvaluationQueueResponse {
+  items: EvaluationQueueItem[];
 }

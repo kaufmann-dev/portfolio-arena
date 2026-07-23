@@ -1,6 +1,8 @@
-"""Admin write endpoints (browser session). All experiment-integrity logic lives in
-``services/admin_ops.py`` and is shared with the MCP tools; these handlers only
-translate request bodies and ``AdminOpError`` into HTTP."""
+"""Admin endpoints (browser session).
+
+Experiment and evaluator rules live in their respective services and are
+shared with MCP tools; these handlers translate service errors into HTTP.
+"""
 
 import logging
 from collections.abc import Callable
@@ -15,14 +17,17 @@ from ..schemas import (
     AgentPatch,
     AllocationCreate,
     AllocationUpdate,
+    EvaluationRunsCreate,
+    EvaluatorSettingsUpdate,
     PortfolioCreate,
+    PortfolioEvaluatorConfigUpdate,
     PortfolioPatch,
     PromptCreate,
     PromptPatch,
     SettingsUpdate,
 )
 from ..security import require_admin
-from ..services import admin_ops, price_cache
+from ..services import admin_ops, evaluator, price_cache
 from ..services.admin_ops import AdminOpError
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
 from ..services.trading_calendar import effective_date_for
@@ -177,13 +182,58 @@ def evaluation_runs(
     session: Session = Depends(get_session),
 ):
     return _run(
-        admin_ops.list_evaluation_runs,
+        evaluator.list_runs,
         session,
         portfolio_id=portfolio_id,
         status=status,
         cursor=cursor,
         limit=limit,
     )
+
+
+@router.get("/evaluator")
+def evaluator_dashboard(session: Session = Depends(get_session)):
+    return evaluator.get_dashboard(session)
+
+
+@router.put("/evaluator/settings")
+def put_evaluator_settings(
+    body: EvaluatorSettingsUpdate,
+    session: Session = Depends(get_session),
+):
+    return _run(evaluator.update_settings, session, **body.model_dump())
+
+
+@router.put("/evaluator/portfolios/{portfolio_id}")
+def put_portfolio_evaluator_config(
+    portfolio_id: int,
+    body: PortfolioEvaluatorConfigUpdate,
+    session: Session = Depends(get_session),
+):
+    return _run(
+        evaluator.update_portfolio_config,
+        session,
+        portfolio_id=portfolio_id,
+        **body.model_dump(),
+    )
+
+
+@router.post("/evaluator/runs", status_code=201)
+def create_evaluator_runs(
+    body: EvaluationRunsCreate,
+    session: Session = Depends(get_session),
+):
+    return _run(evaluator.enqueue_manual_runs, session, portfolio_ids=body.portfolio_ids)
+
+
+@router.post("/evaluator/runs/{run_id}/cancel")
+def cancel_evaluator_run(run_id: int, session: Session = Depends(get_session)):
+    return _run(evaluator.cancel_run, session, run_id=run_id)
+
+
+@router.post("/evaluator/runs/{run_id}/retry", status_code=201)
+def retry_evaluator_run(run_id: int, session: Session = Depends(get_session)):
+    return _run(evaluator.retry_run, session, run_id=run_id)
 
 
 @router.post("/portfolios/{portfolio_id}/allocations", status_code=201)

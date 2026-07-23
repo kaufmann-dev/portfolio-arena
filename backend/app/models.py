@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -121,6 +122,11 @@ class Portfolio(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    evaluator_config: Mapped["PortfolioEvaluatorConfig | None"] = relationship(
+        back_populates="portfolio",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class Allocation(Base):
@@ -176,21 +182,50 @@ class EvaluationRun(Base):
     __tablename__ = "evaluation_runs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('running', 'succeeded', 'failed', 'skipped')",
+            "status IN ('queued', 'running', 'cancel_requested', 'cancelled', "
+            "'succeeded', 'failed', 'skipped')",
             name="evaluation_runs_status_check",
         ),
+        CheckConstraint(
+            "trigger_kind IN ('scheduled', 'manual', 'retry')",
+            name="evaluation_runs_trigger_kind_check",
+        ),
         CheckConstraint("attempt_count >= 0", name="evaluation_runs_attempt_count_check"),
-        UniqueConstraint("portfolio_id", "scheduled_for", name="evaluation_runs_portfolio_session_key"),
+        CheckConstraint("max_attempts BETWEEN 1 AND 5", name="evaluation_runs_max_attempts_check"),
+        CheckConstraint("timeout_seconds BETWEEN 60 AND 1500", name="evaluation_runs_timeout_check"),
         Index("idx_evaluation_runs_scheduled_id", "scheduled_for", "id"),
+        Index(
+            "evaluation_runs_portfolio_session_key",
+            "portfolio_id",
+            "scheduled_for",
+            unique=True,
+            postgresql_where="trigger_kind = 'scheduled' AND scheduled_for IS NOT NULL",
+        ),
+        Index(
+            "evaluation_runs_portfolio_active_key",
+            "portfolio_id",
+            unique=True,
+            postgresql_where="status IN ('queued', 'running', 'cancel_requested')",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     portfolio_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
     )
-    scheduled_for: Mapped[date] = mapped_column(Date, nullable=False)
+    scheduled_for: Mapped[date | None] = mapped_column(Date, nullable=True)
+    trigger_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
+    retry_of_run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("evaluation_runs.id", ondelete="SET NULL"), nullable=True
+    )
     model: Mapped[str] = mapped_column(Text, nullable=False)
-    codex_version: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False, server_default="xhigh")
+    service_tier: Mapped[str] = mapped_column(Text, nullable=False, server_default="fast")
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1500")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    codex_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -210,6 +245,100 @@ class EvaluationRun(Base):
 
     portfolio: Mapped[Portfolio] = relationship(back_populates="evaluation_runs")
     allocation: Mapped[Allocation | None] = relationship()
+
+
+class EvaluatorSettings(Base):
+    __tablename__ = "evaluator_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="evaluator_settings_singleton_check"),
+        CheckConstraint(
+            "max_concurrency BETWEEN 1 AND 20",
+            name="evaluator_settings_concurrency_check",
+        ),
+        CheckConstraint(
+            "poll_seconds BETWEEN 10 AND 300",
+            name="evaluator_settings_poll_check",
+        ),
+        CheckConstraint(
+            "attempt_timeout_seconds BETWEEN 60 AND 1500",
+            name="evaluator_settings_timeout_check",
+        ),
+        CheckConstraint(
+            "max_attempts BETWEEN 1 AND 5",
+            name="evaluator_settings_attempts_check",
+        ),
+        CheckConstraint(
+            "reasoning_effort IN ('low', 'medium', 'high', 'xhigh')",
+            name="evaluator_settings_reasoning_check",
+        ),
+        CheckConstraint(
+            "service_tier IN ('standard', 'fast')",
+            name="evaluator_settings_service_tier_check",
+        ),
+        CheckConstraint(
+            "start_before_close_minutes BETWEEN 15 AND 240",
+            name="evaluator_settings_start_check",
+        ),
+        CheckConstraint(
+            "cutoff_before_close_minutes BETWEEN 0 AND 60",
+            name="evaluator_settings_cutoff_check",
+        ),
+        CheckConstraint(
+            "start_before_close_minutes > cutoff_before_close_minutes",
+            name="evaluator_settings_window_check",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, server_default="1")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
+    poll_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")
+    attempt_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1500")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
+    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False, server_default="xhigh")
+    service_tier: Mapped[str] = mapped_column(Text, nullable=False, server_default="fast")
+    start_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")
+    cutoff_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="10")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PortfolioEvaluatorConfig(Base):
+    __tablename__ = "portfolio_evaluator_configs"
+
+    portfolio_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    weekdays: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    portfolio: Mapped[Portfolio] = relationship(back_populates="evaluator_config")
+
+
+class EvaluatorInstance(Base):
+    __tablename__ = "evaluator_instances"
+    __table_args__ = (Index("idx_evaluator_instances_heartbeat", "last_heartbeat_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    codex_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    authenticated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    active_run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class ApiKey(Base):

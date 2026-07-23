@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     oidc_client_id: str = Field(min_length=1, validation_alias="ARENA_OIDC_CLIENT_ID")
     oidc_client_secret: SecretStr = Field(min_length=1, validation_alias="ARENA_OIDC_CLIENT_SECRET")
     oidc_state_secret: SecretStr = Field(min_length=32, validation_alias="ARENA_OIDC_STATE_SECRET")
+    internal_mcp_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="ARENA_INTERNAL_MCP_API_KEY",
+    )
 
     default_cost_bps: int = Field(default=10, validation_alias="ARENA_DEFAULT_COST_BPS")
     db_connect_retries: int = Field(default=30, validation_alias="ARENA_DB_CONNECT_RETRIES")

@@ -1,116 +1,227 @@
-"""Server-owned automation leases, cutoffs, retries, submission, and history."""
+"""Integrated evaluator settings, queue lifecycle, and admin controls."""
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
-import pytest
+from app.services import evaluator
+from app.services.trading_calendar import close_at, effective_date_for
 
-from app.services import admin_ops
-from app.services.admin_ops import AdminOpError
-from app.services.trading_calendar import close_at
-
-SCHEDULED_FOR = date(2026, 7, 20)
+from .util import backdate_allocation
 
 
-def _inside_window():
-    return close_at(SCHEDULED_FOR) - timedelta(minutes=60)
-
-
-def _begin(session, portfolio, now=None):
-    return admin_ops.begin_evaluation_run(
+def _enable(session, portfolio, weekdays=None):
+    return evaluator.update_portfolio_config(
         session,
-        portfolio_slug=portfolio["slug"],
-        scheduled_for=SCHEDULED_FOR,
+        portfolio_id=portfolio["id"],
+        enabled=True,
         model="gpt-5.6-sol",
-        codex_version="codex-cli 0.144.5",
-        now=now or _inside_window(),
+        weekdays=weekdays or [],
     )
 
 
-def test_evaluation_submission_is_atomic_and_idempotent(sample_portfolio):
+def test_manual_run_claim_and_submission_use_submission_effective_date(sample_portfolio):
     from app.db import session_factory
 
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
-        begun = _begin(session, sample_portfolio)
-        assert begun["action"] == "run"
-        assert begun["run"]["attempt_count"] == 1
-
-        submitted = admin_ops.submit_evaluation_allocation(
+        _enable(session, sample_portfolio)
+        queued = evaluator.enqueue_manual_runs(
             session,
-            run_id=begun["run"]["id"],
+            portfolio_ids=[sample_portfolio["id"]],
+            now=now,
+        )
+        run_id = queued["items"][0]["run"]["id"]
+        claimed = evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            codex_version="codex-cli 0.144.5",
+            limit=5,
+            now=now,
+        )
+        assert [run["id"] for run in claimed["runs"]] == [run_id]
+
+        submitted = evaluator.submit_run(
+            session,
+            run_id=run_id,
             positions=[
                 {"symbol": "AAPL", "weight_pct": 55, "note": "consumer resilience"},
                 {"symbol": "MSFT", "weight_pct": 45, "note": "cloud growth"},
             ],
-            note="Automated rebalance",
+            note="Immediate evaluation",
             report="Both theses remain intact.",
-            now=_inside_window() + timedelta(minutes=5),
+            now=now + timedelta(minutes=5),
         )
-        assert submitted["run"]["status"] == "succeeded"
-        assert submitted["allocation"]["effective_date"] == SCHEDULED_FOR.isoformat()
 
-        repeated = _begin(session, sample_portfolio, _inside_window() + timedelta(minutes=6))
-        assert repeated["action"] == "skip"
-        assert repeated["run"]["allocation_id"] == submitted["allocation"]["id"]
+    assert submitted["run"]["status"] == "succeeded"
+    assert submitted["run"]["trigger_kind"] == "manual"
+    assert (
+        submitted["allocation"]["effective_date"]
+        == effective_date_for(now + timedelta(minutes=5)).isoformat()
+    )
 
 
-def test_evaluation_allows_two_attempts_then_exhausts(sample_portfolio):
+def test_scheduled_run_is_created_only_during_configured_window(sample_portfolio):
     from app.db import session_factory
 
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    scheduled_for = date(2026, 7, 20)
+    inside_window = close_at(scheduled_for) - timedelta(minutes=60)
     with session_factory()() as session:
-        first = _begin(session, sample_portfolio)
-        admin_ops.fail_evaluation_run(session, run_id=first["run"]["id"], error="first")
-        second = _begin(session, sample_portfolio, _inside_window() + timedelta(minutes=1))
-        assert second["action"] == "run"
-        assert second["run"]["attempt_count"] == 2
-        admin_ops.fail_evaluation_run(session, run_id=second["run"]["id"], error="second")
-        exhausted = _begin(session, sample_portfolio, _inside_window() + timedelta(minutes=2))
-        assert exhausted["action"] == "exhausted"
+        _enable(session, sample_portfolio, [scheduled_for.weekday()])
+        claimed = evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            codex_version="codex-cli 0.144.5",
+            limit=5,
+            now=inside_window,
+        )
+
+    assert len(claimed["runs"]) == 1
+    assert claimed["runs"][0]["trigger_kind"] == "scheduled"
+    assert claimed["runs"][0]["scheduled_for"] == scheduled_for.isoformat()
 
 
-def test_evaluation_window_is_server_enforced(sample_portfolio):
+def test_pause_keeps_queued_work_and_stops_claiming(sample_portfolio):
     from app.db import session_factory
 
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
-        with pytest.raises(AdminOpError, match="opens"):
-            _begin(session, sample_portfolio, close_at(SCHEDULED_FOR) - timedelta(minutes=91))
-        with pytest.raises(AdminOpError, match="cutoff"):
-            _begin(session, sample_portfolio, close_at(SCHEDULED_FOR) - timedelta(minutes=10))
+        _enable(session, sample_portfolio)
+        queued = evaluator.enqueue_manual_runs(
+            session,
+            portfolio_ids=[sample_portfolio["id"]],
+            now=now,
+        )
+        run_id = queued["items"][0]["run"]["id"]
+        evaluator.update_settings(session, enabled=False)
+        claimed = evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            codex_version="codex-cli 0.144.5",
+            limit=5,
+            now=now,
+        )
+        history = evaluator.list_runs(session)
+
+    assert claimed["runs"] == []
+    assert history["items"][0]["id"] == run_id
+    assert history["items"][0]["status"] == "queued"
 
 
-def test_evaluation_history_is_admin_only_and_cursor_paginated(client, admin_headers, sample_portfolio):
+def test_disabling_portfolio_automation_cancels_queued_work(sample_portfolio):
     from app.db import session_factory
 
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
-        begun = _begin(session, sample_portfolio)
-        admin_ops.fail_evaluation_run(session, run_id=begun["run"]["id"], error="test failure")
+        _enable(session, sample_portfolio)
+        queued = evaluator.enqueue_manual_runs(
+            session,
+            portfolio_ids=[sample_portfolio["id"]],
+            now=now,
+        )
+        run_id = queued["items"][0]["run"]["id"]
+        evaluator.update_portfolio_config(
+            session,
+            portfolio_id=sample_portfolio["id"],
+            enabled=False,
+            model="gpt-5.6-sol",
+            weekdays=[],
+        )
+        history = evaluator.list_runs(session)
 
-    assert client.get("/api/evaluation-runs").status_code == 401
-    first = client.get("/api/evaluation-runs?limit=1", headers=admin_headers)
-    assert first.status_code == 200, first.text
-    payload = first.json()
-    assert payload["items"][0]["status"] == "failed"
-    assert payload["items"][0]["error"] == "test failure"
-    assert payload["next_cursor"] is None
+    assert history["items"][0]["id"] == run_id
+    assert history["items"][0]["status"] == "cancelled"
 
 
-def test_evaluation_rejects_policy_violating_proposal(sample_portfolio):
+def test_running_cancel_request_finishes_as_cancelled(sample_portfolio):
     from app.db import session_factory
 
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
-        portfolio = admin_ops.writable_portfolio(session, sample_portfolio["id"])
-        portfolio.prompt.min_position_weight_pct = 40
-        portfolio.prompt.max_position_weight_pct = 60
-        session.commit()
-        begun = _begin(session, sample_portfolio)
-        with pytest.raises(AdminOpError, match="between 40% and 60%"):
-            admin_ops.submit_evaluation_allocation(
-                session,
-                run_id=begun["run"]["id"],
-                positions=[
-                    {"symbol": "AAPL", "weight_pct": 70, "note": ""},
-                    {"symbol": "MSFT", "weight_pct": 30, "note": ""},
-                ],
-                note="bad",
-                report="bad",
-                now=_inside_window() + timedelta(minutes=1),
-            )
+        _enable(session, sample_portfolio)
+        queued = evaluator.enqueue_manual_runs(
+            session,
+            portfolio_ids=[sample_portfolio["id"]],
+            now=now,
+        )
+        run_id = queued["items"][0]["run"]["id"]
+        evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            codex_version="codex-cli 0.144.5",
+            limit=1,
+            now=now,
+        )
+        requested = evaluator.cancel_run(session, run_id=run_id, now=now)
+        cancelled = evaluator.fail_run(
+            session,
+            run_id=run_id,
+            error="Cancelled by an administrator.",
+            cancelled=True,
+            now=now,
+        )
+
+    assert requested["status"] == "cancel_requested"
+    assert cancelled["status"] == "cancelled"
+
+
+def test_failed_run_retry_creates_linked_manual_run(sample_portfolio):
+    from app.db import session_factory
+
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
+    with session_factory()() as session:
+        _enable(session, sample_portfolio)
+        evaluator.update_settings(session, max_attempts=1)
+        queued = evaluator.enqueue_manual_runs(
+            session,
+            portfolio_ids=[sample_portfolio["id"]],
+            now=now,
+        )
+        run_id = queued["items"][0]["run"]["id"]
+        evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            codex_version="codex-cli 0.144.5",
+            limit=1,
+            now=now,
+        )
+        failed = evaluator.fail_run(session, run_id=run_id, error="research failed", now=now)
+        retried = evaluator.retry_run(session, run_id=run_id, now=now)
+
+    assert failed["status"] == "failed"
+    assert retried["run"]["trigger_kind"] == "retry"
+    assert retried["run"]["retry_of_run_id"] == run_id
+
+
+def test_admin_dashboard_and_internal_worker_auth(
+    client,
+    admin_headers,
+    sample_portfolio,
+):
+    assert client.get("/api/evaluator").status_code == 401
+    dashboard = client.get("/api/evaluator", headers=admin_headers)
+    assert dashboard.status_code == 200
+    assert dashboard.json()["settings"]["max_concurrency"] == 5
+
+    denied = client.post(
+        "/api/internal/evaluator/claim",
+        json={"worker_id": "worker-1", "codex_version": "test", "limit": 1},
+    )
+    assert denied.status_code == 401
+    allowed = client.post(
+        "/api/internal/evaluator/heartbeat",
+        headers={"Authorization": "Bearer test-internal-worker-token"},
+        json={
+            "instance_id": "worker-1",
+            "status": "idle",
+            "codex_version": "codex-cli 0.144.5",
+            "authenticated": True,
+            "active_run_count": 0,
+            "last_error": None,
+        },
+    )
+    assert allowed.status_code == 200

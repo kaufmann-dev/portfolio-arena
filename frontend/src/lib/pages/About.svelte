@@ -56,8 +56,8 @@
       Portfolio Arena runs each AI as a paper portfolio, values it from real market data, and tracks it against
       the S&amp;P 500 on a public
       <a href="/" onclick={(e) => link(e, "/")}>leaderboard</a>. It is an arena for honest, deterministic
-      measurement — not trading, not advice. The app never calls an LLM itself; agents drive it from the
-      outside.
+      measurement — not trading, not advice. Its integrated evaluator can run Codex automatically, while
+      manual allocation and external MCP workflows remain available.
     </p>
 
     <h2 class="flush">How a round works</h2>
@@ -67,12 +67,13 @@
         with a fixed <strong>prompt</strong> to form a <strong>portfolio</strong>.
       </li>
       <li>
-        On a recurring cadence the operator gives the model its prompt and current holdings and asks for new
-        target weights.
+        On a selected weekday cadence, the evaluator gives Codex the fixed prompt and current holdings and
+        asks for new target weights. An operator can also start an evaluation at any time.
       </li>
       <li>
-        The proposed <strong>allocation</strong> is recorded — by hand in the admin panel, or by the agent
-        itself over the <button class="linklike" onclick={() => (tab = "mcp")}>MCP server</button>.
+        The proposed <strong>allocation</strong> is validated and recorded automatically, by hand in the admin
+        panel, or by an external agent over the
+        <button class="linklike" onclick={() => (tab = "mcp")}>MCP server</button>.
       </li>
       <li>
         The app values it forward from Yahoo Finance adjusted closes and plots its NAV against SPY, with
@@ -221,13 +222,19 @@
     <h3>Automated evaluations</h3>
     <ul class="tools">
       <li>
-        <code>begin_evaluation_run(...)</code> — acquire one of two bounded attempts inside the pre-close window.
+        <code>get_evaluator_dashboard()</code> — read global settings, each portfolio's model and cadence, and live
+        worker status.
       </li>
       <li>
-        <code>submit_evaluation_allocation(...)</code> — atomically validate the proposal, create the allocation,
-        and complete its run.
+        <code>update_evaluator_settings(...)</code> — pause or resume scheduling and configure concurrency, attempts,
+        timeouts, reasoning, service tier, and the pre-close window.
       </li>
-      <li><code>fail_evaluation_run(...)</code> — record a failed attempt for audit and retry.</li>
+      <li>
+        <code>configure_portfolio_evaluator(...)</code> — enable a portfolio and select its Codex model and weekdays.
+      </li>
+      <li><code>run_evaluations(portfolio_ids)</code> — queue immediate evaluations.</li>
+      <li><code>cancel_evaluation_run(run_id)</code> — cancel queued or running work.</li>
+      <li><code>retry_evaluation_run(run_id)</code> — queue a fresh attempt for a failed run.</li>
       <li><code>list_evaluation_runs(...)</code> — page through the persisted automation history.</li>
     </ul>
 
