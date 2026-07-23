@@ -9,6 +9,8 @@ from app.evaluator.worker import (
     ClaimedRun,
     WorkerState,
     codex_environment,
+    evaluate_run,
+    evaluator_prompt,
     run_codex,
     worker_state_payload,
     write_codex_config,
@@ -47,6 +49,7 @@ def test_generated_codex_config_is_read_only_and_internal(tmp_path):
 
     assert 'default_permissions = ":read-only"' in config
     assert 'url = "http://127.0.0.1:8000/mcp"' in config
+    assert 'default_tools_approval_mode = "approve"' in config
     assert "submit_evaluation" not in config
     assert "internal-secret" not in config
     assert "massive-secret" not in config
@@ -75,9 +78,11 @@ def test_run_codex_applies_snapshot_reasoning_without_service_tier(tmp_path, mon
             output_path.write_text(
                 json.dumps(
                     {
+                        "status": "proposal",
                         "positions": [{"symbol": "AAPL", "weight_pct": 100, "note": "test"}],
                         "note": "test",
                         "report": "test",
+                        "error": "",
                     }
                 )
             )
@@ -116,9 +121,11 @@ def test_run_codex_omits_reasoning_when_model_has_none(tmp_path, monkeypatch):
             output_path.write_text(
                 json.dumps(
                     {
+                        "status": "proposal",
                         "positions": [{"symbol": "AAPL", "weight_pct": 100, "note": "test"}],
                         "note": "test",
                         "report": "test",
+                        "error": "",
                     }
                 )
             )
@@ -132,6 +139,49 @@ def test_run_codex_omits_reasoning_when_model_has_none(tmp_path, monkeypatch):
     asyncio.run(run_codex(_settings(tmp_path), _run(None)))
 
     assert not any("model_reasoning_effort" in item for item in captured)
+
+
+def test_evaluator_prompt_has_one_lifecycle_instruction():
+    prompt = evaluator_prompt(_run())
+
+    assert prompt.count("If the returned allocation history is empty") == 1
+    assert "construct the portfolio's initial allocation" in prompt
+    assert "do not rebuild it from scratch" in prompt
+
+
+def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):
+    calls: list[tuple[str, str, dict | None]] = []
+
+    async def fake_run_codex(_settings, _claimed_run):
+        from app.evaluator.worker import Proposal
+
+        return Proposal(
+            status="blocked",
+            positions=[],
+            note="",
+            report="",
+            error="get_portfolio was unavailable",
+        )
+
+    async def fake_internal_request(_settings, method, path, payload=None):
+        calls.append((method, path, payload))
+        return {}
+
+    monkeypatch.setattr("app.evaluator.worker.run_codex", fake_run_codex)
+    monkeypatch.setattr("app.evaluator.worker.internal_request", fake_internal_request)
+
+    asyncio.run(evaluate_run(_settings(tmp_path), _run()))
+
+    assert calls == [
+        (
+            "POST",
+            "/runs/17/fail",
+            {
+                "error": "EvaluationBlocked: get_portfolio was unavailable",
+                "cancelled": False,
+            },
+        )
+    ]
 
 
 def test_worker_state_payload_is_stable():

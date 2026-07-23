@@ -62,7 +62,11 @@ class TestPortfolioDetail:
         assert symbols == {"AAPL", "MSFT"}
 
         assert portfolio["prompt"]["slug"] == "weekly-manager-v1"
-        assert portfolio["execution_prompt"].startswith("Evaluate and rebalance")
+        execution_prompt = portfolio["execution_prompt"]
+        assert execution_prompt.startswith("Evaluate and rebalance")
+        assert execution_prompt.count("If the returned allocation history is empty") == 1
+        assert "construct the portfolio's initial allocation" in execution_prompt
+        assert "do not rebuild it from scratch" in execution_prompt
 
         allocation = portfolio["allocations"][0]
         assert allocation["locked"] is True

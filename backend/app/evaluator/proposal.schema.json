@@ -2,11 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["positions", "note", "report"],
+  "required": ["status", "positions", "note", "report", "error"],
   "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["proposal", "blocked"]
+    },
     "positions": {
       "type": "array",
-      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -19,6 +22,7 @@
       }
     },
     "note": { "type": "string", "maxLength": 4000 },
-    "report": { "type": "string", "maxLength": 20000 }
+    "report": { "type": "string", "maxLength": 20000 },
+    "error": { "type": "string", "maxLength": 4000 }
   }
 }
