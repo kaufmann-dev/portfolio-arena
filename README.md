@@ -3,9 +3,10 @@
 A self-hosted web app that runs a long-term experiment: **can LLMs pick portfolios that beat SPY?**
 
 Portfolio Arena includes a website-controlled Codex evaluator. One Nixpacks deployment starts the
-web app, scheduler, and evaluator worker together; the admin panel controls models, weekdays,
-concurrency, execution settings, immediate runs, cancellation, retries, and history. Manual
-allocation and authenticated MCP workflows remain available.
+web app, scheduler, and evaluator worker together. The admin panel defines models and their
+harness-specific capabilities, combines them into reusable Agents, and controls weekdays,
+concurrency, immediate runs, cancellation, retries, and history. Manual allocation and authenticated
+MCP workflows remain available.
 
 The app simulates the allocations as paper portfolios from Yahoo Finance data and tracks them live
 against SPY on a public leaderboard. It is an _arena_: honest, deterministic measurement — not
@@ -77,6 +78,9 @@ per-portfolio history) — **except** API-key management, which stays in the adm
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
   `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
   `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
+- **Execution-profile tools.** `list_harnesses` exposes the code-defined harness registry;
+  `list_models`, `create_model`, `update_model`, and `delete_model` manage model capabilities; Agent
+  tools combine a model, supported harness, and model-valid reasoning effort into a reusable profile.
 - **Connecting a client.** e.g. `claude mcp add --transport http arena https://<host>/mcp
 --header "Authorization: Bearer <key>"`.
 
@@ -94,19 +98,21 @@ admin-only access; provider policy defines who is admitted.
 
 ## Evaluator Integration
 
-The evaluator is part of Portfolio Arena. Its global and per-portfolio settings are stored in
-PostgreSQL and edited from the admin **Automation** tab. A portfolio can run on any selected Monday
-through Friday, or remain manual-only with no selected weekdays. If a selected day is an NYSE
-holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected
-days converge on the same session. Scheduled close times honor early closes and daylight-saving
-changes.
+The evaluator is part of Portfolio Arena. Models declare their execution ID and available reasoning
+efforts per supported harness. Agents select one of those valid profiles; their display names are
+generated from it. A portfolio whose Agent uses Codex automatically appears in the admin
+**Automation** tab, initially disabled. An enabled portfolio can run on any selected Monday through
+Friday, or remain manual-only with no selected weekdays. If a selected day is an NYSE holiday, that
+evaluation shifts to the next trading day and is deduplicated if multiple selected days converge on
+the same session. Scheduled close times honor early closes and daylight-saving changes.
 
-The website can queue an enabled portfolio at any time. Each run captures the model, reasoning,
-service tier, timeout, attempt limit, and submission deadline in effect when it is queued. Pausing
-stops new claims while active work finishes. Queued work can be cancelled immediately; running work
-receives a cancellation request and its Codex process is terminated. Failed runs can be retried
-manually. All paths use the same server-side proposal and symbol validation and atomic allocation
-write.
+The website can queue an enabled portfolio at any time. Each run captures its Agent and model IDs,
+harness, harness-specific execution model ID, optional reasoning effort, timeout, attempt limit, and
+submission deadline when it is queued. Harness defaults are used; Portfolio Arena does not configure
+a service tier. Pausing stops new claims while active work finishes. Queued work can be cancelled
+immediately; running work receives a cancellation request and its Codex process is terminated.
+Failed runs can be retried manually. All paths use the same server-side proposal and symbol
+validation and atomic allocation write.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are

@@ -28,8 +28,22 @@ class TestCreatePortfolioPrompt:
 
 
 class TestEditPortfolio:
-    def test_patch_updates_name_agent_cost(self, client, admin_headers, sample_portfolio):
-        other = client.post("/api/agents", json={"name": "GPT-5 (Codex)"}, headers=admin_headers).json()
+    def test_patch_updates_name_agent_cost(
+        self,
+        client,
+        admin_headers,
+        sample_portfolio,
+        sample_model,
+    ):
+        other = client.post(
+            "/api/agents",
+            json={
+                "model_id": sample_model["id"],
+                "harness": None,
+                "reasoning_effort": None,
+            },
+            headers=admin_headers,
+        ).json()
 
         resp = client.patch(
             f"/api/portfolios/{sample_portfolio['id']}",

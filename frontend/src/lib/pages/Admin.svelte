@@ -8,7 +8,11 @@
     ApiKeyCreated,
     ApiKeyOut,
     ApiKeysResponse,
+    HarnessDefinition,
+    HarnessesResponse,
     LeaderboardResponse,
+    ModelDefinition,
+    ModelHarnessCapability,
     PortfolioDetail,
     PortfolioSummary,
     PromptOut,
@@ -18,13 +22,16 @@
   import { fmtDate, num, pctPoints, signClass } from "../format";
   import { auth } from "../stores/auth.svelte";
 
-  type Tab = "allocation" | "automation" | "portfolio" | "agents" | "prompts" | "keys" | "settings";
+  type Tab =
+    "allocation" | "automation" | "portfolio" | "models" | "agents" | "prompts" | "keys" | "settings";
   let tab = $state<Tab>("allocation");
 
   // ── Shared data ──────────────────────────────
   let portfolios = $state<PortfolioSummary[]>([]);
   let prompts = $state<PromptOut[]>([]);
   let agents = $state<AgentOut[]>([]);
+  let models = $state<ModelDefinition[]>([]);
+  let harnesses = $state<HarnessDefinition[]>([]);
   let notice = $state("");
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -35,14 +42,18 @@
   }
 
   async function loadAll() {
-    const [leaderboard, promptsPayload, agentsPayload] = await Promise.all([
+    const [leaderboard, promptsPayload, agentsPayload, modelsPayload, harnessesPayload] = await Promise.all([
       apiJson<LeaderboardResponse>("/api/leaderboard"),
       apiJson<{ prompts: PromptOut[] }>("/api/prompts"),
       apiJson<{ agents: AgentOut[] }>("/api/agents"),
+      apiJson<{ models: ModelDefinition[] }>("/api/models"),
+      apiJson<HarnessesResponse>("/api/harnesses"),
     ]);
     portfolios = leaderboard.portfolios;
     prompts = promptsPayload.prompts;
     agents = agentsPayload.agents.filter((agent) => agent.slug !== "benchmark");
+    models = modelsPayload.models.filter((model) => model.slug !== "benchmark");
+    harnesses = harnessesPayload.harnesses;
   }
 
   async function refreshPrompts() {
@@ -208,17 +219,166 @@
     }
   }
 
-  // ── Tab 3: agents ────────────────────────────
-  let editAgent = $state<AgentOut | null>(null);
-  let newAgentName = $state("");
+  // ── Models and agents ────────────────────────
+  let editModel = $state<ModelDefinition | null>(null);
+  let newModelName = $state("");
+  let newModelNotes = $state("");
+  let newModelCapabilities = $state<ModelHarnessCapability[]>([]);
+
+  function capabilityPayload(capabilities: ModelHarnessCapability[]) {
+    return capabilities.map(({ harness, execution_model_id, reasoning_efforts }) => ({
+      harness,
+      execution_model_id,
+      reasoning_efforts,
+    }));
+  }
+
+  function toggleModelHarness(
+    capabilities: ModelHarnessCapability[],
+    harness: HarnessDefinition,
+    enabled: boolean,
+  ): ModelHarnessCapability[] {
+    if (!enabled) return capabilities.filter((capability) => capability.harness !== harness.id);
+    if (capabilities.some((capability) => capability.harness === harness.id)) return capabilities;
+    return [
+      ...capabilities,
+      {
+        harness: harness.id,
+        harness_name: harness.name,
+        execution_model_id: "",
+        reasoning_efforts: [],
+      },
+    ];
+  }
+
+  function toggleCapabilityEffort(capability: ModelHarnessCapability, effort: string, enabled: boolean) {
+    capability.reasoning_efforts = enabled
+      ? [...capability.reasoning_efforts, effort]
+      : capability.reasoning_efforts.filter((item) => item !== effort);
+  }
+
+  async function createModel(event: SubmitEvent) {
+    event.preventDefault();
+    if (!newModelName.trim()) return;
+    try {
+      await postJson("/api/models", {
+        name: newModelName.trim(),
+        notes: newModelNotes.trim(),
+        capabilities: capabilityPayload($state.snapshot(newModelCapabilities)),
+      });
+      newModelName = "";
+      newModelNotes = "";
+      newModelCapabilities = [];
+      await loadAll();
+      flash("Model created.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Create failed");
+    }
+  }
+
+  async function saveModel(event: SubmitEvent) {
+    event.preventDefault();
+    if (!editModel) return;
+    try {
+      await patchJson(`/api/models/${editModel.id}`, {
+        name: editModel.name,
+        notes: editModel.notes,
+        capabilities: capabilityPayload($state.snapshot(editModel.capabilities)),
+      });
+      editModel = null;
+      await loadAll();
+      flash("Model saved.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Save failed");
+    }
+  }
+
+  async function deleteModel(model: ModelDefinition) {
+    if (!confirm(`Delete model ${model.name}?`)) return;
+    try {
+      await del(`/api/models/${model.id}`);
+      await loadAll();
+      flash("Model deleted.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  interface AgentDraft {
+    id?: number;
+    model_id: number;
+    harness: string;
+    reasoning_effort: string;
+    notes: string;
+  }
+
+  let editAgent = $state<AgentDraft | null>(null);
+  let newAgentModelId = $state(0);
+  let newAgentHarness = $state("");
+  let newAgentReasoningEffort = $state("");
   let newAgentNotes = $state("");
+
+  function modelById(modelId: number) {
+    return models.find((model) => model.id === modelId);
+  }
+
+  function selectedCapability(modelId: number, harness: string) {
+    return modelById(modelId)?.capabilities.find((capability) => capability.harness === harness);
+  }
+
+  const newAgentCapability = $derived(selectedCapability(newAgentModelId, newAgentHarness));
+  const editAgentCapability = $derived(
+    editAgent ? selectedCapability(editAgent.model_id, editAgent.harness) : null,
+  );
+
+  function resetAgentExecution(draft: AgentDraft) {
+    const capability = selectedCapability(draft.model_id, draft.harness);
+    if (!capability) {
+      draft.harness = "";
+      draft.reasoning_effort = "";
+      return;
+    }
+    draft.reasoning_effort = capability.reasoning_efforts[0] ?? "";
+  }
+
+  function setNewAgentModel(event: Event) {
+    newAgentModelId = Number((event.currentTarget as HTMLSelectElement).value);
+    newAgentHarness = "";
+    newAgentReasoningEffort = "";
+  }
+
+  function setNewAgentHarness(event: Event) {
+    newAgentHarness = (event.currentTarget as HTMLSelectElement).value;
+    newAgentReasoningEffort =
+      selectedCapability(newAgentModelId, newAgentHarness)?.reasoning_efforts[0] ?? "";
+  }
+
+  function setEditAgentModel(event: Event) {
+    if (!editAgent) return;
+    editAgent.model_id = Number((event.currentTarget as HTMLSelectElement).value);
+    editAgent.harness = "";
+    editAgent.reasoning_effort = "";
+  }
+
+  function setEditAgentHarness(event: Event) {
+    if (!editAgent) return;
+    editAgent.harness = (event.currentTarget as HTMLSelectElement).value;
+    resetAgentExecution(editAgent);
+  }
 
   async function createAgent(event: SubmitEvent) {
     event.preventDefault();
-    if (!newAgentName.trim()) return;
+    if (!newAgentModelId) return;
     try {
-      await postJson("/api/agents", { name: newAgentName.trim(), notes: newAgentNotes.trim() });
-      newAgentName = "";
+      await postJson("/api/agents", {
+        model_id: newAgentModelId,
+        harness: newAgentHarness || null,
+        reasoning_effort: newAgentReasoningEffort || null,
+        notes: newAgentNotes.trim(),
+      });
+      newAgentModelId = 0;
+      newAgentHarness = "";
+      newAgentReasoningEffort = "";
       newAgentNotes = "";
       await loadAll();
       flash("Agent created.");
@@ -229,11 +389,20 @@
 
   async function saveAgent(event: SubmitEvent) {
     event.preventDefault();
-    if (!editAgent) return;
-    await patchJson(`/api/agents/${editAgent.id}`, { name: editAgent.name, notes: editAgent.notes });
-    editAgent = null;
-    await loadAll();
-    flash("Agent saved.");
+    if (!editAgent?.id) return;
+    try {
+      await patchJson(`/api/agents/${editAgent.id}`, {
+        model_id: editAgent.model_id,
+        harness: editAgent.harness || null,
+        reasoning_effort: editAgent.reasoning_effort || null,
+        notes: editAgent.notes,
+      });
+      editAgent = null;
+      await loadAll();
+      flash("Agent saved.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Save failed");
+    }
   }
 
   async function deleteAgent(agent: AgentOut) {
@@ -474,6 +643,7 @@
     {@render tabBtn("allocation", "Allocations")}
     {@render tabBtn("automation", "Automation")}
     {@render tabBtn("portfolio", "Portfolios")}
+    {@render tabBtn("models", "Models")}
     {@render tabBtn("agents", "Agents")}
     {@render tabBtn("prompts", "Prompts")}
     {@render tabBtn("keys", "API Keys")}
@@ -754,24 +924,211 @@
         <div class="empty-state"><p>No portfolios yet.</p></div>
       {/each}
     </section>
+  {:else if tab === "models"}
+    <section class="card">
+      <h2>New model</h2>
+      <form onsubmit={createModel}>
+        <div class="field">
+          <label for="nm-name">Display name</label>
+          <input id="nm-name" type="text" bind:value={newModelName} placeholder="GPT-5.6 Sol" />
+        </div>
+        <div class="field">
+          <label for="nm-notes">Notes <span class="muted">(optional)</span></label>
+          <input id="nm-notes" type="text" bind:value={newModelNotes} />
+        </div>
+        {#each harnesses as harness (harness.id)}
+          {@const capability = newModelCapabilities.find((item) => item.harness === harness.id)}
+          <fieldset class="capability">
+            <label class="toggle-label">
+              <input
+                type="checkbox"
+                checked={Boolean(capability)}
+                onchange={(event) =>
+                  (newModelCapabilities = toggleModelHarness(
+                    newModelCapabilities,
+                    harness,
+                    event.currentTarget.checked,
+                  ))}
+              />
+              Supports {harness.name}
+            </label>
+            {#if capability}
+              <div class="field">
+                <label for="nm-execution-{harness.id}">Execution model ID</label>
+                <input
+                  id="nm-execution-{harness.id}"
+                  type="text"
+                  bind:value={capability.execution_model_id}
+                  placeholder="gpt-5.6-sol"
+                />
+              </div>
+              <span class="field-label">Supported reasoning efforts</span>
+              <div class="check-group">
+                {#each harness.reasoning_efforts as effort (effort.id)}
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={capability.reasoning_efforts.includes(effort.id)}
+                      onchange={(event) =>
+                        toggleCapabilityEffort(capability, effort.id, event.currentTarget.checked)}
+                    />
+                    {effort.name}
+                  </label>
+                {/each}
+              </div>
+              <p class="muted hint">
+                Leave every effort unchecked when this model exposes no effort control.
+              </p>
+            {/if}
+          </fieldset>
+        {/each}
+        <button class="btn primary" type="submit" disabled={!newModelName.trim()}>Create model</button>
+      </form>
+
+      <h2 class="spaced">Models</h2>
+      {#each models as model (model.id)}
+        {#if editModel?.id === model.id}
+          <form class="edit-form" onsubmit={saveModel}>
+            <div class="field">
+              <label for="em-name-{model.id}">Display name</label>
+              <input id="em-name-{model.id}" type="text" bind:value={editModel.name} />
+            </div>
+            <div class="field">
+              <label for="em-notes-{model.id}">Notes</label>
+              <input id="em-notes-{model.id}" type="text" bind:value={editModel.notes} />
+            </div>
+            {#each harnesses as harness (harness.id)}
+              {@const capability = editModel.capabilities.find((item) => item.harness === harness.id)}
+              <fieldset class="capability">
+                <label class="toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(capability)}
+                    onchange={(event) => {
+                      if (editModel) {
+                        editModel.capabilities = toggleModelHarness(
+                          editModel.capabilities,
+                          harness,
+                          event.currentTarget.checked,
+                        );
+                      }
+                    }}
+                  />
+                  Supports {harness.name}
+                </label>
+                {#if capability}
+                  <div class="field">
+                    <label for="em-execution-{model.id}-{harness.id}">Execution model ID</label>
+                    <input
+                      id="em-execution-{model.id}-{harness.id}"
+                      type="text"
+                      bind:value={capability.execution_model_id}
+                    />
+                  </div>
+                  <span class="field-label">Supported reasoning efforts</span>
+                  <div class="check-group">
+                    {#each harness.reasoning_efforts as effort (effort.id)}
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={capability.reasoning_efforts.includes(effort.id)}
+                          onchange={(event) =>
+                            toggleCapabilityEffort(capability, effort.id, event.currentTarget.checked)}
+                        />
+                        {effort.name}
+                      </label>
+                    {/each}
+                  </div>
+                {/if}
+              </fieldset>
+            {/each}
+            <p class="muted hint">
+              Execution-ID changes affect future runs for {model.agent_count} agent(s). Existing runs keep their
+              snapshot.
+            </p>
+            <div class="edit-actions">
+              <button class="btn primary" type="submit">Save</button>
+              <button class="btn" type="button" onclick={() => (editModel = null)}>Cancel</button>
+            </div>
+          </form>
+        {:else}
+          <div class="manage-row">
+            <div>
+              <strong>{model.name}</strong>
+              <span class="muted"> · {model.agent_count} agent(s)</span>
+              {#each model.capabilities as capability (capability.harness)}
+                <div class="muted num">
+                  {capability.harness_name}: {capability.execution_model_id}
+                  · {capability.reasoning_efforts.length
+                    ? capability.reasoning_efforts.join(", ")
+                    : "no reasoning control"}
+                </div>
+              {/each}
+              {#if model.notes}<p class="muted preview">{model.notes}</p>{/if}
+            </div>
+            <div class="row-actions">
+              <button
+                class="btn small"
+                onclick={() =>
+                  (editModel = {
+                    ...model,
+                    capabilities: model.capabilities.map((capability) => ({
+                      ...capability,
+                      reasoning_efforts: [...capability.reasoning_efforts],
+                    })),
+                  })}>Edit</button
+              >
+              <button
+                class="btn small danger"
+                onclick={() => deleteModel(model)}
+                disabled={model.agent_count > 0}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        {/if}
+      {:else}
+        <div class="empty-state"><p>No models yet — create one above.</p></div>
+      {/each}
+    </section>
   {:else if tab === "agents"}
     <section class="card">
       <h2>New agent</h2>
       <form onsubmit={createAgent}>
         <div class="field">
-          <label for="na-name">Name <span class="muted">(model + harness)</span></label>
-          <input
-            id="na-name"
-            type="text"
-            bind:value={newAgentName}
-            placeholder="Claude Opus 4.8 (Claude Code)"
-          />
+          <label for="na-model">Model</label>
+          <select id="na-model" value={newAgentModelId || ""} onchange={setNewAgentModel}>
+            <option value="">Select a model…</option>
+            {#each models as model (model.id)}
+              <option value={model.id}>{model.name}</option>
+            {/each}
+          </select>
         </div>
+        <div class="field">
+          <label for="na-harness">Harness</label>
+          <select id="na-harness" value={newAgentHarness} onchange={setNewAgentHarness}>
+            <option value="">No supported harness</option>
+            {#each modelById(newAgentModelId)?.capabilities ?? [] as capability (capability.harness)}
+              <option value={capability.harness}>{capability.harness_name}</option>
+            {/each}
+          </select>
+        </div>
+        {#if newAgentCapability?.reasoning_efforts.length}
+          <div class="field">
+            <label for="na-reasoning">Reasoning effort</label>
+            <select id="na-reasoning" bind:value={newAgentReasoningEffort} required>
+              {#each newAgentCapability.reasoning_efforts as effort (effort)}
+                <option value={effort}>{effort}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
         <div class="field">
           <label for="na-notes">Notes <span class="muted">(optional)</span></label>
           <input id="na-notes" type="text" bind:value={newAgentNotes} />
         </div>
-        <button class="btn primary" type="submit" disabled={!newAgentName.trim()}>Create agent</button>
+        <button class="btn primary" type="submit" disabled={!newAgentModelId}>Create agent</button>
       </form>
 
       <h2 class="spaced">Agents</h2>
@@ -779,9 +1136,32 @@
         {#if editAgent?.id === agent.id}
           <form class="edit-form" onsubmit={saveAgent}>
             <div class="field">
-              <label for="ea-name-{agent.id}">Name</label>
-              <input id="ea-name-{agent.id}" type="text" bind:value={editAgent.name} />
+              <label for="ea-model-{agent.id}">Model</label>
+              <select id="ea-model-{agent.id}" value={editAgent.model_id} onchange={setEditAgentModel}>
+                {#each models as model (model.id)}
+                  <option value={model.id}>{model.name}</option>
+                {/each}
+              </select>
             </div>
+            <div class="field">
+              <label for="ea-harness-{agent.id}">Harness</label>
+              <select id="ea-harness-{agent.id}" value={editAgent.harness} onchange={setEditAgentHarness}>
+                <option value="">No supported harness</option>
+                {#each modelById(editAgent.model_id)?.capabilities ?? [] as capability (capability.harness)}
+                  <option value={capability.harness}>{capability.harness_name}</option>
+                {/each}
+              </select>
+            </div>
+            {#if editAgentCapability?.reasoning_efforts.length}
+              <div class="field">
+                <label for="ea-reasoning-{agent.id}">Reasoning effort</label>
+                <select id="ea-reasoning-{agent.id}" bind:value={editAgent.reasoning_effort} required>
+                  {#each editAgentCapability.reasoning_efforts as effort (effort)}
+                    <option value={effort}>{effort}</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
             <div class="field">
               <label for="ea-notes-{agent.id}">Notes</label>
               <input id="ea-notes-{agent.id}" type="text" bind:value={editAgent.notes} />
@@ -792,7 +1172,7 @@
             </div>
           </form>
         {:else}
-          {@const used = agent.portfolios?.length ?? 0}
+          {@const used = agent.portfolios?.length ?? agent.portfolio_count ?? 0}
           <div class="manage-row">
             <div>
               <strong>{agent.name}</strong>
@@ -800,7 +1180,17 @@
               {#if agent.notes}<p class="muted preview">{agent.notes}</p>{/if}
             </div>
             <div class="row-actions">
-              <button class="btn small" onclick={() => (editAgent = { ...agent })}>Edit</button>
+              <button
+                class="btn small"
+                onclick={() =>
+                  (editAgent = {
+                    id: agent.id,
+                    model_id: agent.model.id,
+                    harness: agent.harness?.id ?? "",
+                    reasoning_effort: agent.reasoning_effort ?? "",
+                    notes: agent.notes,
+                  })}>Edit</button
+              >
               <button
                 class="btn small danger"
                 onclick={() => deleteAgent(agent)}
@@ -1070,6 +1460,27 @@
 
   h2.spaced {
     margin-top: 26px;
+  }
+
+  .capability {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    margin: 12px 0;
+  }
+
+  .check-group {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+  }
+
+  .check-group label,
+  .toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 
   .admin-head {

@@ -78,7 +78,8 @@ def clean_db(client):
     with session_factory()() as session:
         session.execute(
             text(
-                "TRUNCATE auth_sessions, settings, agents, prompts, portfolios, allocations, "
+                "TRUNCATE auth_sessions, settings, model_harness_capabilities, model_definitions, "
+                "agents, prompts, portfolios, allocations, "
                 "positions, evaluation_runs, evaluator_settings, portfolio_evaluator_configs, "
                 "evaluator_instances, price_cache, api_keys RESTART IDENTITY CASCADE"
             )
@@ -258,10 +259,34 @@ def sample_prompt(client, admin_headers) -> dict:
 
 
 @pytest.fixture
-def sample_agent(client, admin_headers) -> dict:
+def sample_model(client, admin_headers) -> dict:
+    response = client.post(
+        "/api/models",
+        json={
+            "name": "GPT-5.6 Sol",
+            "capabilities": [
+                {
+                    "harness": "codex",
+                    "execution_model_id": "gpt-5.6-sol",
+                    "reasoning_efforts": ["low", "medium", "high", "xhigh"],
+                }
+            ],
+        },
+        headers=admin_headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+@pytest.fixture
+def sample_agent(client, admin_headers, sample_model) -> dict:
     response = client.post(
         "/api/agents",
-        json={"name": "Claude Opus 4.8 (Claude Code)"},
+        json={
+            "model_id": sample_model["id"],
+            "harness": "codex",
+            "reasoning_effort": "xhigh",
+        },
         headers=admin_headers,
     )
     assert response.status_code == 201, response.text

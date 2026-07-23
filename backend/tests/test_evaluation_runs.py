@@ -13,7 +13,6 @@ def _enable(session, portfolio, weekdays=None):
         session,
         portfolio_id=portfolio["id"],
         enabled=True,
-        model="gpt-5.6-sol",
         weekdays=weekdays or [],
     )
 
@@ -34,7 +33,8 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
         claimed = evaluator.claim_runs(
             session,
             worker_id="worker-1",
-            codex_version="codex-cli 0.144.5",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
             limit=5,
             now=now,
         )
@@ -71,7 +71,8 @@ def test_scheduled_run_is_created_only_during_configured_window(sample_portfolio
         claimed = evaluator.claim_runs(
             session,
             worker_id="worker-1",
-            codex_version="codex-cli 0.144.5",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
             limit=5,
             now=inside_window,
         )
@@ -98,7 +99,8 @@ def test_pause_keeps_queued_work_and_stops_claiming(sample_portfolio):
         claimed = evaluator.claim_runs(
             session,
             worker_id="worker-1",
-            codex_version="codex-cli 0.144.5",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
             limit=5,
             now=now,
         )
@@ -126,7 +128,6 @@ def test_disabling_portfolio_automation_cancels_queued_work(sample_portfolio):
             session,
             portfolio_id=sample_portfolio["id"],
             enabled=False,
-            model="gpt-5.6-sol",
             weekdays=[],
         )
         history = evaluator.list_runs(session)
@@ -151,7 +152,8 @@ def test_running_cancel_request_finishes_as_cancelled(sample_portfolio):
         evaluator.claim_runs(
             session,
             worker_id="worker-1",
-            codex_version="codex-cli 0.144.5",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
             limit=1,
             now=now,
         )
@@ -185,7 +187,8 @@ def test_failed_run_retry_creates_linked_manual_run(sample_portfolio):
         evaluator.claim_runs(
             session,
             worker_id="worker-1",
-            codex_version="codex-cli 0.144.5",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
             limit=1,
             now=now,
         )
@@ -209,7 +212,12 @@ def test_admin_dashboard_and_internal_worker_auth(
 
     denied = client.post(
         "/api/internal/evaluator/claim",
-        json={"worker_id": "worker-1", "codex_version": "test", "limit": 1},
+        json={
+            "worker_id": "worker-1",
+            "harness": "codex",
+            "harness_version": "test",
+            "limit": 1,
+        },
     )
     assert denied.status_code == 401
     allowed = client.post(
@@ -217,8 +225,9 @@ def test_admin_dashboard_and_internal_worker_auth(
         headers={"Authorization": "Bearer test-internal-worker-token"},
         json={
             "instance_id": "worker-1",
+            "harness": "codex",
             "status": "idle",
-            "codex_version": "codex-cli 0.144.5",
+            "harness_version": "codex-cli 0.144.5",
             "authenticated": True,
             "active_run_count": 0,
             "last_error": None,

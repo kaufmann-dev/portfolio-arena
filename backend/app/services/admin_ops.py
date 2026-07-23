@@ -12,11 +12,33 @@ from datetime import UTC, date, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..models import Agent, Allocation, Portfolio, Position, Prompt, Setting
+from ..models import (
+    Agent,
+    Allocation,
+    EvaluationRun,
+    ModelDefinition,
+    ModelHarnessCapability,
+    Portfolio,
+    PortfolioEvaluatorConfig,
+    Position,
+    Prompt,
+    Setting,
+)
 from ..seed import DEFAULT_COST_BPS_KEY
 from ..util import slugify
 from .arena import compute_valuations, load_portfolios
 from .benchmarks import ensure_benchmark_allocations
+from .errors import AdminOpError
+from .harnesses import supports_automation
+from .model_catalog import (
+    agent_name,
+    agent_out,
+    execution_profile_name,
+    load_agent,
+    model_out,
+    validate_agent_profile,
+    validate_capabilities,
+)
 from .prompt_policy import allocation_policy_out, validate_position_weights
 from .serialize import serialize_allocation, serialize_detail
 from .symbols import (
@@ -30,15 +52,6 @@ from .trading_calendar import effective_date_for, is_locked
 DEFAULT_COST_BPS_FALLBACK = 10
 
 
-class AdminOpError(Exception):
-    """A transport-neutral failure carrying an HTTP-style status code."""
-
-    def __init__(self, status_code: int, message: str):
-        super().__init__(message)
-        self.status_code = status_code
-        self.message = message
-
-
 def unique_slug(session: Session, model, wanted: str) -> str:
     slug = slugify(wanted)
     candidate = slug
@@ -49,32 +62,218 @@ def unique_slug(session: Session, model, wanted: str) -> str:
     return candidate
 
 
-# --- Agents -----------------------------------------------------------------
+# --- Models and agents ------------------------------------------------------
 
 
-def _agent_out(agent: Agent) -> dict:
-    return {"id": agent.id, "slug": agent.slug, "name": agent.name, "notes": agent.notes}
+def list_models(session: Session) -> dict:
+    models = session.scalars(
+        select(ModelDefinition)
+        .options(selectinload(ModelDefinition.capabilities))
+        .order_by(ModelDefinition.slug)
+    ).all()
+    counts = dict(session.execute(select(Agent.model_id, func.count()).group_by(Agent.model_id)).all())
+    return {"models": [model_out(model, agent_count=counts.get(model.id, 0)) for model in models]}
 
 
-def create_agent(session: Session, *, name: str, slug: str | None = None, notes: str = "") -> dict:
-    agent = Agent(slug=unique_slug(session, Agent, slug or name), name=name, notes=notes)
+def create_model(
+    session: Session,
+    *,
+    name: str,
+    capabilities: list[dict],
+    slug: str | None = None,
+    notes: str = "",
+) -> dict:
+    clean_name = name.strip()
+    if not clean_name:
+        raise AdminOpError(422, "Model name is required")
+    model = ModelDefinition(
+        slug=unique_slug(session, ModelDefinition, slug or clean_name),
+        name=clean_name,
+        notes=notes,
+    )
+    for capability in validate_capabilities(capabilities):
+        model.capabilities.append(ModelHarnessCapability(**capability))
+    session.add(model)
+    session.commit()
+    return model_out(model, agent_count=0)
+
+
+def update_model(
+    session: Session,
+    model_id: int,
+    *,
+    name: str | None = None,
+    notes: str | None = None,
+    capabilities: list[dict] | None = None,
+) -> dict:
+    model = session.scalars(
+        select(ModelDefinition)
+        .where(ModelDefinition.id == model_id)
+        .options(selectinload(ModelDefinition.capabilities))
+        .with_for_update()
+    ).first()
+    if model is None:
+        raise AdminOpError(404, "Model not found")
+    if capabilities is not None:
+        normalized = validate_capabilities(capabilities)
+        wanted = {item["harness"]: item for item in normalized}
+        agents = session.scalars(select(Agent).where(Agent.model_id == model_id)).all()
+        for agent in agents:
+            if agent.harness is None:
+                continue
+            replacement = wanted.get(agent.harness)
+            if replacement is None:
+                raise AdminOpError(
+                    409,
+                    f"{agent_name(agent)} still uses the {agent.harness} capability",
+                )
+            if agent.reasoning_effort not in replacement["reasoning_efforts"]:
+                if not (agent.reasoning_effort is None and not replacement["reasoning_efforts"]):
+                    raise AdminOpError(
+                        409,
+                        f"{agent_name(agent)} still uses reasoning effort "
+                        f"{agent.reasoning_effort or '(none)'}",
+                    )
+        existing = {item.harness: item for item in model.capabilities}
+        for harness, item in wanted.items():
+            capability = existing.get(harness)
+            if capability is None:
+                model.capabilities.append(ModelHarnessCapability(**item))
+            else:
+                capability.execution_model_id = item["execution_model_id"]
+                capability.reasoning_efforts = item["reasoning_efforts"]
+        for harness, capability in existing.items():
+            if harness not in wanted:
+                model.capabilities.remove(capability)
+    if name is not None:
+        clean_name = name.strip()
+        if not clean_name:
+            raise AdminOpError(422, "Model name is required")
+        model.name = clean_name
+    if notes is not None:
+        model.notes = notes
+    session.commit()
+    count = session.scalar(select(func.count()).select_from(Agent).where(Agent.model_id == model.id))
+    return model_out(model, agent_count=count or 0)
+
+
+def delete_model(session: Session, model_id: int) -> dict:
+    model = session.get(ModelDefinition, model_id)
+    if model is None:
+        raise AdminOpError(404, "Model not found")
+    agent_count = session.scalar(select(func.count()).select_from(Agent).where(Agent.model_id == model_id))
+    run_count = session.scalar(
+        select(func.count()).select_from(EvaluationRun).where(EvaluationRun.model_id == model_id)
+    )
+    if agent_count or run_count:
+        raise AdminOpError(409, "This model is still used by an agent or evaluation run")
+    session.delete(model)
+    session.commit()
+    return {"ok": True}
+
+
+def _profile_exists(
+    session: Session,
+    *,
+    model_id: int,
+    harness: str | None,
+    reasoning_effort: str | None,
+    exclude_agent_id: int | None = None,
+) -> bool:
+    query = select(Agent.id).where(
+        Agent.model_id == model_id,
+        Agent.harness.is_(None) if harness is None else Agent.harness == harness,
+        Agent.reasoning_effort.is_(None)
+        if reasoning_effort is None
+        else Agent.reasoning_effort == reasoning_effort,
+    )
+    if exclude_agent_id is not None:
+        query = query.where(Agent.id != exclude_agent_id)
+    return session.scalar(query.limit(1)) is not None
+
+
+def create_agent(
+    session: Session,
+    *,
+    model_id: int,
+    harness: str | None,
+    reasoning_effort: str | None,
+    slug: str | None = None,
+    notes: str = "",
+) -> dict:
+    model, _, clean_effort = validate_agent_profile(
+        session,
+        model_id=model_id,
+        harness=harness,
+        reasoning_effort=reasoning_effort,
+    )
+    clean_harness = harness.strip() if harness else None
+    if _profile_exists(
+        session,
+        model_id=model.id,
+        harness=clean_harness,
+        reasoning_effort=clean_effort,
+    ):
+        raise AdminOpError(409, "An agent with this execution profile already exists")
+    agent = Agent(
+        slug=unique_slug(
+            session,
+            Agent,
+            slug or execution_profile_name(model, clean_harness, clean_effort),
+        ),
+        model_id=model.id,
+        harness=clean_harness,
+        reasoning_effort=clean_effort,
+        notes=notes,
+    )
     session.add(agent)
     session.commit()
-    return _agent_out(agent)
+    return agent_out(agent)
 
 
 def update_agent(
-    session: Session, agent_id: int, *, name: str | None = None, notes: str | None = None
+    session: Session,
+    agent_id: int,
+    *,
+    model_id: int | None = None,
+    harness: str | None = None,
+    reasoning_effort: str | None = None,
+    notes: str | None = None,
 ) -> dict:
-    agent = session.get(Agent, agent_id)
+    agent = load_agent(session, agent_id)
     if agent is None:
         raise AdminOpError(404, "Agent not found")
-    if name is not None:
-        agent.name = name
+    target_model_id = model_id if model_id is not None else agent.model_id
+    model, _, clean_effort = validate_agent_profile(
+        session,
+        model_id=target_model_id,
+        harness=harness,
+        reasoning_effort=reasoning_effort,
+    )
+    clean_harness = harness.strip() if harness else None
+    if _profile_exists(
+        session,
+        model_id=model.id,
+        harness=clean_harness,
+        reasoning_effort=clean_effort,
+        exclude_agent_id=agent.id,
+    ):
+        raise AdminOpError(409, "An agent with this execution profile already exists")
+    previous_harness = agent.harness
+    agent.model = model
+    agent.harness = clean_harness
+    agent.reasoning_effort = clean_effort
     if notes is not None:
         agent.notes = notes
+    if supports_automation(previous_harness) and not supports_automation(clean_harness):
+        portfolio_ids = session.scalars(select(Portfolio.id).where(Portfolio.agent_id == agent.id)).all()
+        _disable_portfolio_automation(
+            session,
+            portfolio_ids,
+            "Cancelled because the agent no longer supports integrated automation.",
+        )
     session.commit()
-    return _agent_out(agent)
+    return agent_out(agent)
 
 
 def delete_agent(session: Session, agent_id: int) -> dict:
@@ -86,6 +285,11 @@ def delete_agent(session: Session, agent_id: int) -> dict:
     count = session.scalar(select(func.count()).select_from(Portfolio).where(Portfolio.agent_id == agent_id))
     if count:
         raise AdminOpError(409, f"{count} portfolio(s) still use this agent — delete or reassign them first.")
+    run_count = session.scalar(
+        select(func.count()).select_from(EvaluationRun).where(EvaluationRun.agent_id == agent_id)
+    )
+    if run_count:
+        raise AdminOpError(409, f"{run_count} evaluation run(s) still reference this agent.")
     session.delete(agent)
     session.commit()
     return {"ok": True}
@@ -183,6 +387,31 @@ def _default_cost_bps(session: Session) -> int:
     return int(setting.value) if setting else DEFAULT_COST_BPS_FALLBACK
 
 
+def _disable_portfolio_automation(
+    session: Session,
+    portfolio_ids: list[int],
+    reason: str,
+) -> None:
+    if not portfolio_ids:
+        return
+    configs = session.scalars(
+        select(PortfolioEvaluatorConfig).where(PortfolioEvaluatorConfig.portfolio_id.in_(portfolio_ids))
+    ).all()
+    for config in configs:
+        config.enabled = False
+    now = datetime.now(UTC)
+    queued = session.scalars(
+        select(EvaluationRun).where(
+            EvaluationRun.portfolio_id.in_(portfolio_ids),
+            EvaluationRun.status == "queued",
+        )
+    ).all()
+    for run in queued:
+        run.status = "cancelled"
+        run.finished_at = now
+        run.error = reason
+
+
 def create_portfolio(
     session: Session,
     *,
@@ -232,9 +461,16 @@ def update_portfolio(
     if status is not None:
         portfolio.status = status
     if agent_id is not None:
-        if session.get(Agent, agent_id) is None:
+        agent = session.get(Agent, agent_id)
+        if agent is None:
             raise AdminOpError(422, "Agent not found")
         portfolio.agent_id = agent_id
+        if not supports_automation(agent.harness):
+            _disable_portfolio_automation(
+                session,
+                [portfolio.id],
+                "Cancelled because the portfolio was reassigned to an Agent without integrated automation.",
+            )
     if prompt_id is not None:
         if session.get(Prompt, prompt_id) is None:
             raise AdminOpError(422, "Prompt not found")

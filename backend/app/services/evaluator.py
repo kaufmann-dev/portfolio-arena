@@ -8,15 +8,19 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..models import (
+    Agent,
     Allocation,
     EvaluationRun,
     EvaluatorInstance,
     EvaluatorSettings,
+    ModelDefinition,
     Portfolio,
     PortfolioEvaluatorConfig,
 )
 from . import admin_ops
 from .admin_ops import AdminOpError
+from .harnesses import automation_harness_ids, supports_automation
+from .model_catalog import agent_out, agent_snapshot_out, model_ref
 from .serialize import serialize_allocation
 from .trading_calendar import close_at, effective_date_for, is_trading_day
 
@@ -38,8 +42,6 @@ def settings_out(settings: EvaluatorSettings) -> dict:
         "poll_seconds": settings.poll_seconds,
         "attempt_timeout_seconds": settings.attempt_timeout_seconds,
         "max_attempts": settings.max_attempts,
-        "reasoning_effort": settings.reasoning_effort,
-        "service_tier": settings.service_tier,
         "start_before_close_minutes": settings.start_before_close_minutes,
         "cutoff_before_close_minutes": settings.cutoff_before_close_minutes,
         "updated_at": settings.updated_at.isoformat(),
@@ -54,8 +56,8 @@ def config_out(config: PortfolioEvaluatorConfig | None, portfolio: Portfolio) ->
             "name": portfolio.name,
             "status": portfolio.status,
         },
+        "agent": agent_out(portfolio.agent),
         "enabled": config.enabled if config is not None else False,
-        "model": config.model if config is not None else "",
         "weekdays": list(config.weekdays) if config is not None else [],
         "updated_at": config.updated_at.isoformat() if config is not None else None,
     }
@@ -69,21 +71,24 @@ def run_out(run: EvaluationRun) -> dict:
             "slug": run.portfolio.slug,
             "name": run.portfolio.name,
         },
-        "agent": {
-            "id": run.portfolio.agent.id,
-            "slug": run.portfolio.agent.slug,
-            "name": run.portfolio.agent.name,
-        },
+        "agent": agent_snapshot_out(
+            run.agent,
+            run.model,
+            harness=run.harness,
+            execution_model_id=run.execution_model_id,
+            reasoning_effort=run.reasoning_effort,
+        ),
+        "model": model_ref(run.model),
         "trigger_kind": run.trigger_kind,
         "retry_of_run_id": run.retry_of_run_id,
         "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None,
         "deadline_at": _iso(run.deadline_at),
-        "model": run.model,
+        "harness": run.harness,
+        "execution_model_id": run.execution_model_id,
         "reasoning_effort": run.reasoning_effort,
-        "service_tier": run.service_tier,
         "timeout_seconds": run.timeout_seconds,
         "max_attempts": run.max_attempts,
-        "codex_version": run.codex_version,
+        "harness_version": run.harness_version,
         "worker_id": run.worker_id,
         "status": run.status,
         "attempt_count": run.attempt_count,
@@ -99,7 +104,13 @@ def run_out(run: EvaluationRun) -> dict:
 
 
 def _run_query():
-    return select(EvaluationRun).options(selectinload(EvaluationRun.portfolio).selectinload(Portfolio.agent))
+    return select(EvaluationRun).options(
+        selectinload(EvaluationRun.portfolio),
+        selectinload(EvaluationRun.agent)
+        .selectinload(Agent.model)
+        .selectinload(ModelDefinition.capabilities),
+        selectinload(EvaluationRun.model),
+    )
 
 
 def _load_run(session: Session, run_id: int, *, lock: bool = False) -> EvaluationRun:
@@ -139,10 +150,6 @@ def _validate_settings(values: dict) -> None:
             raise AdminOpError(422, f"{key} must be between {minimum} and {maximum}")
     if values["start_before_close_minutes"] <= values["cutoff_before_close_minutes"]:
         raise AdminOpError(422, "Evaluation start must be earlier than the submission cutoff")
-    if values["reasoning_effort"] not in {"low", "medium", "high", "xhigh"}:
-        raise AdminOpError(422, "Invalid reasoning effort")
-    if values["service_tier"] not in {"standard", "fast"}:
-        raise AdminOpError(422, "Invalid service tier")
 
 
 def update_settings(session: Session, **values) -> dict:
@@ -155,8 +162,6 @@ def update_settings(session: Session, **values) -> dict:
             "poll_seconds",
             "attempt_timeout_seconds",
             "max_attempts",
-            "reasoning_effort",
-            "service_tier",
             "start_before_close_minutes",
             "cutoff_before_close_minutes",
         )
@@ -173,21 +178,23 @@ def update_portfolio_config(
     *,
     portfolio_id: int,
     enabled: bool,
-    model: str,
     weekdays: list[int],
 ) -> dict:
     get_settings(session, lock=True)
-    portfolio = session.get(Portfolio, portfolio_id)
+    portfolio = session.scalars(
+        select(Portfolio)
+        .where(Portfolio.id == portfolio_id)
+        .options(
+            selectinload(Portfolio.agent).selectinload(Agent.model).selectinload(ModelDefinition.capabilities)
+        )
+    ).first()
     if portfolio is None or portfolio.is_benchmark:
         raise AdminOpError(404, "Contestant portfolio not found")
-    clean_model = model.strip()
     clean_weekdays = sorted(set(weekdays))
     if enabled and portfolio.status != "active":
         raise AdminOpError(409, "Archived portfolios cannot be enabled for evaluation")
-    if enabled and not clean_model:
-        raise AdminOpError(422, "An enabled evaluator configuration requires a model")
-    if len(clean_model) > 200:
-        raise AdminOpError(422, "Model must be at most 200 characters")
+    if enabled and not supports_automation(portfolio.agent.harness):
+        raise AdminOpError(422, "The portfolio agent does not support integrated automation")
     if any(day < 0 or day > 4 for day in clean_weekdays):
         raise AdminOpError(422, "Weekdays must be numbers from 0 (Monday) through 4 (Friday)")
 
@@ -196,13 +203,11 @@ def update_portfolio_config(
         config = PortfolioEvaluatorConfig(
             portfolio_id=portfolio_id,
             enabled=enabled,
-            model=clean_model,
             weekdays=clean_weekdays,
         )
         session.add(config)
     else:
         config.enabled = enabled
-        config.model = clean_model
         config.weekdays = clean_weekdays
     if not enabled:
         current_time = datetime.now(UTC)
@@ -237,7 +242,8 @@ def _runtime_out(session: Session, settings: EvaluatorSettings, now: datetime) -
             "online": False,
             "status": "offline",
             "authenticated": False,
-            "codex_version": latest.codex_version if latest else None,
+            "harness": latest.harness if latest else "codex",
+            "harness_version": latest.harness_version if latest else None,
             "active_run_count": 0,
             "last_heartbeat_at": _iso(latest.last_heartbeat_at) if latest else None,
             "last_error": latest.last_error if latest else None,
@@ -248,7 +254,8 @@ def _runtime_out(session: Session, settings: EvaluatorSettings, now: datetime) -
         "online": True,
         "status": "paused" if not settings.enabled else primary.status,
         "authenticated": all(instance.authenticated for instance in instances),
-        "codex_version": primary.codex_version,
+        "harness": primary.harness,
+        "harness_version": primary.harness_version,
         "active_run_count": sum(instance.active_run_count for instance in instances),
         "last_heartbeat_at": primary.last_heartbeat_at.isoformat(),
         "last_error": next((instance.last_error for instance in instances if instance.last_error), None),
@@ -261,8 +268,17 @@ def get_dashboard(session: Session, *, now: datetime | None = None) -> dict:
     settings = get_settings(session)
     portfolios = session.scalars(
         select(Portfolio)
-        .where(Portfolio.is_benchmark.is_(False))
-        .options(selectinload(Portfolio.evaluator_config))
+        .join(Portfolio.agent)
+        .where(
+            Portfolio.is_benchmark.is_(False),
+            Agent.harness.in_(automation_harness_ids()),
+        )
+        .options(
+            selectinload(Portfolio.evaluator_config),
+            selectinload(Portfolio.agent)
+            .selectinload(Agent.model)
+            .selectinload(ModelDefinition.capabilities),
+        )
         .order_by(Portfolio.name)
     ).all()
     return {
@@ -318,15 +334,27 @@ def _new_run(
     deadline_at: datetime | None = None,
     retry_of_run_id: int | None = None,
 ) -> EvaluationRun:
+    portfolio = config.portfolio
+    agent = portfolio.agent
+    if not supports_automation(agent.harness):
+        raise AdminOpError(409, "Portfolio agent does not support integrated automation")
+    capability = next(
+        (item for item in agent.model.capabilities if item.harness == agent.harness),
+        None,
+    )
+    if capability is None:
+        raise AdminOpError(409, "Portfolio agent model is not configured for its harness")
     return EvaluationRun(
         portfolio_id=config.portfolio_id,
+        agent_id=agent.id,
+        model_id=agent.model_id,
         scheduled_for=scheduled_for,
         deadline_at=deadline_at,
         trigger_kind=trigger_kind,
         retry_of_run_id=retry_of_run_id,
-        model=config.model,
-        reasoning_effort=settings.reasoning_effort,
-        service_tier=settings.service_tier,
+        harness=agent.harness,
+        execution_model_id=capability.execution_model_id,
+        reasoning_effort=agent.reasoning_effort,
         timeout_seconds=settings.attempt_timeout_seconds,
         max_attempts=settings.max_attempts,
         status="queued",
@@ -360,13 +388,22 @@ def enqueue_manual_runs(
     items = []
     for portfolio_id in unique_ids:
         config = session.get(PortfolioEvaluatorConfig, portfolio_id)
-        portfolio = session.get(Portfolio, portfolio_id)
+        portfolio = session.scalars(
+            select(Portfolio)
+            .where(Portfolio.id == portfolio_id)
+            .options(
+                selectinload(Portfolio.agent)
+                .selectinload(Agent.model)
+                .selectinload(ModelDefinition.capabilities)
+            )
+        ).first()
         if (
             config is None
             or portfolio is None
             or not config.enabled
             or portfolio.is_benchmark
             or portfolio.status != "active"
+            or not supports_automation(portfolio.agent.harness)
         ):
             items.append(
                 {
@@ -465,10 +502,19 @@ def _enqueue_scheduled(session: Session, settings: EvaluatorSettings, now: datet
     configs = session.scalars(
         select(PortfolioEvaluatorConfig)
         .where(PortfolioEvaluatorConfig.enabled.is_(True))
-        .options(selectinload(PortfolioEvaluatorConfig.portfolio))
+        .options(
+            selectinload(PortfolioEvaluatorConfig.portfolio)
+            .selectinload(Portfolio.agent)
+            .selectinload(Agent.model)
+            .selectinload(ModelDefinition.capabilities)
+        )
     ).all()
     for config in configs:
-        if config.portfolio.status != "active" or not is_due_on(config, local_date):
+        if (
+            config.portfolio.status != "active"
+            or not supports_automation(config.portfolio.agent.harness)
+            or not is_due_on(config, local_date)
+        ):
             continue
         existing = session.scalars(
             select(EvaluationRun).where(
@@ -539,7 +585,8 @@ def claim_runs(
     session: Session,
     *,
     worker_id: str,
-    codex_version: str,
+    harness: str,
+    harness_version: str,
     limit: int,
     now: datetime | None = None,
 ) -> dict:
@@ -579,7 +626,7 @@ def claim_runs(
             rows = session.scalars(
                 _run_query()
                 .join(EvaluationRun.portfolio)
-                .where(EvaluationRun.status == "queued")
+                .where(EvaluationRun.status == "queued", EvaluationRun.harness == harness)
                 .where(Portfolio.status == "active")
                 .order_by(EvaluationRun.created_at, EvaluationRun.id)
                 .limit(claim_limit)
@@ -589,7 +636,7 @@ def claim_runs(
                 run.status = "running"
                 run.attempt_count += 1
                 run.worker_id = worker_id
-                run.codex_version = codex_version
+                run.harness_version = harness_version
                 run.started_at = current_time
                 run.finished_at = None
                 run.lease_expires_at = current_time + timedelta(seconds=run.timeout_seconds + 60)
@@ -730,8 +777,9 @@ def heartbeat(
     session: Session,
     *,
     instance_id: str,
+    harness: str,
     status: str,
-    codex_version: str | None,
+    harness_version: str | None,
     authenticated: bool,
     active_run_count: int,
     last_error: str | None,
@@ -745,10 +793,11 @@ def heartbeat(
     )
     instance = session.get(EvaluatorInstance, instance_id)
     if instance is None:
-        instance = EvaluatorInstance(id=instance_id, status=status)
+        instance = EvaluatorInstance(id=instance_id, harness=harness, status=status)
         session.add(instance)
+    instance.harness = harness
     instance.status = status
-    instance.codex_version = codex_version
+    instance.harness_version = harness_version
     instance.authenticated = authenticated
     instance.active_run_count = active_run_count
     instance.last_error = last_error[:RUN_ERROR_MAX_LENGTH] if last_error else None

@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from .config import BENCHMARK_AGENT_SLUG, BENCHMARK_PROMPT_SLUG, BENCHMARKS, get_settings
-from .models import Agent, EvaluatorSettings, Portfolio, Prompt, Setting
+from .models import Agent, EvaluatorSettings, ModelDefinition, Portfolio, Prompt, Setting
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,27 @@ def seed_settings(session: Session) -> None:
 
 
 def seed_benchmarks(session: Session) -> None:
+    model = session.scalars(
+        select(ModelDefinition).where(ModelDefinition.slug == BENCHMARK_AGENT_SLUG)
+    ).first()
+    if model is None:
+        model = ModelDefinition(
+            slug=BENCHMARK_AGENT_SLUG,
+            name="Benchmark",
+            notes="System benchmark model.",
+        )
+        session.add(model)
+        session.flush()
+
     agent = session.scalars(select(Agent).where(Agent.slug == BENCHMARK_AGENT_SLUG)).first()
     if agent is None:
-        agent = Agent(slug=BENCHMARK_AGENT_SLUG, name="Benchmark", notes="System benchmark identity.")
+        agent = Agent(
+            slug=BENCHMARK_AGENT_SLUG,
+            model_id=model.id,
+            harness=None,
+            reasoning_effort=None,
+            notes="System benchmark identity.",
+        )
         session.add(agent)
         session.flush()
 

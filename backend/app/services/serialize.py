@@ -4,13 +4,16 @@ from datetime import UTC, datetime
 
 from ..models import Allocation, Portfolio
 from .arena import ArenaValuations, PortfolioValuation, age_days, downsample, too_early
+from .model_catalog import agent_out
 from .prompt_policy import allocation_policy_out, manual_execution_prompt
 from .trading_calendar import is_locked
 from .valuation import AppliedAllocation, rebase_series
 
 
 def agent_ref(portfolio: Portfolio) -> dict:
-    return {"id": portfolio.agent.id, "slug": portfolio.agent.slug, "name": portfolio.agent.name}
+    result = agent_out(portfolio.agent)
+    result.pop("notes", None)
+    return result
 
 
 def prompt_ref(portfolio: Portfolio) -> dict:

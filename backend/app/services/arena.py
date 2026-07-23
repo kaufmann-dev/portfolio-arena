@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import TOO_EARLY_AGE_DAYS
-from ..models import Allocation, Portfolio
+from ..models import Agent, Allocation, ModelDefinition, Portfolio
 from . import price_cache, yahoo
 from .trading_calendar import close_at
 from .valuation import (
@@ -100,7 +100,9 @@ def load_portfolios(session: Session) -> list[Portfolio]:
     return list(
         session.scalars(
             select(Portfolio).options(
-                selectinload(Portfolio.agent),
+                selectinload(Portfolio.agent)
+                .selectinload(Agent.model)
+                .selectinload(ModelDefinition.capabilities),
                 selectinload(Portfolio.prompt),
                 selectinload(Portfolio.allocations).selectinload(Allocation.positions),
             )

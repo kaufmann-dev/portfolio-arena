@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -52,10 +53,10 @@ class Setting(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
 
 
-class Agent(Base):
-    """One row per model/harness identity, e.g. "Claude Opus 4.8 (Claude Code)"."""
+class ModelDefinition(Base):
+    """One model plus its harness-specific execution capabilities."""
 
-    __tablename__ = "agents"
+    __tablename__ = "model_definitions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
@@ -64,8 +65,65 @@ class Agent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
+    capabilities: Mapped[list["ModelHarnessCapability"]] = relationship(
+        back_populates="model",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ModelHarnessCapability.harness",
+    )
+    agents: Mapped[list["Agent"]] = relationship(back_populates="model")
+    evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(back_populates="model")
+
+
+class ModelHarnessCapability(Base):
+    __tablename__ = "model_harness_capabilities"
+
+    model_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("model_definitions.id", ondelete="CASCADE"), primary_key=True
+    )
+    harness: Mapped[str] = mapped_column(Text, primary_key=True)
+    execution_model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_efforts: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+
+    model: Mapped[ModelDefinition] = relationship(back_populates="capabilities")
+
+
+class Agent(Base):
+    """A reusable model + harness + reasoning execution profile."""
+
+    __tablename__ = "agents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    model_id: Mapped[int] = mapped_column(Integer, ForeignKey("model_definitions.id"), nullable=False)
+    harness: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reasoning_effort: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["model_id", "harness"],
+            ["model_harness_capabilities.model_id", "model_harness_capabilities.harness"],
+            name="agents_model_harness_fkey",
+        ),
+        Index(
+            "agents_execution_profile_key",
+            model_id,
+            func.coalesce(harness, ""),
+            func.coalesce(reasoning_effort, ""),
+            unique=True,
+        ),
+    )
+    notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    model: Mapped[ModelDefinition] = relationship(back_populates="agents")
     portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="agent")
+    evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(back_populates="agent")
 
 
 class Prompt(Base):
@@ -213,18 +271,20 @@ class EvaluationRun(Base):
     portfolio_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
     )
+    agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
+    model_id: Mapped[int] = mapped_column(Integer, ForeignKey("model_definitions.id"), nullable=False)
     scheduled_for: Mapped[date | None] = mapped_column(Date, nullable=True)
     trigger_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
     retry_of_run_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("evaluation_runs.id", ondelete="SET NULL"), nullable=True
     )
-    model: Mapped[str] = mapped_column(Text, nullable=False)
-    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False, server_default="xhigh")
-    service_tier: Mapped[str] = mapped_column(Text, nullable=False, server_default="fast")
+    harness: Mapped[str] = mapped_column(Text, nullable=False)
+    execution_model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_effort: Mapped[str | None] = mapped_column(Text, nullable=True)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1500")
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    codex_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    harness_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -244,6 +304,8 @@ class EvaluationRun(Base):
     )
 
     portfolio: Mapped[Portfolio] = relationship(back_populates="evaluation_runs")
+    agent: Mapped[Agent] = relationship(back_populates="evaluation_runs")
+    model: Mapped[ModelDefinition] = relationship(back_populates="evaluation_runs")
     allocation: Mapped[Allocation | None] = relationship()
 
 
@@ -268,14 +330,6 @@ class EvaluatorSettings(Base):
             name="evaluator_settings_attempts_check",
         ),
         CheckConstraint(
-            "reasoning_effort IN ('low', 'medium', 'high', 'xhigh')",
-            name="evaluator_settings_reasoning_check",
-        ),
-        CheckConstraint(
-            "service_tier IN ('standard', 'fast')",
-            name="evaluator_settings_service_tier_check",
-        ),
-        CheckConstraint(
             "start_before_close_minutes BETWEEN 15 AND 240",
             name="evaluator_settings_start_check",
         ),
@@ -295,8 +349,6 @@ class EvaluatorSettings(Base):
     poll_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")
     attempt_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1500")
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
-    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False, server_default="xhigh")
-    service_tier: Mapped[str] = mapped_column(Text, nullable=False, server_default="fast")
     start_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")
     cutoff_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="10")
     updated_at: Mapped[datetime] = mapped_column(
@@ -311,7 +363,6 @@ class PortfolioEvaluatorConfig(Base):
         Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), primary_key=True
     )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    model: Mapped[str] = mapped_column(Text, nullable=False)
     weekdays: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -328,8 +379,9 @@ class EvaluatorInstance(Base):
     __table_args__ = (Index("idx_evaluator_instances_heartbeat", "last_heartbeat_at"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    harness: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
-    codex_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    harness_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     authenticated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     active_run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

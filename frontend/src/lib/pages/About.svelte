@@ -63,8 +63,8 @@
     <h2 class="flush">How a round works</h2>
     <ol>
       <li>
-        An <strong>agent</strong> (a model + harness identity, e.g. "Claude Opus 4.8 (Claude Code)") is paired
-        with a fixed <strong>prompt</strong> to form a <strong>portfolio</strong>.
+        An <strong>agent</strong> (a model + harness + optional reasoning profile, e.g. "GPT-5.6 Sol (Codex,
+        Extra high)") is paired with a fixed <strong>prompt</strong> to form a <strong>portfolio</strong>.
       </li>
       <li>
         On a selected weekday cadence, the evaluator gives Codex the fixed prompt and current holdings and
@@ -175,6 +175,8 @@
     <h3>Reading agents, prompts &amp; symbols</h3>
     <ul class="tools">
       <li><code>list_agents()</code> — every agent identity and how many portfolios use it.</li>
+      <li><code>list_harnesses()</code> — supported execution harnesses and their reasoning vocabulary.</li>
+      <li><code>list_models()</code> — model definitions and their harness-specific capabilities.</li>
       <li>
         <code>list_prompts()</code> — every prompt (names and notes, without the body) and its usage count.
       </li>
@@ -222,15 +224,16 @@
     <h3>Automated evaluations</h3>
     <ul class="tools">
       <li>
-        <code>get_evaluator_dashboard()</code> — read global settings, each portfolio's model and cadence, and live
-        worker status.
+        <code>get_evaluator_dashboard()</code> — read global settings, each eligible portfolio's Agent and cadence,
+        and live worker status.
       </li>
       <li>
         <code>update_evaluator_settings(...)</code> — pause or resume scheduling and configure concurrency, attempts,
-        timeouts, reasoning, service tier, and the pre-close window.
+        timeouts, and the pre-close window.
       </li>
       <li>
-        <code>configure_portfolio_evaluator(...)</code> — enable a portfolio and select its Codex model and weekdays.
+        <code>configure_portfolio_evaluator(portfolio_id, enabled, weekdays)</code> — enable a Codex-Agent portfolio
+        and select its weekdays.
       </li>
       <li><code>run_evaluations(portfolio_ids)</code> — queue immediate evaluations.</li>
       <li><code>cancel_evaluation_run(run_id)</code> — cancel queued or running work.</li>
@@ -238,10 +241,18 @@
       <li><code>list_evaluation_runs(...)</code> — page through the persisted automation history.</li>
     </ul>
 
-    <h3>Agents</h3>
+    <h3>Models &amp; agents</h3>
     <ul class="tools">
-      <li><code>create_agent(name, notes?)</code> — add a model + harness identity.</li>
-      <li><code>update_agent(agent_id, name?, notes?)</code> — rename it or edit its notes.</li>
+      <li>
+        <code>create_model(name, capabilities, notes?)</code> — define harness execution IDs and reasoning options.
+      </li>
+      <li><code>update_model(model_id, ...)</code> — change a model definition for future runs.</li>
+      <li><code>delete_model(model_id)</code> — delete a model no Agent or evaluation run uses.</li>
+      <li>
+        <code>create_agent(model_id, harness, reasoning_effort, notes?)</code> — create a unique generated execution
+        profile.
+      </li>
+      <li><code>update_agent(...)</code> — change an Agent profile globally for future runs.</li>
       <li><code>delete_agent(agent_id)</code> — delete an agent no portfolio uses.</li>
     </ul>
 

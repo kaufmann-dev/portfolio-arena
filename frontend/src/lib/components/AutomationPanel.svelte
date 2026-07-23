@@ -21,7 +21,6 @@
 
   interface ConfigDraft {
     enabled: boolean;
-    model: string;
     weekdays: number[];
   }
 
@@ -51,8 +50,6 @@
       poll_seconds: settings.poll_seconds,
       attempt_timeout_seconds: settings.attempt_timeout_seconds,
       max_attempts: settings.max_attempts,
-      reasoning_effort: settings.reasoning_effort,
-      service_tier: settings.service_tier,
       start_before_close_minutes: settings.start_before_close_minutes,
       cutoff_before_close_minutes: settings.cutoff_before_close_minutes,
     };
@@ -66,7 +63,6 @@
         config.portfolio.id,
         {
           enabled: config.enabled,
-          model: config.model,
           weekdays: [...config.weekdays],
         },
       ]),
@@ -174,7 +170,6 @@
       }
       configDrafts[config.portfolio.id] = {
         enabled: saved.enabled,
-        model: saved.model,
         weekdays: [...saved.weekdays],
       };
       notice = `${config.portfolio.name} evaluator settings saved.`;
@@ -279,7 +274,7 @@
         </div>
         <div>
           <span class="runtime-label">Version</span>
-          <span class="num">{dashboard.runtime.codex_version ?? "—"}</span>
+          <span class="num">{dashboard.runtime.harness_version ?? "—"}</span>
         </div>
         <div>
           <span class="runtime-label">Active</span>
@@ -355,22 +350,6 @@
             <input id="eval-attempts" type="number" min="1" max="5" bind:value={settingsDraft.max_attempts} />
           </div>
           <div class="field">
-            <label for="eval-reasoning">Reasoning effort</label>
-            <select id="eval-reasoning" bind:value={settingsDraft.reasoning_effort}>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="xhigh">Extra high</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="eval-tier">Service tier</label>
-            <select id="eval-tier" bind:value={settingsDraft.service_tier}>
-              <option value="standard">Standard</option>
-              <option value="fast">Fast</option>
-            </select>
-          </div>
-          <div class="field">
             <label for="eval-opens">Start before close (min)</label>
             <input
               id="eval-opens"
@@ -404,7 +383,8 @@
         <div>
           <h2>Portfolio automation</h2>
           <p class="muted">
-            Selected weekdays shift to the next trading day on market holidays. No weekdays means manual-only.
+            Integrated automation currently supports Codex agents. Selected weekdays shift to the next trading
+            day on market holidays; no weekdays means manual-only.
           </p>
         </div>
       </div>
@@ -417,6 +397,12 @@
                 <div>
                   <strong>{config.portfolio.name}</strong>
                   <div class="muted num">{config.portfolio.slug}</div>
+                  <div class="muted">
+                    {config.agent.name} · {config.agent.execution_model_id}
+                    {#if config.agent.reasoning_effort}
+                      · {config.agent.reasoning_effort}
+                    {/if}
+                  </div>
                 </div>
                 <label class="toggle-label">
                   <input
@@ -428,15 +414,6 @@
                 </label>
               </div>
               <div class="config-fields">
-                <div class="field model-field">
-                  <label for={`eval-model-${config.portfolio.id}`}>Model</label>
-                  <input
-                    id={`eval-model-${config.portfolio.id}`}
-                    type="text"
-                    bind:value={draft.model}
-                    placeholder="gpt-5.6-sol"
-                  />
-                </div>
                 <div class="field">
                   <span class="field-label">Automatic days</span>
                   <div class="weekday-group" aria-label={`Automatic days for ${config.portfolio.name}`}>
@@ -549,9 +526,11 @@
                 <div class="muted num">{run.portfolio.slug}</div>
               </td>
               <td>
-                {run.model}
-                <div class="muted num">{run.reasoning_effort} · {run.service_tier}</div>
-                <div class="muted num">{run.codex_version ?? "not claimed"}</div>
+                {run.execution_model_id}
+                <div class="muted num">
+                  {run.harness}{run.reasoning_effort ? ` · ${run.reasoning_effort}` : ""}
+                </div>
+                <div class="muted num">{run.harness_version ?? "not claimed"}</div>
               </td>
               <td><span class={`badge ${statusClass(run.status)}`}>{run.status}</span></td>
               <td class="right num">{run.attempt_count}/{run.max_attempts}</td>

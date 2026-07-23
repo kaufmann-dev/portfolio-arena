@@ -11,15 +11,17 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..db import session_factory
-from ..models import Agent, Portfolio, Prompt
+from ..models import Agent, ModelDefinition, Portfolio, Prompt
 from ..schemas import AllocationPolicyIn, PositionIn
 from ..services import admin_ops, evaluator
 from ..services.admin_ops import AdminOpError
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import ensure_benchmark_allocations
+from ..services.harnesses import harnesses_out
+from ..services.model_catalog import agent_out
 from ..services.serialize import serialize_summary
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
 from ..services.trading_calendar import effective_date_for
@@ -119,22 +121,28 @@ def _portfolio_counts(session: Session, column) -> dict[int, int]:
 
 @mcp.tool()
 def list_agents() -> dict:
-    """List agent identities (model + harness) with how many portfolios use each."""
+    """List generated model + harness + reasoning agent profiles."""
     with _session() as session:
         counts = _portfolio_counts(session, Portfolio.agent_id)
-        agents = session.scalars(select(Agent).order_by(Agent.slug)).all()
-        return {
-            "agents": [
-                {
-                    "id": agent.id,
-                    "slug": agent.slug,
-                    "name": agent.name,
-                    "notes": agent.notes,
-                    "portfolio_count": counts.get(agent.id, 0),
-                }
-                for agent in agents
-            ]
-        }
+        agents = session.scalars(
+            select(Agent)
+            .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
+            .order_by(Agent.slug)
+        ).all()
+        return {"agents": [agent_out(agent, portfolio_count=counts.get(agent.id, 0)) for agent in agents]}
+
+
+@mcp.tool()
+def list_harnesses() -> dict:
+    """List integrated execution harnesses and their reasoning-effort vocabulary."""
+    return harnesses_out()
+
+
+@mcp.tool()
+def list_models() -> dict:
+    """List model definitions with harness capabilities and agent usage counts."""
+    with _session() as session:
+        return admin_ops.list_models(session)
 
 
 @mcp.tool()
@@ -206,21 +214,90 @@ def get_effective_date() -> dict:
     return {"entered_at": now.isoformat(), "effective_date": effective_date_for(now).isoformat()}
 
 
-# --- Writes: agents ---------------------------------------------------------
+# --- Writes: models and agents ---------------------------------------------
 
 
 @mcp.tool()
-def create_agent(name: str, notes: str = "") -> dict:
-    """Create an agent identity (e.g. "Claude Opus 4.8 (Claude Code)")."""
+def create_model(
+    name: str,
+    capabilities: list[dict],
+    notes: str = "",
+) -> dict:
+    """Create a model and its harness-specific execution capabilities."""
     with _session() as session:
-        return _guard(admin_ops.create_agent, session, name=name, notes=notes)
+        return _guard(
+            admin_ops.create_model,
+            session,
+            name=name,
+            notes=notes,
+            capabilities=capabilities,
+        )
 
 
 @mcp.tool()
-def update_agent(agent_id: int, name: str | None = None, notes: str | None = None) -> dict:
-    """Rename an agent or edit its notes. Omitted fields are left unchanged."""
+def update_model(
+    model_id: int,
+    name: str | None = None,
+    notes: str | None = None,
+    capabilities: list[dict] | None = None,
+) -> dict:
+    """Edit a model and replace its capabilities when supplied."""
     with _session() as session:
-        return _guard(admin_ops.update_agent, session, agent_id, name=name, notes=notes)
+        return _guard(
+            admin_ops.update_model,
+            session,
+            model_id,
+            name=name,
+            notes=notes,
+            capabilities=capabilities,
+        )
+
+
+@mcp.tool()
+def delete_model(model_id: int) -> dict:
+    """Delete an unused model definition."""
+    with _session() as session:
+        return _guard(admin_ops.delete_model, session, model_id)
+
+
+@mcp.tool()
+def create_agent(
+    model_id: int,
+    harness: str | None,
+    reasoning_effort: str | None,
+    notes: str = "",
+) -> dict:
+    """Create a unique generated execution profile."""
+    with _session() as session:
+        return _guard(
+            admin_ops.create_agent,
+            session,
+            model_id=model_id,
+            harness=harness,
+            reasoning_effort=reasoning_effort,
+            notes=notes,
+        )
+
+
+@mcp.tool()
+def update_agent(
+    agent_id: int,
+    model_id: int,
+    harness: str | None,
+    reasoning_effort: str | None,
+    notes: str | None = None,
+) -> dict:
+    """Change an execution profile globally for future runs."""
+    with _session() as session:
+        return _guard(
+            admin_ops.update_agent,
+            session,
+            agent_id,
+            model_id=model_id,
+            harness=harness,
+            reasoning_effort=reasoning_effort,
+            notes=notes,
+        )
 
 
 @mcp.tool()
@@ -374,8 +451,6 @@ def update_evaluator_settings(
     poll_seconds: int,
     attempt_timeout_seconds: int,
     max_attempts: int,
-    reasoning_effort: str,
-    service_tier: str,
     start_before_close_minutes: int,
     cutoff_before_close_minutes: int,
 ) -> dict:
@@ -389,8 +464,6 @@ def update_evaluator_settings(
             poll_seconds=poll_seconds,
             attempt_timeout_seconds=attempt_timeout_seconds,
             max_attempts=max_attempts,
-            reasoning_effort=reasoning_effort,
-            service_tier=service_tier,
             start_before_close_minutes=start_before_close_minutes,
             cutoff_before_close_minutes=cutoff_before_close_minutes,
         )
@@ -400,17 +473,15 @@ def update_evaluator_settings(
 def configure_portfolio_evaluator(
     portfolio_id: int,
     enabled: bool,
-    model: str,
     weekdays: list[int],
 ) -> dict:
-    """Enable or disable one portfolio, select its model, and choose weekdays 0-4."""
+    """Enable or disable one eligible portfolio and choose weekdays 0-4."""
     with _session() as session:
         return _guard(
             evaluator.update_portfolio_config,
             session,
             portfolio_id=portfolio_id,
             enabled=enabled,
-            model=model,
             weekdays=weekdays,
         )
 

@@ -41,7 +41,7 @@ export interface PortfolioSummary {
   id: number;
   slug: string;
   name: string;
-  agent: Ref;
+  agent: AgentRef;
   prompt: PromptRef | null;
   is_benchmark: boolean;
   status: "active" | "archived";
@@ -120,7 +120,48 @@ export interface AgentOut {
   slug: string;
   name: string;
   notes: string;
+  model: Ref;
+  harness: HarnessRef | null;
+  execution_model_id: string | null;
+  reasoning_effort: string | null;
+  portfolio_count?: number;
   portfolios?: { id: number; slug: string; name: string; status: string }[];
+}
+
+export type AgentRef = Omit<AgentOut, "notes" | "portfolios" | "portfolio_count">;
+
+export interface HarnessRef {
+  id: string;
+  name: string;
+}
+
+export interface ReasoningEffortDefinition {
+  id: string;
+  name: string;
+}
+
+export interface HarnessDefinition extends HarnessRef {
+  automation_supported: boolean;
+  reasoning_efforts: ReasoningEffortDefinition[];
+}
+
+export interface HarnessesResponse {
+  harnesses: HarnessDefinition[];
+}
+
+export interface ModelHarnessCapability {
+  harness: string;
+  harness_name: string;
+  execution_model_id: string;
+  reasoning_efforts: string[];
+}
+
+export interface ModelDefinition extends Ref {
+  notes: string;
+  capabilities: ModelHarnessCapability[];
+  agent_count: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CompareEntry {
@@ -167,17 +208,12 @@ export type EvaluationRunStatus =
   "queued" | "running" | "cancel_requested" | "cancelled" | "succeeded" | "failed" | "skipped";
 
 export type EvaluationTriggerKind = "scheduled" | "manual" | "retry";
-export type EvaluatorReasoningEffort = "low" | "medium" | "high" | "xhigh";
-export type EvaluatorServiceTier = "standard" | "fast";
-
 export interface EvaluatorSettings {
   enabled: boolean;
   max_concurrency: number;
   poll_seconds: number;
   attempt_timeout_seconds: number;
   max_attempts: number;
-  reasoning_effort: EvaluatorReasoningEffort;
-  service_tier: EvaluatorServiceTier;
   start_before_close_minutes: number;
   cutoff_before_close_minutes: number;
   updated_at: string;
@@ -189,8 +225,8 @@ export interface EvaluatorPortfolioRef extends Ref {
 
 export interface PortfolioEvaluatorConfig {
   portfolio: EvaluatorPortfolioRef;
+  agent: AgentOut;
   enabled: boolean;
-  model: string;
   weekdays: number[];
   updated_at: string | null;
 }
@@ -199,7 +235,8 @@ export interface EvaluatorRuntime {
   online: boolean;
   status: string;
   authenticated: boolean;
-  codex_version: string | null;
+  harness: string;
+  harness_version: string | null;
   active_run_count: number;
   last_heartbeat_at: string | null;
   last_error: string | null;
@@ -215,17 +252,18 @@ export interface EvaluatorDashboard {
 export interface EvaluationRun {
   id: number;
   portfolio: Ref;
-  agent: Ref;
+  agent: AgentOut;
+  model: Ref;
   trigger_kind: EvaluationTriggerKind;
   retry_of_run_id: number | null;
   scheduled_for: string | null;
   deadline_at: string | null;
-  model: string;
-  reasoning_effort: EvaluatorReasoningEffort;
-  service_tier: EvaluatorServiceTier;
+  harness: string;
+  execution_model_id: string;
+  reasoning_effort: string | null;
   timeout_seconds: number;
   max_attempts: number;
-  codex_version: string | null;
+  harness_version: string | null;
   worker_id: string | null;
   status: EvaluationRunStatus;
   attempt_count: number;
