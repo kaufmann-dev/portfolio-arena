@@ -15,7 +15,11 @@ export interface AllocationPolicy {
   derived_max_positions: number;
 }
 
-export interface PromptRef extends Ref {
+export interface PromptRef {
+  id: number | null;
+  slug: string;
+  name: string;
+  configurable: boolean;
   allocation_policy: AllocationPolicy;
 }
 
@@ -115,6 +119,16 @@ export interface PromptOut {
   portfolio_count?: number;
 }
 
+export interface AgentRef {
+  id: number | null;
+  slug: string;
+  name: string;
+  model: Ref | null;
+  harness: HarnessRef | null;
+  execution_model_id: string | null;
+  reasoning_effort: string | null;
+}
+
 export interface AgentOut {
   id: number;
   slug: string;
@@ -127,8 +141,6 @@ export interface AgentOut {
   portfolio_count?: number;
   portfolios?: { id: number; slug: string; name: string; status: string }[];
 }
-
-export type AgentRef = Omit<AgentOut, "notes" | "portfolios" | "portfolio_count">;
 
 export interface HarnessRef {
   id: string;

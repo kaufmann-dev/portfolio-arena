@@ -97,7 +97,8 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
     prompts = session.scalars(select(Prompt).order_by(Prompt.slug)).all()
     usage: dict[int, int] = {}
     for portfolio in session.scalars(select(Portfolio)):
-        usage[portfolio.prompt_id] = usage.get(portfolio.prompt_id, 0) + 1
+        if portfolio.prompt_id is not None:
+            usage[portfolio.prompt_id] = usage.get(portfolio.prompt_id, 0) + 1
     return {
         "prompts": [
             {
@@ -153,7 +154,7 @@ def list_agents(request: Request, session: Session = Depends(get_session)):
         .order_by(Agent.slug)
     ).all()
     portfolios = session.scalars(select(Portfolio)).all()
-    by_agent: dict[int, list[Portfolio]] = {}
+    by_agent: dict[int | None, list[Portfolio]] = {}
     for portfolio in portfolios:
         by_agent.setdefault(portfolio.agent_id, []).append(portfolio)
     return {

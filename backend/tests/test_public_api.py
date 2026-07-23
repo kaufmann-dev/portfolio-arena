@@ -88,6 +88,80 @@ class TestCompare:
 
 
 class TestPromptsAndAgents:
+    def test_benchmark_identity_and_strategy_are_fully_hardcoded(self, client, admin_headers):
+        prompts = client.get("/api/prompts").json()["prompts"]
+        assert all(prompt["slug"] != "buy-and-hold" for prompt in prompts)
+        assert client.get("/api/prompts/buy-and-hold").status_code == 404
+        assert client.get("/api/agents/benchmark").status_code == 404
+        assert all(agent["slug"] != "benchmark" for agent in client.get("/api/agents").json()["agents"])
+        assert all(
+            model["slug"] != "benchmark"
+            for model in client.get("/api/models", headers=admin_headers).json()["models"]
+        )
+
+        benchmark = find(client.get("/api/leaderboard").json()["portfolios"], "spy-buy-and-hold")
+        assert benchmark["agent"] == {
+            "id": None,
+            "slug": "benchmark",
+            "name": "Benchmark",
+            "model": None,
+            "harness": None,
+            "execution_model_id": None,
+            "reasoning_effort": None,
+        }
+        assert benchmark["prompt"] == {
+            "id": None,
+            "slug": "buy-and-hold",
+            "name": "Buy & Hold",
+            "configurable": False,
+            "allocation_policy": {
+                "min_position_weight_pct": 100,
+                "max_position_weight_pct": 100,
+                "derived_min_positions": 1,
+                "derived_max_positions": 1,
+            },
+        }
+
+    def test_buy_and_hold_prompt_name_is_reserved(self, client, admin_headers):
+        response = client.post(
+            "/api/prompts",
+            json={
+                "name": "Buy & Hold",
+                "text": "Configurable copy.",
+                "allocation_policy": {
+                    "min_position_weight_pct": 100,
+                    "max_position_weight_pct": 100,
+                },
+            },
+            headers=admin_headers,
+        )
+        assert response.status_code == 409
+
+    def test_benchmark_model_and_agent_slugs_are_reserved(self, client, admin_headers):
+        model_response = client.post(
+            "/api/models",
+            json={"name": "Benchmark", "capabilities": []},
+            headers=admin_headers,
+        )
+        assert model_response.status_code == 409
+
+        model = client.post(
+            "/api/models",
+            json={"name": "Manual model", "capabilities": []},
+            headers=admin_headers,
+        ).json()
+        agent_response = client.post(
+            "/api/agents",
+            json={
+                "model_id": model["id"],
+                "harness": None,
+                "reasoning_effort": None,
+                "slug": "benchmark",
+            },
+            headers=admin_headers,
+        )
+        assert agent_response.status_code == 409
+
     def test_prompt_detail_lists_portfolios(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
         payload = client.get("/api/prompts/weekly-manager-v1").json()

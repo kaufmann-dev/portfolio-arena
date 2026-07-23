@@ -110,6 +110,32 @@ class TestMcpTools:
         for stripped in ("series", "spy_series", "sparkline", "stale_days"):
             assert stripped not in portfolio
 
+    def test_benchmark_portfolio_uses_hardcoded_strategy(
+        self,
+        client,
+        mcp_headers,
+        sample_portfolio,
+    ):
+        data = _call_tool(
+            client,
+            mcp_headers,
+            "get_portfolio",
+            {"slug_or_id": "spy-buy-and-hold"},
+        )
+
+        assert data["portfolio"]["agent"]["id"] is None
+        assert data["portfolio"]["agent"]["model"] is None
+        assert data["portfolio"]["prompt"]["id"] is None
+        assert data["portfolio"]["prompt"]["configurable"] is False
+        assert data["portfolio"]["prompt"]["text"] == "Hold the benchmark ETF forever."
+
+        assert all(
+            agent["slug"] != "benchmark" for agent in _call_tool(client, mcp_headers, "list_agents")["agents"]
+        )
+        assert all(
+            model["slug"] != "benchmark" for model in _call_tool(client, mcp_headers, "list_models")["models"]
+        )
+
     def test_write_roundtrip(self, client, mcp_headers, admin_headers):
         model = _call_tool(
             client,

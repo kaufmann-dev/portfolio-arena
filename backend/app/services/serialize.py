@@ -2,26 +2,58 @@
 
 from datetime import UTC, datetime
 
+from ..config import BENCHMARK_IDENTITY, BENCHMARK_STRATEGY
 from ..models import Allocation, Portfolio
 from .arena import ArenaValuations, PortfolioValuation, age_days, downsample, too_early
 from .model_catalog import agent_out
-from .prompt_policy import allocation_policy_out, manual_execution_prompt
+from .prompt_policy import (
+    allocation_policy_from_limits,
+    allocation_policy_out,
+    manual_execution_prompt,
+)
 from .trading_calendar import is_locked
 from .valuation import AppliedAllocation, rebase_series
 
 
 def agent_ref(portfolio: Portfolio) -> dict:
-    result = agent_out(portfolio.agent)
+    if portfolio.is_benchmark:
+        return {
+            "id": None,
+            "slug": BENCHMARK_IDENTITY["slug"],
+            "name": BENCHMARK_IDENTITY["name"],
+            "model": None,
+            "harness": None,
+            "execution_model_id": None,
+            "reasoning_effort": None,
+        }
+    agent = portfolio.agent
+    if agent is None:
+        raise ValueError("Contestant portfolio is missing its agent")
+    result = agent_out(agent)
     result.pop("notes", None)
     return result
 
 
 def prompt_ref(portfolio: Portfolio) -> dict:
+    if portfolio.is_benchmark:
+        return {
+            "id": None,
+            "slug": BENCHMARK_STRATEGY["slug"],
+            "name": BENCHMARK_STRATEGY["name"],
+            "configurable": False,
+            "allocation_policy": allocation_policy_from_limits(
+                BENCHMARK_STRATEGY["min_position_weight_pct"],
+                BENCHMARK_STRATEGY["max_position_weight_pct"],
+            ),
+        }
     prompt = portfolio.prompt
+    if prompt is None:
+        raise ValueError("Contestant portfolio is missing its prompt")
     return {
         "id": prompt.id,
         "slug": prompt.slug,
         "name": prompt.name,
+        "configurable": True,
         "allocation_policy": allocation_policy_out(prompt),
     }
 

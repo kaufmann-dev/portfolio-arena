@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from ..config import BENCHMARK_STRATEGY
 from ..db import session_factory
 from ..models import Agent, ModelDefinition, Portfolio, Prompt
 from ..schemas import AllocationPolicyIn, PositionIn
@@ -80,9 +81,17 @@ def get_portfolio(slug_or_id: str) -> dict:
         # Drop token-heavy chart data the rebalancing agent doesn't need.
         for key in ("series", "spy_series", "sparkline", "stale_days"):
             payload.pop(key, None)
-        prompt = session.get(Prompt, payload["prompt"]["id"]) if payload.get("prompt") else None
+        prompt_payload = payload.get("prompt")
+        prompt_id = prompt_payload.get("id") if prompt_payload else None
+        prompt = session.get(Prompt, prompt_id) if prompt_id is not None else None
         if prompt is not None:
             payload["prompt"] = admin_ops.prompt_out(prompt)
+        elif payload["is_benchmark"]:
+            payload["prompt"] = {
+                **prompt_payload,
+                "text": BENCHMARK_STRATEGY["text"],
+                "notes": "Hardcoded benchmark strategy.",
+            }
         now = datetime.now(UTC)
         payload["next_entry"] = {
             "entered_at": now.isoformat(),

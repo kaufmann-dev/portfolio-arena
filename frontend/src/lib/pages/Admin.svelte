@@ -51,8 +51,8 @@
     ]);
     portfolios = leaderboard.portfolios;
     prompts = promptsPayload.prompts;
-    agents = agentsPayload.agents.filter((agent) => agent.slug !== "benchmark");
-    models = modelsPayload.models.filter((model) => model.slug !== "benchmark");
+    agents = agentsPayload.agents;
+    models = modelsPayload.models;
     harnesses = harnessesPayload.harnesses;
   }
 
@@ -906,7 +906,7 @@
                   (editPortfolio = {
                     id: portfolio.id,
                     name: portfolio.name,
-                    agent_id: portfolio.agent.id,
+                    agent_id: portfolio.agent.id ?? agents[0]?.id ?? 0,
                     prompt_id: portfolio.prompt?.id ?? prompts[0]?.id ?? 0,
                     cost_bps: String(portfolio.cost_bps),
                   })}

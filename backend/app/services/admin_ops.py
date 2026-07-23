@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from ..config import BENCHMARK_IDENTITY, BENCHMARK_STRATEGY
 from ..models import (
     Agent,
     Allocation,
@@ -86,6 +87,10 @@ def create_model(
     clean_name = name.strip()
     if not clean_name:
         raise AdminOpError(422, "Model name is required")
+    reserved_name = clean_name.casefold() == BENCHMARK_IDENTITY["name"].casefold()
+    reserved_slug = slug is not None and slugify(slug) == BENCHMARK_IDENTITY["slug"]
+    if reserved_name or reserved_slug:
+        raise AdminOpError(409, "Benchmark is reserved for hardcoded benchmark portfolios")
     model = ModelDefinition(
         slug=unique_slug(session, ModelDefinition, slug or clean_name),
         name=clean_name,
@@ -149,6 +154,8 @@ def update_model(
         clean_name = name.strip()
         if not clean_name:
             raise AdminOpError(422, "Model name is required")
+        if clean_name.casefold() == BENCHMARK_IDENTITY["name"].casefold():
+            raise AdminOpError(409, "Benchmark is reserved for hardcoded benchmark portfolios")
         model.name = clean_name
     if notes is not None:
         model.notes = notes
@@ -208,6 +215,8 @@ def create_agent(
         reasoning_effort=reasoning_effort,
     )
     clean_harness = harness.strip() if harness else None
+    if slug is not None and slugify(slug) == BENCHMARK_IDENTITY["slug"]:
+        raise AdminOpError(409, "Benchmark is reserved for hardcoded benchmark portfolios")
     if _profile_exists(
         session,
         model_id=model.id,
@@ -280,8 +289,6 @@ def delete_agent(session: Session, agent_id: int) -> dict:
     agent = session.get(Agent, agent_id)
     if agent is None:
         raise AdminOpError(404, "Agent not found")
-    if agent.slug == "benchmark":
-        raise AdminOpError(403, "The benchmark agent is system-managed")
     count = session.scalar(select(func.count()).select_from(Portfolio).where(Portfolio.agent_id == agent_id))
     if count:
         raise AdminOpError(409, f"{count} portfolio(s) still use this agent — delete or reassign them first.")
@@ -318,6 +325,10 @@ def create_prompt(
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
+    reserved_name = name.strip().casefold() == BENCHMARK_STRATEGY["name"].casefold()
+    reserved_slug = slug is not None and slugify(slug) == BENCHMARK_STRATEGY["slug"]
+    if reserved_name or reserved_slug:
+        raise AdminOpError(409, "Buy & Hold is reserved for hardcoded benchmark portfolios")
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
         name=name,
@@ -344,6 +355,8 @@ def update_prompt(
     if prompt is None:
         raise AdminOpError(404, "Prompt not found")
     if name is not None:
+        if name.strip().casefold() == BENCHMARK_STRATEGY["name"].casefold():
+            raise AdminOpError(409, "Buy & Hold is reserved for hardcoded benchmark portfolios")
         prompt.name = name
     if text is not None:
         prompt.text = text
