@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Accordion } from "bits-ui";
+
   import { apiJson } from "../api/client";
   import type { AllocationOut, PortfolioDetail } from "../api/types";
   import { ChevronDown, ChevronRight } from "@lucide/svelte";
@@ -12,7 +14,7 @@
 
   const { slug }: Props = $props();
 
-  let expanded = $state<number[]>([]);
+  let expanded = $state<string[]>([]);
   let copyResult = $state.raw<{ slug: string; status: "" | "copied" | "error" }>({ slug: "", status: "" });
 
   function chartSeriesFor(portfolio: PortfolioDetail): ChartSeries[] {
@@ -28,10 +30,6 @@
     return portfolio.allocations
       .map((allocation) => allocation.applied_date)
       .filter((date): date is string => date !== null);
-  }
-
-  function toggle(id: number) {
-    expanded = expanded.includes(id) ? expanded.filter((e) => e !== id) : [...expanded, id];
   }
 
   function allocationTitle(allocation: AllocationOut, index: number, total: number): string {
@@ -122,11 +120,11 @@
     </div>
 
     {#if portfolio.error}
-      <div class="error-box">Valuation failed: {portfolio.error}</div>
+      <div class="error-box" role="alert">Valuation failed: {portfolio.error}</div>
     {/if}
 
     {#if portfolio.frozen_symbols.length}
-      <div class="error-box">
+      <div class="error-box" role="alert">
         <strong>Frozen positions:</strong>
         {portfolio.frozen_symbols.join(", ")} stopped returning prices (possible delisting). The position is held
         at its last known price — resolve it with a corrective rebalance.
@@ -185,7 +183,7 @@
         </div>
       {/if}
 
-      <section>
+      <section class="holdings-section">
         <h2>Current holdings <span class="muted">(drifted)</span></h2>
         <div class="table-scroll">
           <table>
@@ -226,100 +224,119 @@
       </div>
     {/if}
 
-    <section>
+    <section class="allocations-section">
       <h2>Allocation history</h2>
       <div class="timeline">
-        {#each portfolio.allocations as allocation, index (allocation.id)}
-          <article class="card allocation">
-            <button
-              class="allocation-head"
-              onclick={() => toggle(allocation.id)}
-              aria-expanded={expanded.includes(allocation.id)}
-            >
-              <span class="alloc-date num">{fmtDate(allocation.effective_date)}</span>
-              <span class="alloc-kind">
-                {allocationTitle(allocation, index, portfolio.allocations.length)}
-              </span>
-              {#if !allocation.applied_date}
-                <span class="badge accent">pending — effective at the next close</span>
-              {:else if allocation.turnover_pct !== null}
-                <span class="muted">
-                  turnover {pctPoints(allocation.turnover_pct)} · cost {num(allocation.cost, 3)} pts
-                </span>
-              {:else if allocation.cost !== null}
-                <span class="muted">entry cost {num(allocation.cost, 3)} pts</span>
-              {/if}
-              {#if !allocation.locked}
-                <span class="badge warn">editable until close</span>
-              {/if}
-              <span class="chevron" aria-hidden="true">
-                {#if expanded.includes(allocation.id)}
-                  <ChevronDown size={14} />
-                {:else}
-                  <ChevronRight size={14} />
-                {/if}
-              </span>
-            </button>
-            {#if expanded.includes(allocation.id)}
-              <div class="allocation-body">
-                <p class="muted num entered">entered {fmtDateTime(allocation.entered_at)}</p>
-                {#if allocation.note}
-                  <p class="note"><strong>Note:</strong> {allocation.note}</p>
-                {/if}
-                <div class="table-scroll">
-                  <table>
-                    <thead>
-                      <tr><th>Symbol</th><th class="right">Weight</th></tr>
-                    </thead>
-                    <tbody>
-                      {#each allocation.positions as position (position.symbol)}
-                        <tr>
-                          <td class="num">{position.symbol}</td>
-                          <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
+        <Accordion.Root type="multiple" bind:value={expanded}>
+          {#each portfolio.allocations as allocation, index (allocation.id)}
+            <Accordion.Item class="allocation-item" value={String(allocation.id)}>
+              <Accordion.Header class="allocation-header" level={3}>
+                <Accordion.Trigger class="allocation-trigger">
+                  <span class="allocation-primary">
+                    <span class="alloc-date num">{fmtDate(allocation.effective_date)}</span>
+                    <span class="alloc-kind">
+                      {allocationTitle(allocation, index, portfolio.allocations.length)}
+                    </span>
+                  </span>
+                  <span class="allocation-meta">
+                    {#if !allocation.applied_date}
+                      <span class="badge accent">pending — effective at the next close</span>
+                    {:else if allocation.turnover_pct !== null}
+                      <span class="muted">
+                        turnover {pctPoints(allocation.turnover_pct)} · cost {num(allocation.cost, 3)} pts
+                      </span>
+                    {:else if allocation.cost !== null}
+                      <span class="muted">entry cost {num(allocation.cost, 3)} pts</span>
+                    {/if}
+                    {#if !allocation.locked}
+                      <span class="badge warn">editable until close</span>
+                    {/if}
+                  </span>
+                  <span class="chevron" aria-hidden="true">
+                    {#if expanded.includes(String(allocation.id))}
+                      <ChevronDown size={16} />
+                    {:else}
+                      <ChevronRight size={16} />
+                    {/if}
+                  </span>
+                </Accordion.Trigger>
+              </Accordion.Header>
+              <Accordion.Content class="allocation-content">
+                <div class="allocation-body">
+                  <p class="muted num entered">entered {fmtDateTime(allocation.entered_at)}</p>
+                  {#if allocation.note}
+                    <p class="note"><strong>Note:</strong> {allocation.note}</p>
+                  {/if}
+                  <div class="table-scroll">
+                    <table>
+                      <thead>
+                        <tr><th>Symbol</th><th class="right">Weight</th></tr>
+                      </thead>
+                      <tbody>
+                        {#each allocation.positions as position (position.symbol)}
+                          <tr>
+                            <td class="num">{position.symbol}</td>
+                            <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            {/if}
-          </article>
-        {:else}
-          <div class="empty-state card"><p>No allocations entered yet.</p></div>
-        {/each}
+              </Accordion.Content>
+            </Accordion.Item>
+          {:else}
+            <div class="empty-state card"><p>No allocations entered yet.</p></div>
+          {/each}
+        </Accordion.Root>
       </div>
     </section>
   {:catch error}
-    <div class="error-box">{requestErrorMessage(error)}</div>
+    <div class="error-box" role="alert">{requestErrorMessage(error)}</div>
   {/await}
 {/key}
 
 <style>
   .head {
+    margin-bottom: 24px;
+    padding-bottom: 22px;
     display: flex;
-    justify-content: space-between;
     align-items: start;
-    gap: 16px;
+    justify-content: space-between;
+    gap: 18px;
     flex-wrap: wrap;
-    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .crumbs {
-    font-size: 12.5px;
-    color: var(--text-tertiary);
+    max-width: 100%;
+    margin-bottom: 10px;
     display: flex;
+    align-items: center;
     gap: 6px;
-    margin-bottom: 4px;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .crumbs span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   h1 {
-    font-size: 22px;
-    margin-bottom: 4px;
+    margin: 0 0 8px;
+    font-size: clamp(28px, 8vw, 44px);
+    line-height: 1.05;
+    letter-spacing: -0.04em;
   }
 
   h2 {
-    font-size: 15px;
-    margin: 22px 0 10px;
+    margin: 30px 0 12px;
+    font-size: 17px;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
   }
 
   .head-badges {
@@ -329,12 +346,14 @@
   }
 
   .prompt-copy {
-    margin-left: 6px;
+    min-height: 34px;
+    margin: 6px 4px 2px;
     vertical-align: middle;
   }
 
   .copy-status {
-    margin-left: 6px;
+    display: inline-block;
+    margin: 4px 0;
     color: var(--text-secondary);
     font-size: 12px;
   }
@@ -345,36 +364,51 @@
 
   .metric-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 10px;
-    margin-bottom: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    margin-bottom: 1px;
+    border: 1px solid var(--border-subtle);
+    background: var(--border-subtle);
   }
 
   .metric {
-    padding: 10px 14px;
+    min-width: 0;
+    min-height: 82px;
+    padding: 13px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    border: 0;
+    border-radius: 0;
+    background: var(--bg-base);
   }
 
   .metric-label {
     display: block;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     color: var(--text-secondary);
+    font-size: 10.5px;
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
   }
 
   .metric-value {
-    font-size: 17px;
-    font-weight: 600;
+    overflow: hidden;
+    font-size: clamp(16px, 5vw, 21px);
+    font-weight: 650;
+    text-overflow: ellipsis;
   }
 
   .trailing {
-    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-    max-width: 480px;
+    max-width: none;
   }
 
   .chart-card {
-    margin-top: 16px;
+    margin-top: 24px;
+    padding: 14px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 0;
+    background: var(--bg-base);
   }
 
   .chart-card h2 {
@@ -387,39 +421,73 @@
   }
 
   .warn-card {
+    margin-top: 14px;
+    border-radius: 0;
     border-color: var(--warn);
     background: var(--warn-bg);
-    margin-top: 12px;
     font-size: 13px;
   }
 
+  .holdings-section,
+  .allocations-section {
+    margin-top: 34px;
+  }
+
+  .holdings-section h2,
+  .allocations-section h2 {
+    margin-top: 0;
+  }
+
   .timeline {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    border-bottom: 1px solid var(--border-subtle);
   }
 
-  .allocation {
-    padding: 0;
+  .timeline :global(.allocation-item) {
+    border-top: 1px solid var(--border-subtle);
+    border-radius: 0;
   }
 
-  .allocation-head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
+  .timeline :global(.allocation-header) {
+    margin: 0;
+  }
+
+  .timeline :global(.allocation-trigger) {
     width: 100%;
-    padding: 12px 16px;
+    min-height: 68px;
+    padding: 12px 4px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px 12px;
+    border-radius: 0;
     text-align: left;
-    font-size: 13.5px;
+    font-size: 13px;
   }
 
-  .allocation-head:hover {
+  .timeline :global(.allocation-trigger:hover),
+  .timeline :global(.allocation-trigger[data-state="open"]) {
     background: var(--bg-surface-hover);
   }
 
+  .allocation-primary,
+  .allocation-meta {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .allocation-primary {
+    font-size: 14px;
+  }
+
+  .allocation-meta {
+    grid-column: 1 / -1;
+  }
+
   .alloc-date {
-    font-weight: 600;
+    font-weight: 650;
   }
 
   .alloc-kind {
@@ -427,12 +495,17 @@
   }
 
   .chevron {
-    margin-left: auto;
+    grid-column: 2;
+    grid-row: 1;
     color: var(--text-tertiary);
   }
 
+  .timeline :global(.allocation-content) {
+    overflow: hidden;
+  }
+
   .allocation-body {
-    padding: 4px 16px 16px;
+    padding: 4px 4px 18px;
     border-top: 1px solid var(--border-subtle);
   }
 
@@ -442,6 +515,58 @@
   }
 
   .note {
-    margin-bottom: 10px;
+    margin: 12px 0;
+    line-height: 1.6;
+  }
+
+  @media (max-width: 460px) {
+    .holdings-section :global(th),
+    .holdings-section :global(td) {
+      padding-inline: 6px;
+      font-size: 11.5px;
+    }
+  }
+
+  @media (min-width: 640px) {
+    .metric-row {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .chart-card {
+      padding: 18px;
+    }
+
+    .timeline :global(.allocation-trigger) {
+      min-height: 62px;
+      padding: 12px 14px;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .allocation-primary {
+      min-width: 230px;
+    }
+
+    .allocation-meta {
+      grid-column: 2;
+    }
+
+    .chevron {
+      grid-column: 3;
+      grid-row: 1;
+    }
+
+    .allocation-body {
+      padding: 8px 14px 20px;
+    }
+  }
+
+  @media (min-width: 1120px) {
+    .metric-row:not(.trailing) {
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+    }
+
+    .trailing {
+      width: 50%;
+    }
   }
 </style>

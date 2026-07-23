@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { SvelteSet } from "svelte/reactivity";
+
   import type { SeriesPoint } from "../api/types";
 
   export interface ChartSeries {
@@ -17,14 +19,15 @@
   }
 
   const { series, markers = [], height = 320, ariaLabel = "Performance chart" }: Props = $props();
+  const uid = $props.id();
 
-  const PALETTE = ["var(--accent)", "#e8a33d", "#3ecf8e", "#c678dd", "#56b6c2", "#f27979"];
+  const PALETTE = ["var(--accent)", "var(--warn)", "var(--pos)", "#c4a7ff", "#67e8f9", "var(--neg)"];
 
-  const PAD = { top: 12, right: 14, bottom: 26, left: 52 };
+  const PAD = { top: 14, right: 12, bottom: 30, left: 48 };
   let width = $state(720);
 
   const dates = $derived.by(() => {
-    const all = new Set<string>();
+    const all = new SvelteSet<string>();
     for (const entry of series) for (const point of entry.points) all.add(point.date);
     return [...all].sort();
   });
@@ -79,7 +82,7 @@
 
   const xTicks = $derived.by(() => {
     if (dates.length < 2) return [];
-    const count = Math.min(6, dates.length);
+    const count = Math.max(2, Math.min(6, Math.floor((width - PAD.left - PAD.right) / 90), dates.length));
     const ticks: { i: number; label: string }[] = [];
     for (let k = 0; k < count; k++) {
       const i = Math.round((k / (count - 1)) * (dates.length - 1));
@@ -108,6 +111,7 @@
   }
 
   const hoverDate = $derived(hoverIndex === null ? null : dates[hoverIndex]);
+  const dateRange = $derived(dates.length ? `${dates[0]} to ${dates[dates.length - 1]}` : "");
 </script>
 
 <div class="chart" bind:clientWidth={width}>
@@ -119,6 +123,7 @@
       role="img"
       aria-label={ariaLabel}
       onpointermove={onPointerMove}
+      onpointerdown={onPointerMove}
       onpointerleave={() => (hoverIndex = null)}
     >
       <!-- grid + y labels -->
@@ -165,8 +170,9 @@
           d={path(entry.points)}
           fill="none"
           stroke={color(idx, entry)}
-          stroke-width="1.8"
+          stroke-width="2"
           stroke-dasharray={entry.dashed ? "5 4" : undefined}
+          vector-effect="non-scaling-stroke"
         />
       {/each}
 
@@ -189,16 +195,31 @@
       {/if}
     </svg>
 
-    <div class="legend">
+    <label class="visually-hidden" for="{uid}-scrubber">Inspect chart date</label>
+    <input
+      id="{uid}-scrubber"
+      class="chart-scrubber"
+      type="range"
+      min="0"
+      max={dates.length - 1}
+      step="1"
+      value={hoverIndex ?? dates.length - 1}
+      aria-valuetext={hoverDate ?? dates.at(-1)}
+      aria-label={`${ariaLabel}. ${dateRange}. Inspect date`}
+      oninput={(event) => (hoverIndex = Number(event.currentTarget.value))}
+      onfocus={() => (hoverIndex = dates.length - 1)}
+      onblur={() => (hoverIndex = null)}
+    />
+
+    <div class="legend" aria-live="polite" aria-atomic="true">
       {#if hoverDate}
         <span class="num muted">{hoverDate}</span>
       {/if}
       {#each series as entry, idx (entry.name)}
         <span class="legend-item">
           <span
-            class="swatch"
-            style="background: {color(idx, entry)}"
-            class:dashed={entry.dashed}
+            class={["swatch", entry.dashed && "dashed"]}
+            style:--swatch-color={color(idx, entry)}
             aria-hidden="true"
           ></span>
           {entry.name}
@@ -209,18 +230,33 @@
         </span>
       {/each}
     </div>
+
+    <details class="chart-summary">
+      <summary>Chart summary</summary>
+      <dl>
+        {#each series as entry (entry.name)}
+          {@const latest = entry.points.at(-1)}
+          <div>
+            <dt>{entry.name}</dt>
+            <dd class="num">{latest ? `${latest.nav.toFixed(1)} on ${latest.date}` : "No data"}</dd>
+          </div>
+        {/each}
+      </dl>
+    </details>
   {/if}
 </div>
 
 <style>
   .chart {
     width: 100%;
+    min-width: 0;
   }
 
   svg {
     display: block;
     width: 100%;
-    touch-action: none;
+    max-height: min(360px, 56vw);
+    touch-action: pan-y;
   }
 
   .tick {
@@ -233,11 +269,48 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px 18px;
-    padding: 8px 2px 0;
+    padding: 10px 0 0;
     font-size: 12.5px;
     color: var(--text-secondary);
     min-height: 30px;
     align-items: center;
+  }
+
+  .chart-scrubber {
+    width: 100%;
+    height: 18px;
+    min-height: 18px;
+    padding: 0;
+    margin-top: 4px;
+    appearance: none;
+    background: transparent;
+    border: 0;
+  }
+
+  .chart-scrubber::-webkit-slider-runnable-track {
+    height: 1px;
+    background: var(--border-strong);
+  }
+
+  .chart-scrubber::-webkit-slider-thumb {
+    width: 9px;
+    height: 15px;
+    margin-top: -7px;
+    appearance: none;
+    background: var(--accent);
+    border: 0;
+  }
+
+  .chart-scrubber::-moz-range-track {
+    height: 1px;
+    background: var(--border-strong);
+  }
+
+  .chart-scrubber::-moz-range-thumb {
+    width: 9px;
+    height: 15px;
+    background: var(--accent);
+    border: 0;
   }
 
   .legend-item {
@@ -248,12 +321,53 @@
 
   .swatch {
     width: 14px;
-    height: 3px;
-    border-radius: 2px;
+    height: 2px;
     display: inline-block;
+    background: var(--swatch-color);
   }
 
   .swatch.dashed {
-    background-image: linear-gradient(90deg, currentColor 60%, transparent 40%);
+    background: repeating-linear-gradient(90deg, var(--swatch-color) 0 5px, transparent 5px 8px);
+  }
+
+  .chart-summary {
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  .chart-summary summary {
+    width: max-content;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .chart-summary dl {
+    display: grid;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .chart-summary dl div {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .chart-summary dd {
+    color: var(--text-primary);
+  }
+
+  @media (max-width: 600px) {
+    svg {
+      max-height: 260px;
+    }
+
+    .legend {
+      gap: 8px 12px;
+      font-size: 11px;
+    }
   }
 </style>

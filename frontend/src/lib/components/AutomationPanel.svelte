@@ -10,6 +10,9 @@
     PortfolioEvaluatorConfig,
   } from "../api/types";
   import { fmtDateTime } from "../format";
+  import ConfirmDialog from "./ui/ConfirmDialog.svelte";
+  import SelectField, { type SelectOption } from "./ui/SelectField.svelte";
+  import ToggleSwitch from "./ui/ToggleSwitch.svelte";
 
   const WEEKDAYS = [
     { value: 0, label: "Mon" },
@@ -17,6 +20,16 @@
     { value: 2, label: "Wed" },
     { value: 3, label: "Thu" },
     { value: 4, label: "Fri" },
+  ];
+  const RUN_STATUS_OPTIONS: SelectOption[] = [
+    { value: "", label: "All statuses" },
+    { value: "queued", label: "Queued" },
+    { value: "running", label: "Running" },
+    { value: "cancel_requested", label: "Cancelling" },
+    { value: "succeeded", label: "Succeeded" },
+    { value: "failed", label: "Failed" },
+    { value: "cancelled", label: "Cancelled" },
+    { value: "skipped", label: "Skipped" },
   ];
 
   interface ConfigDraft {
@@ -36,12 +49,21 @@
   let busyAction = $state("");
   let error = $state("");
   let notice = $state("");
+  let cancelTarget = $state.raw<EvaluationRun | null>(null);
+  let cancelDialogOpen = $state(false);
 
   const enabledPortfolioIds = $derived(
     dashboard?.portfolios
       .filter((config) => config.enabled && config.portfolio.status === "active")
       .map((config) => config.portfolio.id) ?? [],
   );
+  const portfolioFilterOptions = $derived<SelectOption[]>([
+    { value: "", label: "All portfolios" },
+    ...(dashboard?.portfolios.map((config) => ({
+      value: String(config.portfolio.id),
+      label: config.portfolio.name,
+    })) ?? []),
+  ]);
 
   function settingsBody(settings: EvaluatorSettings) {
     return {
@@ -135,10 +157,10 @@
     await persistSettings();
   }
 
-  async function togglePaused() {
-    if (!settingsDraft) return;
+  async function setEvaluatorEnabled(enabled: boolean) {
+    if (!settingsDraft || settingsDraft.enabled === enabled) return;
     const previous = settingsDraft.enabled;
-    settingsDraft.enabled = !settingsDraft.enabled;
+    settingsDraft.enabled = enabled;
     if (!(await persistSettings())) settingsDraft.enabled = previous;
   }
 
@@ -201,19 +223,37 @@
     }
   }
 
-  async function cancelRun(run: EvaluationRun) {
-    if (!confirm(`Cancel evaluation #${run.id} for ${run.portfolio.name}?`)) return;
+  function cancelRun(run: EvaluationRun) {
+    cancelTarget = run;
+    cancelDialogOpen = true;
+  }
+
+  async function confirmCancelRun() {
+    const run = cancelTarget;
+    if (!run) return;
     busyAction = `cancel-${run.id}`;
     error = "";
     try {
       await apiJson(`/api/evaluator/runs/${run.id}/cancel`, { method: "POST" });
       notice = `Cancellation requested for run #${run.id}.`;
       await Promise.all([loadDashboard(), loadRuns(true)]);
+      cancelDialogOpen = false;
+      cancelTarget = null;
     } catch (e) {
       error = e instanceof Error ? e.message : "Could not cancel evaluation.";
     } finally {
       busyAction = "";
     }
+  }
+
+  function setPortfolioFilter(value: string) {
+    portfolioFilter = value;
+    void loadRuns(true);
+  }
+
+  function setStatusFilter(value: string) {
+    statusFilter = value as "" | EvaluationRunStatus;
+    void loadRuns(true);
   }
 
   async function retryRun(run: EvaluationRun) {
@@ -289,14 +329,12 @@
         <div class="error-box runtime-error" role="alert">{dashboard.runtime.last_error}</div>
       {/if}
       <div class="runtime-actions">
-        <button
-          class={`btn ${settingsDraft?.enabled ? "danger" : "primary"}`}
-          type="button"
-          onclick={togglePaused}
-          disabled={savingSettings}
-        >
-          {settingsDraft?.enabled ? "Pause evaluator" : "Resume evaluator"}
-        </button>
+        <ToggleSwitch
+          label="Evaluator enabled"
+          checked={settingsDraft?.enabled ?? false}
+          disabled={!settingsDraft || savingSettings}
+          onCheckedChange={setEvaluatorEnabled}
+        />
         <button
           class="btn primary"
           type="button"
@@ -404,14 +442,11 @@
                     {/if}
                   </div>
                 </div>
-                <label class="toggle-label">
-                  <input
-                    type="checkbox"
-                    bind:checked={draft.enabled}
-                    disabled={config.portfolio.status !== "active"}
-                  />
-                  Enabled
-                </label>
+                <ToggleSwitch
+                  label="Enabled"
+                  bind:checked={draft.enabled}
+                  disabled={config.portfolio.status !== "active"}
+                />
               </div>
               <div class="config-fields">
                 <div class="field">
@@ -468,28 +503,22 @@
     </div>
 
     <div class="filters" aria-label="Evaluation run filters">
-      <div class="field">
-        <label for="run-portfolio">Portfolio</label>
-        <select id="run-portfolio" bind:value={portfolioFilter} onchange={() => loadRuns(true)}>
-          <option value="">All portfolios</option>
-          {#each dashboard?.portfolios ?? [] as config (config.portfolio.id)}
-            <option value={String(config.portfolio.id)}>{config.portfolio.name}</option>
-          {/each}
-        </select>
-      </div>
-      <div class="field">
-        <label for="run-status">Status</label>
-        <select id="run-status" bind:value={statusFilter} onchange={() => loadRuns(true)}>
-          <option value="">All statuses</option>
-          <option value="queued">Queued</option>
-          <option value="running">Running</option>
-          <option value="cancel_requested">Cancelling</option>
-          <option value="succeeded">Succeeded</option>
-          <option value="failed">Failed</option>
-          <option value="cancelled">Cancelled</option>
-          <option value="skipped">Skipped</option>
-        </select>
-      </div>
+      <SelectField
+        id="run-portfolio"
+        label="Portfolio"
+        options={portfolioFilterOptions}
+        value={portfolioFilter}
+        placeholder="All portfolios"
+        onValueChange={setPortfolioFilter}
+      />
+      <SelectField
+        id="run-status"
+        label="Status"
+        options={RUN_STATUS_OPTIONS}
+        value={statusFilter}
+        placeholder="All statuses"
+        onValueChange={setStatusFilter}
+      />
     </div>
 
     {#if notice}
@@ -539,7 +568,7 @@
                 {#if run.report || run.error}
                   <details>
                     <summary>{run.error ? "Details" : "Report"}</summary>
-                    <pre class:error-report={Boolean(run.error)}>{run.error ?? run.report}</pre>
+                    <pre class={{ "error-report": Boolean(run.error) }}>{run.error ?? run.report}</pre>
                   </details>
                 {:else if run.allocation_id}
                   <span class="muted">Allocation #{run.allocation_id}</span>
@@ -595,10 +624,21 @@
   </section>
 </div>
 
+{#if cancelTarget}
+  <ConfirmDialog
+    bind:open={cancelDialogOpen}
+    title="Cancel evaluation?"
+    description={`Run #${cancelTarget.id} for ${cancelTarget.portfolio.name} will receive a cancellation request. A running worker may need a moment to stop.`}
+    confirmLabel="Cancel evaluation"
+    busy={busyAction === `cancel-${cancelTarget.id}`}
+    onConfirm={confirmCancelRun}
+  />
+{/if}
+
 <style>
   .automation-stack {
     display: grid;
-    gap: 16px;
+    gap: 20px;
   }
 
   .automation-stack > .card {
@@ -617,19 +657,31 @@
   }
 
   .panel-head {
+    padding-bottom: 14px;
     margin-bottom: 18px;
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   h2 {
-    font-size: 15px;
-    margin-bottom: 4px;
+    margin: 0 0 5px;
+    font-size: 16px;
+    letter-spacing: -0.02em;
   }
 
   .runtime-grid {
     display: grid;
     grid-template-columns: repeat(5, minmax(120px, 1fr));
-    gap: 16px;
+    gap: 0;
     margin-bottom: 18px;
+    border-top: 1px solid var(--border-subtle);
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  .runtime-grid > div {
+    min-height: 82px;
+    padding: 13px;
+    border-right: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .runtime-label,
@@ -644,7 +696,10 @@
   }
 
   .runtime-actions {
-    justify-content: flex-start;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-subtle);
   }
 
   .runtime-error {
@@ -653,8 +708,8 @@
 
   .settings-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(140px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+    gap: 14px;
   }
 
   .field {
@@ -663,38 +718,27 @@
 
   .portfolio-configs {
     display: grid;
-    gap: 12px;
+    gap: 14px;
   }
 
   .portfolio-config {
-    padding: 14px;
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
+    background: var(--bg-surface);
   }
 
   .config-head {
-    margin-bottom: 12px;
-  }
-
-  .toggle-label {
-    display: flex;
+    padding: 14px;
+    margin-bottom: 0;
     align-items: center;
-    gap: 7px;
-    margin: 0;
-    text-transform: none;
-    letter-spacing: normal;
-  }
-
-  .toggle-label input {
-    width: auto;
-    min-height: auto;
+    background: var(--bg-inset);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .config-fields {
     display: grid;
     grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.4fr);
     gap: 16px;
+    padding: 14px;
   }
 
   .weekday-group {
@@ -704,12 +748,13 @@
   }
 
   .weekday {
-    min-width: 48px;
-    padding: 7px 9px;
+    min-width: 52px;
+    min-height: 42px;
+    padding: 8px 10px;
     border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
     background: var(--bg-surface);
     font-size: 12px;
+    font-weight: 650;
   }
 
   .weekday.selected {
@@ -725,20 +770,22 @@
 
   .config-actions {
     justify-content: flex-end;
+    padding: 0 14px 14px;
   }
 
   .filters {
     display: grid;
     grid-template-columns: repeat(2, minmax(180px, 280px));
     gap: 12px;
+    margin-bottom: 16px;
   }
 
   .notice-box {
-    margin-bottom: 12px;
     padding: 10px 12px;
+    margin-bottom: 12px;
     color: var(--pos);
     border: 1px solid var(--pos);
-    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--pos) 8%, transparent);
   }
 
   caption {
@@ -776,7 +823,6 @@
     white-space: pre-wrap;
     background: var(--bg-inset);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
     font-family: var(--font-mono);
     font-size: 12px;
   }
@@ -801,9 +847,12 @@
   }
 
   @media (max-width: 900px) {
-    .runtime-grid,
     .settings-grid {
       grid-template-columns: repeat(2, minmax(140px, 1fr));
+    }
+
+    .runtime-grid {
+      grid-template-columns: repeat(3, minmax(120px, 1fr));
     }
 
     .config-fields {
@@ -812,16 +861,56 @@
   }
 
   @media (max-width: 640px) {
-    .runtime-grid,
     .settings-grid,
     .filters {
       grid-template-columns: 1fr;
     }
 
+    .runtime-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .panel-head,
-    .config-head {
+    .config-head,
+    .runtime-actions {
       align-items: stretch;
       flex-direction: column;
+    }
+
+    .panel-head > .btn,
+    .runtime-actions > .btn {
+      width: 100%;
+      min-height: 44px;
+    }
+
+    .config-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .config-actions .btn,
+    .row-actions .btn {
+      min-height: 40px;
+    }
+
+    .weekday-group {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+
+    .weekday {
+      min-width: 0;
+      padding-inline: 4px;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .runtime-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .config-actions {
+      grid-template-columns: 1fr;
     }
   }
 </style>
