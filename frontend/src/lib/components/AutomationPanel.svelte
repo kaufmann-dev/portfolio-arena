@@ -601,6 +601,10 @@
     gap: 16px;
   }
 
+  .automation-stack > .card {
+    min-width: 0;
+  }
+
   .panel-head,
   .config-head,
   .runtime-actions,
