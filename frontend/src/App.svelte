@@ -198,9 +198,7 @@
                 <div class="mobile-nav-head">
                   <div>
                     <Dialog.Title class="mobile-nav-title">Navigation</Dialog.Title>
-                    <Dialog.Description class="mobile-nav-description">
-                      Move around Portfolio Arena or manage your session.
-                    </Dialog.Description>
+                    <Dialog.Description class="visually-hidden">Primary navigation</Dialog.Description>
                   </div>
                   <Dialog.Close class="icon-action" aria-label="Close navigation">
                     <X size={21} aria-hidden="true" />
@@ -263,11 +261,6 @@
         {/if}
       </main>
     {/key}
-
-    <footer class="footer">
-      <span>Paper portfolios. Adjusted-close valuation.</span>
-      <span>Not investment advice.</span>
-    </footer>
   </div>
 </Tooltip.Provider>
 
@@ -321,6 +314,7 @@
     font-size: 15px;
     font-weight: 720;
     letter-spacing: -0.02em;
+    text-decoration: none;
   }
 
   .brand:hover,
@@ -372,18 +366,6 @@
 
   main:focus {
     outline: none;
-  }
-
-  .footer {
-    width: min(100%, 1440px);
-    margin: 0 auto;
-    padding: 20px 12px 28px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    border-top: 1px solid var(--border-subtle);
-    color: var(--text-tertiary);
-    font-size: 12px;
   }
 
   .route-announcer {
@@ -517,13 +499,6 @@
     letter-spacing: -0.02em;
   }
 
-  :global(.mobile-nav-description) {
-    display: block;
-    margin-top: 4px;
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-
   .mobile-nav-links {
     display: flex;
     flex-direction: column;
@@ -539,6 +514,7 @@
     color: var(--text-secondary);
     font-size: 17px;
     font-weight: 600;
+    text-decoration: none;
   }
 
   .mobile-nav-links a:hover,
@@ -601,6 +577,7 @@
       color: var(--text-secondary);
       font-size: 13px;
       font-weight: 550;
+      text-decoration: none;
     }
 
     .desktop-nav a:hover {
@@ -627,18 +604,11 @@
     main {
       padding: 36px 24px 64px;
     }
-
-    .footer {
-      padding: 20px 24px 32px;
-      flex-direction: row;
-      justify-content: space-between;
-    }
   }
 
   @media (min-width: 1200px) {
     .topbar-inner,
-    main,
-    .footer {
+    main {
       padding-inline: 32px;
     }
   }

@@ -737,11 +737,9 @@
 {:else}
   <div class="admin-head">
     <div>
-      <span class="admin-kicker">Control room</span>
       <h1>Administration</h1>
       <p class="muted">Configure portfolios, agents, automation, and protected access.</p>
     </div>
-    <span class="admin-status">Authenticated</span>
   </div>
 
   {#if notice}
@@ -825,9 +823,9 @@
             </div>
 
             <div class="state-head">
-              <h2>Current state <span class="muted">(drifted, admin-only)</span></h2>
+              <h2>Current holdings</h2>
               <button class="btn small" onclick={copyHandoff} disabled={!detail.allocations.length}>
-                Copy handoff for next agent
+                Copy handoff
               </button>
             </div>
             {#if detail.holdings.length}
@@ -1634,22 +1632,6 @@
     letter-spacing: -0.015em;
   }
 
-  h2:not(.spaced):first-child {
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .admin-kicker {
-    display: flex;
-    margin-bottom: 8px;
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-  }
-
   h2.spaced {
     padding-top: 24px;
     margin-top: 28px;
@@ -1694,20 +1676,6 @@
     margin-top: 8px;
   }
 
-  .admin-status {
-    display: inline-flex;
-    min-height: 30px;
-    align-items: center;
-    padding: 4px 8px;
-    color: var(--pos);
-    border: 1px solid color-mix(in srgb, var(--pos) 60%, var(--border-strong));
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
   .notice {
     padding: 10px 12px;
     margin-bottom: 14px;
@@ -1749,6 +1717,7 @@
     flex-wrap: wrap;
     padding-top: 24px;
     margin-top: 24px;
+    margin-bottom: 12px;
     border-top: 1px solid var(--border-strong);
   }
 
@@ -1881,7 +1850,7 @@
     }
 
     .state-head {
-      align-items: stretch;
+      align-items: flex-start;
       flex-direction: column;
     }
 

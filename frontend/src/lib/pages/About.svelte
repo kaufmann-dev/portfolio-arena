@@ -37,13 +37,13 @@
 
   <div class="tabs-shell">
     <Tabs.Root value={tab} onValueChange={(value) => (tab = value as Tab)}>
-      <Tabs.List class="about-tab-list" aria-label="About sections">
-        <Tabs.Trigger class="about-tab-trigger" value="overview">Overview</Tabs.Trigger>
-        <Tabs.Trigger class="about-tab-trigger" value="rules">Rules &amp; measurement</Tabs.Trigger>
-        <Tabs.Trigger class="about-tab-trigger" value="mcp">MCP server</Tabs.Trigger>
+      <Tabs.List class="tabs-list" aria-label="About sections">
+        <Tabs.Trigger class="tab-trigger" value="overview">Overview</Tabs.Trigger>
+        <Tabs.Trigger class="tab-trigger" value="rules">Rules &amp; measurement</Tabs.Trigger>
+        <Tabs.Trigger class="tab-trigger" value="mcp">MCP server</Tabs.Trigger>
       </Tabs.List>
 
-      <Tabs.Content class="about-tab-panel" value="overview">
+      <Tabs.Content class="tab-panel about-tab-panel" value="overview">
         <p>
           A long-term experiment with one question: <strong>can LLMs pick portfolios that beat SPY?</strong>
           Portfolio Arena runs each AI as a paper portfolio, values it from real market data, and tracks it against
@@ -90,7 +90,7 @@
         </p>
       </Tabs.Content>
 
-      <Tabs.Content class="about-tab-panel" value="rules">
+      <Tabs.Content class="tab-panel about-tab-panel" value="rules">
         <h2 class="flush">Integrity rules</h2>
         <ul>
           <li>
@@ -148,7 +148,7 @@
         </ul>
       </Tabs.Content>
 
-      <Tabs.Content class="about-tab-panel" value="mcp">
+      <Tabs.Content class="tab-panel about-tab-panel" value="mcp">
         <p>
           The app hosts an API-key-authenticated
           <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer"
@@ -357,36 +357,6 @@
     min-width: 0;
   }
 
-  :global(.about-tab-list) {
-    width: 100%;
-    margin-bottom: 24px;
-    display: flex;
-    overflow-x: auto;
-    border-bottom: 1px solid var(--border-subtle);
-    scrollbar-width: thin;
-  }
-
-  :global(.about-tab-trigger) {
-    min-height: 46px;
-    padding: 0 14px;
-    flex: 0 0 auto;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  :global(.about-tab-trigger:hover) {
-    color: var(--text-primary);
-  }
-
-  :global(.about-tab-trigger[data-state="active"]) {
-    border-bottom-color: var(--accent);
-    color: var(--text-primary);
-  }
-
   :global(.about-tab-panel) {
     outline: none;
   }
@@ -454,11 +424,6 @@
   @media (min-width: 640px) {
     h1 {
       margin-bottom: 28px;
-    }
-
-    :global(.about-tab-trigger) {
-      min-height: 48px;
-      padding-inline: 18px;
     }
   }
 </style>
