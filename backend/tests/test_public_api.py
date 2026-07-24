@@ -174,6 +174,11 @@ class TestPortfolioDetail:
         assert execution_prompt.count("If the returned allocation history is empty") == 1
         assert "construct the portfolio's initial allocation" in execution_prompt
         assert "do not rebuild it from scratch" in execution_prompt
+        assert (
+            "Treat each scheduled evaluation as an opportunity to update the evidence" in execution_prompt
+        )
+        assert "should meaningfully improve the portfolio after transaction costs" in execution_prompt
+        assert "immaterial weight drift within the allocation policy" in execution_prompt
 
         allocation = portfolio["allocations"][0]
         assert allocation["locked"] is True
