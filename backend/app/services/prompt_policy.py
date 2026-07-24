@@ -6,7 +6,15 @@ from ..models import Portfolio, Prompt
 
 PORTFOLIO_LIFECYCLE_INSTRUCTION = (
     "If the returned allocation history is empty, construct the portfolio's initial allocation. "
-    "Otherwise, manage and rebalance the existing portfolio; do not rebuild it from scratch."
+    "Otherwise, manage and rebalance the existing portfolio; do not rebuild it from scratch. "
+    "Treat each scheduled evaluation as an opportunity to update the evidence, not as an instruction "
+    "to trade. Reassess every holding and credible candidate using current evidence and current prices. "
+    "Prefer retaining the existing allocation when its theses, forward risk-adjusted returns, and "
+    "portfolio risks remain substantially unchanged. Change a holding or target weight when durable, "
+    "strategy-relevant evidence indicates that doing so should meaningfully improve the portfolio after "
+    "transaction costs. Do not trade solely because of ordinary price noise, repeated information that "
+    "does not alter the evidence, small or unstable ranking differences, or immaterial weight drift "
+    "within the allocation policy."
 )
 
 

@@ -150,6 +150,9 @@ def test_evaluator_prompt_has_one_lifecycle_instruction():
     assert prompt.count("If the returned allocation history is empty") == 1
     assert "construct the portfolio's initial allocation" in prompt
     assert "do not rebuild it from scratch" in prompt
+    assert "Treat each scheduled evaluation as an opportunity to update the evidence" in prompt
+    assert "should meaningfully improve the portfolio after transaction costs" in prompt
+    assert "immaterial weight drift within the allocation policy" in prompt
 
 
 def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):

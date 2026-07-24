@@ -23,6 +23,7 @@ def test_harness_registry_exposes_codex_reasoning_vocabulary(client, admin_heade
                     {"id": "high", "name": "High"},
                     {"id": "xhigh", "name": "Extra high"},
                     {"id": "ultra", "name": "Ultra"},
+                    {"id": "max", "name": "Max"},
                 ],
             }
         ]
