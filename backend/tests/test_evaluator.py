@@ -12,6 +12,7 @@ from app.evaluator.worker import (
     evaluate_run,
     evaluator_prompt,
     run_codex,
+    scheduler,
     worker_state_payload,
     write_codex_config,
 )
@@ -189,6 +190,83 @@ def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):
             },
         )
     ]
+
+
+def test_scheduler_refills_completed_slots_while_other_runs_continue(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    state = WorkerState()
+    releases = {run_id: asyncio.Event() for run_id in range(1, 8)}
+    started: list[int] = []
+    replacements_started = asyncio.Event()
+    claim_count = 0
+
+    def run_payload(run_id: int) -> dict:
+        return {
+            "id": run_id,
+            "portfolio": {
+                "id": run_id,
+                "slug": f"portfolio-{run_id}",
+                "name": f"Portfolio {run_id}",
+            },
+            "trigger_kind": "manual",
+            "harness": "codex",
+            "execution_model_id": "gpt-5.6-sol",
+            "reasoning_effort": None,
+            "timeout_seconds": 300,
+            "deadline_at": None,
+        }
+
+    async def fake_codex_version():
+        return "codex-cli test"
+
+    async def fake_codex_is_authenticated():
+        return True
+
+    async def fake_internal_request(_settings, method, path, payload=None):
+        nonlocal claim_count
+        assert (method, path) == ("POST", "/claim")
+        claim_count += 1
+        if claim_count == 1:
+            runs = [run_payload(run_id) for run_id in range(1, 6)]
+        elif claim_count == 2:
+            runs = [run_payload(6), run_payload(7)]
+        else:
+            runs = []
+        return {
+            "settings": {"enabled": True, "poll_seconds": 10},
+            "runs": runs,
+        }
+
+    async def fake_evaluate_run(_settings, run):
+        started.append(run.id)
+        if {6, 7}.issubset(started):
+            replacements_started.set()
+        await releases[run.id].wait()
+
+    monkeypatch.setattr("app.evaluator.worker.write_codex_config", lambda _settings: None)
+    monkeypatch.setattr("app.evaluator.worker.codex_version", fake_codex_version)
+    monkeypatch.setattr("app.evaluator.worker.codex_is_authenticated", fake_codex_is_authenticated)
+    monkeypatch.setattr("app.evaluator.worker.internal_request", fake_internal_request)
+    monkeypatch.setattr("app.evaluator.worker.evaluate_run", fake_evaluate_run)
+
+    async def scenario():
+        scheduler_task = asyncio.create_task(scheduler(settings, "worker-1", state))
+        try:
+            while len(started) < 5:
+                await asyncio.sleep(0)
+            releases[1].set()
+            releases[2].set()
+            await asyncio.wait_for(replacements_started.wait(), timeout=1)
+
+            assert started == [1, 2, 3, 4, 5, 6, 7]
+            assert not any(releases[run_id].is_set() for run_id in (3, 4, 5))
+            assert state.active_run_count == 5
+            assert claim_count == 2
+        finally:
+            scheduler_task.cancel()
+            await asyncio.gather(scheduler_task, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 def test_worker_state_payload_is_stable():
