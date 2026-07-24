@@ -358,53 +358,69 @@ async def scheduler(
     state: WorkerState,
 ) -> None:
     write_codex_config(settings)
-    while True:
-        try:
-            if not settings.massive_api_key:
-                state.status = "configuration_error"
-                state.authenticated = False
-                state.last_error = "MASSIVE_API_KEY is required."
-            else:
-                state.harness_version = await codex_version()
-                state.authenticated = await codex_is_authenticated()
-                if not state.authenticated:
-                    state.status = "authentication_required"
-                    state.last_error = "Run `codex login --device-auth` in the application terminal."
+    active_tasks: set[asyncio.Task[None]] = set()
+    try:
+        while True:
+            try:
+                if not settings.massive_api_key:
+                    state.status = "configuration_error"
+                    state.authenticated = False
+                    state.last_error = "MASSIVE_API_KEY is required."
                 else:
-                    response = ClaimResponse.model_validate(
-                        await internal_request(
-                            settings,
-                            "POST",
-                            "/claim",
-                            {
-                                "worker_id": instance_id,
-                                "harness": "codex",
-                                "harness_version": state.harness_version,
-                                "limit": 20,
-                            },
-                        )
-                    )
-                    state.poll_seconds = response.settings.poll_seconds
-                    if not response.settings.enabled:
-                        state.status = "paused"
-                        state.last_error = None
-                    elif response.runs:
-                        state.status = "running"
-                        state.active_run_count = len(response.runs)
-                        state.last_error = None
-                        await asyncio.gather(*(evaluate_run(settings, run) for run in response.runs))
-                        state.active_run_count = 0
-                        state.status = "idle"
+                    state.harness_version = await codex_version()
+                    state.authenticated = await codex_is_authenticated()
+                    if not state.authenticated:
+                        state.status = "authentication_required"
+                        state.last_error = "Run `codex login --device-auth` in the application terminal."
                     else:
-                        state.status = "idle"
+                        response = ClaimResponse.model_validate(
+                            await internal_request(
+                                settings,
+                                "POST",
+                                "/claim",
+                                {
+                                    "worker_id": instance_id,
+                                    "harness": "codex",
+                                    "harness_version": state.harness_version,
+                                    "limit": 20,
+                                },
+                            )
+                        )
+                        state.poll_seconds = response.settings.poll_seconds
+                        active_tasks.update(
+                            asyncio.create_task(evaluate_run(settings, run)) for run in response.runs
+                        )
+                        state.active_run_count = len(active_tasks)
                         state.last_error = None
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            state.status = "error"
-            state.last_error = f"{type(exc).__name__}: {exc}"[-4000:]
-            logger.exception("evaluator_poll_failed")
-        await asyncio.sleep(state.poll_seconds)
+                        if not response.settings.enabled:
+                            state.status = "paused"
+                        elif active_tasks:
+                            state.status = "running"
+                        else:
+                            state.status = "idle"
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                state.status = "error"
+                state.last_error = f"{type(exc).__name__}: {exc}"[-4000:]
+                logger.exception("evaluator_poll_failed")
+
+            if active_tasks:
+                completed, _ = await asyncio.wait(
+                    active_tasks,
+                    timeout=state.poll_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if completed:
+                    await asyncio.gather(*completed, return_exceptions=True)
+                    active_tasks.difference_update(completed)
+                    state.active_run_count = len(active_tasks)
+            else:
+                await asyncio.sleep(state.poll_seconds)
+    finally:
+        for task in active_tasks:
+            task.cancel()
+        await asyncio.gather(*active_tasks, return_exceptions=True)
 
 
 async def heartbeat_loop(
