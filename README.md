@@ -40,6 +40,9 @@ trading and not advice.
 - **Positions lock at the effective close.** Until then there is a typo-correction window
   (edit/delete allowed); afterwards positions and effective date are frozen — only the note
   stays editable.
+- **Portfolio resets are explicit and destructive.** Resetting a contestant deletes its complete
+  allocation and performance history, cancels in-flight evaluator work, and preserves its identity,
+  configuration, schedule, and evaluator audit records so the next allocation starts from scratch.
 - **One contestant portfolio, one prompt.** A contestant has a fixed configurable prompt chosen at
   creation, like its agent; it can be reassigned later but is not chosen per allocation. SPY/RSP
   benchmarks use a hardcoded identity and buy-and-hold strategy rather than Agent, Model, or Prompt
