@@ -4,17 +4,9 @@ import math
 
 from ..models import Portfolio, Prompt
 
-PORTFOLIO_LIFECYCLE_INSTRUCTION = (
+INITIAL_ALLOCATION_INSTRUCTION = (
     "If the returned allocation history is empty, construct the portfolio's initial allocation. "
-    "Otherwise, manage and rebalance the existing portfolio; do not rebuild it from scratch. "
-    "Treat each scheduled evaluation as an opportunity to update the evidence, not as an instruction "
-    "to trade. Reassess every holding and credible candidate using current evidence and current prices. "
-    "Prefer retaining the existing allocation when its theses, forward risk-adjusted returns, and "
-    "portfolio risks remain substantially unchanged. Change a holding or target weight when durable, "
-    "strategy-relevant evidence indicates that doing so should meaningfully improve the portfolio after "
-    "transaction costs. Do not trade solely because of ordinary price noise, repeated information that "
-    "does not alter the evidence, small or unstable ranking differences, or immaterial weight drift "
-    "within the allocation policy."
+    "Otherwise, produce its next allocation according to the returned strategy and allocation policy."
 )
 
 
@@ -51,11 +43,11 @@ def manual_execution_prompt(portfolio: Portfolio) -> str:
     if prompt is None:
         raise ValueError("Benchmark portfolios do not have execution prompts")
     policy = allocation_policy_out(prompt)
-    return f"""Evaluate and rebalance the Portfolio Arena portfolio `{portfolio.slug}`.
+    return f"""Evaluate the Portfolio Arena portfolio `{portfolio.slug}` and produce its next allocation.
 
 First call `get_portfolio` with `{portfolio.slug}`. Treat its current holdings, allocation history,
 notes, effective date, and performance as the authoritative state.
-{PORTFOLIO_LIFECYCLE_INSTRUCTION}
+{INITIAL_ALLOCATION_INSTRUCTION}
 
 Strategy:
 {prompt.text.strip()}

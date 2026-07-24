@@ -170,15 +170,13 @@ class TestPortfolioDetail:
 
         assert portfolio["prompt"]["slug"] == "weekly-manager-v1"
         execution_prompt = portfolio["execution_prompt"]
-        assert execution_prompt.startswith("Evaluate and rebalance")
+        assert execution_prompt.startswith("Evaluate the Portfolio Arena portfolio")
         assert execution_prompt.count("If the returned allocation history is empty") == 1
         assert "construct the portfolio's initial allocation" in execution_prompt
-        assert "do not rebuild it from scratch" in execution_prompt
-        assert (
-            "Treat each scheduled evaluation as an opportunity to update the evidence" in execution_prompt
-        )
-        assert "should meaningfully improve the portfolio after transaction costs" in execution_prompt
-        assert "immaterial weight drift within the allocation policy" in execution_prompt
+        assert "produce its next allocation according to the returned strategy" in execution_prompt
+        assert "do not rebuild it from scratch" not in execution_prompt
+        assert "after transaction costs" not in execution_prompt
+        assert "Prefer retaining the existing allocation" not in execution_prompt
 
         allocation = portfolio["allocations"][0]
         assert allocation["locked"] is True
@@ -187,6 +185,32 @@ class TestPortfolioDetail:
 
     def test_404(self, client):
         assert client.get("/api/portfolios/nope").status_code == 404
+
+    def test_execution_prompt_allows_strategy_to_reconstruct_from_scratch(
+        self,
+        client,
+        admin_headers,
+        sample_portfolio,
+        sample_prompt,
+    ):
+        reconstruction_strategy = (
+            "At every evaluation, reconstruct the target portfolio independently from scratch. "
+            "Do not prefer current holdings or account for turnover or transaction costs."
+        )
+        response = client.patch(
+            f"/api/prompts/{sample_prompt['id']}",
+            json={"text": reconstruction_strategy},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
+
+        payload = client.get(f"/api/portfolios/{sample_portfolio['slug']}").json()
+        execution_prompt = payload["portfolio"]["execution_prompt"]
+
+        assert reconstruction_strategy in execution_prompt
+        assert "do not rebuild it from scratch" not in execution_prompt
+        assert "continuity is useful" not in execution_prompt
+        assert "Prefer retaining the existing allocation" not in execution_prompt
 
 
 class TestCompare:

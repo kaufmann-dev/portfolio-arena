@@ -14,7 +14,7 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
-from ..services.prompt_policy import PORTFOLIO_LIFECYCLE_INSTRUCTION
+from ..services.prompt_policy import INITIAL_ALLOCATION_INSTRUCTION
 from .config import EvaluatorRuntimeSettings
 
 logger = logging.getLogger(__name__)
@@ -187,13 +187,12 @@ async def codex_is_authenticated() -> bool:
 
 def evaluator_prompt(run: ClaimedRun) -> str:
     return f"""\
-Evaluate the existing Portfolio Arena portfolio `{run.portfolio.slug}` and produce its next allocation.
+Evaluate the Portfolio Arena portfolio `{run.portfolio.slug}` and produce its next allocation.
 
 Call the Portfolio Arena `get_portfolio` tool first and treat the returned strategy, allocation
 policy, holdings, notes, history, performance, and effective date as authoritative.
-{PORTFOLIO_LIFECYCLE_INSTRUCTION}
-Research all decision-relevant current information with Massive and live web search. Every current
-holding must re-earn its place, but continuity is useful when the thesis still holds.
+{INITIAL_ALLOCATION_INSTRUCTION}
+Research all decision-relevant current information with Massive and live web search.
 
 Produce a proposal that obeys the returned allocation policy exactly. Use only USD-denominated
 equities and ETFs accepted by Portfolio Arena. Do not use cash, mutual funds, options, futures,

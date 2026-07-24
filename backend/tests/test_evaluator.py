@@ -144,15 +144,16 @@ def test_run_codex_omits_reasoning_when_model_has_none(tmp_path, monkeypatch):
     assert not any("model_reasoning_effort" in item for item in captured)
 
 
-def test_evaluator_prompt_has_one_lifecycle_instruction():
+def test_evaluator_prompt_is_lifecycle_neutral():
     prompt = evaluator_prompt(_run())
 
     assert prompt.count("If the returned allocation history is empty") == 1
     assert "construct the portfolio's initial allocation" in prompt
-    assert "do not rebuild it from scratch" in prompt
-    assert "Treat each scheduled evaluation as an opportunity to update the evidence" in prompt
-    assert "should meaningfully improve the portfolio after transaction costs" in prompt
-    assert "immaterial weight drift within the allocation policy" in prompt
+    assert "produce its next allocation according to the returned strategy" in prompt
+    assert "do not rebuild it from scratch" not in prompt
+    assert "continuity is useful" not in prompt
+    assert "after transaction costs" not in prompt
+    assert "Prefer retaining the existing allocation" not in prompt
 
 
 def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):
