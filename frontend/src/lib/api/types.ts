@@ -103,6 +103,13 @@ export interface PortfolioDetail extends PortfolioSummary {
   allocations: AllocationOut[];
 }
 
+export interface PortfolioResetResult {
+  ok: true;
+  deleted_allocations: number;
+  cancelled_queued_runs: number;
+  cancellation_requested_runs: number;
+}
+
 export interface LeaderboardResponse {
   as_of: string | null;
   portfolios: PortfolioSummary[];

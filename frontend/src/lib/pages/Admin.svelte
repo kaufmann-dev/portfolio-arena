@@ -15,6 +15,7 @@
     ModelDefinition,
     ModelHarnessCapability,
     PortfolioDetail,
+    PortfolioResetResult,
     PortfolioSummary,
     PromptOut,
   } from "../api/types";
@@ -229,6 +230,36 @@
           return true;
         } catch (e) {
           flash(e instanceof Error ? e.message : "Delete failed");
+          return false;
+        }
+      },
+    });
+  }
+
+  function resetPortfolio(portfolio: PortfolioSummary) {
+    if (portfolio.allocation_count === 0) return;
+    const portfolioSlug = portfolio.slug;
+    const allocationLabel =
+      portfolio.allocation_count === 1 ? "1 allocation" : `${portfolio.allocation_count} allocations`;
+    requestConfirmation({
+      title: `Reset ${portfolio.name}?`,
+      description:
+        `This permanently deletes ${allocationLabel}, all current holdings, and the complete ` +
+        "performance history. Queued or running evaluations will be cancelled, but the evaluator " +
+        "schedule will remain enabled.",
+      confirmLabel: "Reset portfolio",
+      action: async () => {
+        try {
+          const result = await postJson<PortfolioResetResult>(`/api/portfolios/${portfolio.id}/reset`, {});
+          if (selectedSlug === portfolioSlug) editingAllocation = null;
+          await loadAll();
+          if (selectedSlug === portfolioSlug) await loadDetail(portfolioSlug);
+          const deletedLabel =
+            result.deleted_allocations === 1 ? "1 allocation" : `${result.deleted_allocations} allocations`;
+          flash(`Portfolio ${portfolio.name} reset; ${deletedLabel} deleted.`);
+          return true;
+        } catch (e) {
+          flash(e instanceof Error ? e.message : "Reset failed");
           return false;
         }
       },
@@ -775,7 +806,16 @@
             <p class="muted picked-meta">
               {detail.agent.name} · prompt {detail.prompt?.name ?? "—"}
             </p>
-            <h2>Allocation history</h2>
+            <div class="state-head">
+              <h2>Allocation history</h2>
+              <button
+                class="btn small danger"
+                onclick={() => detail && resetPortfolio(detail)}
+                disabled={detail.allocation_count === 0}
+              >
+                Reset
+              </button>
+            </div>
             <div class="table-scroll history">
               <table>
                 <thead>
@@ -1040,6 +1080,13 @@
                   </button>
                   <button class="btn small" onclick={() => toggleArchive(portfolio)}>
                     {portfolio.status === "active" ? "Archive" : "Unarchive"}
+                  </button>
+                  <button
+                    class="btn small danger"
+                    onclick={() => resetPortfolio(portfolio)}
+                    disabled={portfolio.allocation_count === 0}
+                  >
+                    Reset
                   </button>
                   <button class="btn small danger" onclick={() => deletePortfolio(portfolio)}>Delete</button>
                 </div>

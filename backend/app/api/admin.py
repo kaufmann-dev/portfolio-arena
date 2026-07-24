@@ -225,6 +225,11 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
     )
 
 
+@router.post("/portfolios/{portfolio_id}/reset")
+def reset_portfolio(portfolio_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.reset_portfolio, session, portfolio_id)
+
+
 @router.delete("/portfolios/{portfolio_id}")
 def delete_portfolio(portfolio_id: int, session: Session = Depends(get_session)):
     return _run(admin_ops.delete_portfolio, session, portfolio_id)

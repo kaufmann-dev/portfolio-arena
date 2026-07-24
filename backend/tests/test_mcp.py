@@ -56,6 +56,14 @@ class TestMcpAuth:
         )
         assert blocked.status_code == 403
 
+        hidden_history = _rpc(
+            client,
+            headers,
+            "tools/call",
+            {"name": "list_evaluation_runs", "arguments": {}},
+        )
+        assert hidden_history.status_code == 403
+
 
 class TestMcpTools:
     def test_endpoint_works_without_trailing_slash(self, client, mcp_headers):
@@ -79,6 +87,7 @@ class TestMcpTools:
             "update_model",
             "delete_model",
             "create_allocation",
+            "reset_portfolio",
             "get_evaluator_dashboard",
             "configure_portfolio_evaluator",
             "run_evaluations",
@@ -187,6 +196,16 @@ class TestMcpTools:
         # The write is visible through the REST admin surface.
         detail = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers).json()
         assert detail["portfolio"]["allocations"][0]["note"] == "entered via mcp"
+
+        reset = _call_tool(
+            client,
+            mcp_headers,
+            "reset_portfolio",
+            {"portfolio_id": portfolio["id"]},
+        )
+        assert reset["deleted_allocations"] == 1
+        detail = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers).json()
+        assert detail["portfolio"]["allocations"] == []
 
     def test_tool_error_surfaces_message(self, client, mcp_headers):
         response = _rpc(

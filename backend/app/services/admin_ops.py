@@ -9,7 +9,7 @@ translate that into their transport's error shape (HTTP status / tool error).
 
 from datetime import UTC, date, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import BENCHMARK_IDENTITY, BENCHMARK_STRATEGY
@@ -17,6 +17,7 @@ from ..models import (
     Agent,
     Allocation,
     EvaluationRun,
+    EvaluatorSettings,
     ModelDefinition,
     ModelHarnessCapability,
     Portfolio,
@@ -386,8 +387,11 @@ def delete_prompt(session: Session, prompt_id: int) -> dict:
 # --- Portfolios -------------------------------------------------------------
 
 
-def writable_portfolio(session: Session, portfolio_id: int) -> Portfolio:
-    portfolio = session.get(Portfolio, portfolio_id)
+def writable_portfolio(session: Session, portfolio_id: int, *, lock: bool = False) -> Portfolio:
+    query = select(Portfolio).where(Portfolio.id == portfolio_id)
+    if lock:
+        query = query.with_for_update()
+    portfolio = session.scalars(query).first()
     if portfolio is None:
         raise AdminOpError(404, "Portfolio not found")
     if portfolio.is_benchmark:
@@ -509,6 +513,53 @@ def delete_portfolio(session: Session, portfolio_id: int) -> dict:
     reconcile_benchmark_allocations(session)
     session.commit()
     return {"ok": True}
+
+
+def reset_portfolio(session: Session, portfolio_id: int) -> dict:
+    """Delete a contestant's complete allocation history while preserving its
+    identity, evaluator configuration, and evaluator audit trail."""
+    session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
+    portfolio = writable_portfolio(session, portfolio_id, lock=True)
+
+    cancelled_queued_runs = 0
+    cancellation_requested_runs = 0
+    now = datetime.now(UTC)
+    active_runs = session.scalars(
+        select(EvaluationRun)
+        .where(
+            EvaluationRun.portfolio_id == portfolio.id,
+            EvaluationRun.status.in_({"queued", "running", "cancel_requested"}),
+        )
+        .with_for_update()
+    ).all()
+    for run in active_runs:
+        if run.status == "queued":
+            run.status = "cancelled"
+            run.finished_at = now
+            run.error = "Cancelled because the portfolio was reset."
+            cancelled_queued_runs += 1
+        else:
+            if run.status == "running":
+                run.status = "cancel_requested"
+            run.error = "Cancellation requested because the portfolio was reset."
+            cancellation_requested_runs += 1
+
+    deleted_allocations = int(
+        session.scalar(
+            select(func.count()).select_from(Allocation).where(Allocation.portfolio_id == portfolio.id)
+        )
+        or 0
+    )
+    session.execute(delete(Allocation).where(Allocation.portfolio_id == portfolio.id))
+    session.flush()
+    reconcile_benchmark_allocations(session)
+    session.commit()
+    return {
+        "ok": True,
+        "deleted_allocations": deleted_allocations,
+        "cancelled_queued_runs": cancelled_queued_runs,
+        "cancellation_requested_runs": cancellation_requested_runs,
+    }
 
 
 def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:

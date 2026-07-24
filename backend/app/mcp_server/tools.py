@@ -413,6 +413,15 @@ def delete_portfolio(portfolio_id: int) -> dict:
         return _guard(admin_ops.delete_portfolio, session, portfolio_id)
 
 
+@mcp.tool()
+def reset_portfolio(portfolio_id: int) -> dict:
+    """Reset a portfolio to its never-started state by deleting all allocations
+    and performance history. The portfolio identity, evaluator configuration,
+    and evaluator audit records are preserved. Irreversible."""
+    with _session() as session:
+        return _guard(admin_ops.reset_portfolio, session, portfolio_id)
+
+
 # --- Writes: allocations ----------------------------------------------------
 
 
