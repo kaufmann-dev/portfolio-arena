@@ -6,6 +6,7 @@
   import type {
     AgentOut,
     AllocationOut,
+    AppSettings,
     ApiKeyCreated,
     ApiKeyOut,
     ApiKeysResponse,
@@ -17,6 +18,7 @@
     PortfolioDetail,
     PortfolioResetResult,
     PortfolioSummary,
+    PromptMode,
     PromptOut,
   } from "../api/types";
   import AllocationForm, { type AllocationPayload } from "../components/AllocationForm.svelte";
@@ -270,6 +272,7 @@
   let newName = $state("");
   let newAgentId = $state<number | null>(null);
   let newPromptId = $state<number | null>(null);
+  let newPromptMode = $state<PromptMode>("managed");
   let newCostBps = $state<string>("");
   let portfolioError = $state("");
 
@@ -284,6 +287,7 @@
       name: newName.trim(),
       agent_id: newAgentId,
       prompt_id: newPromptId,
+      prompt_mode: newPromptMode,
     };
     if (newCostBps.trim() !== "") body.cost_bps = parseInt(newCostBps, 10);
     try {
@@ -292,6 +296,7 @@
       newName = "";
       newAgentId = null;
       newPromptId = null;
+      newPromptMode = "managed";
       newCostBps = "";
       await loadAll();
       // Jump to the Allocations tab with the new portfolio selected.
@@ -591,6 +596,7 @@
     name: string;
     agent_id: number;
     prompt_id: number;
+    prompt_mode: PromptMode;
     cost_bps: string;
   } | null>(null);
 
@@ -609,6 +615,7 @@
         name: editPortfolio.name,
         agent_id: editPortfolio.agent_id,
         prompt_id: editPortfolio.prompt_id,
+        prompt_mode: editPortfolio.prompt_mode,
         cost_bps: parseInt(editPortfolio.cost_bps, 10) || 0,
       });
       editPortfolio = null;
@@ -699,14 +706,20 @@
 
   // ── Tab 4: settings ──────────────────────────
   let defaultCostBps = $state<string>("");
+  let managedWrapperPrompt = $state("");
+  let rebuiltWrapperPrompt = $state("");
   let settingsError = $state("");
 
   async function loadSettings() {
     try {
-      const payload = await apiJson<{ default_cost_bps: number }>("/api/settings");
+      const payload = await apiJson<AppSettings>("/api/settings");
       defaultCostBps = String(payload.default_cost_bps);
+      managedWrapperPrompt = payload.managed_wrapper_prompt;
+      rebuiltWrapperPrompt = payload.rebuilt_wrapper_prompt;
     } catch {
       defaultCostBps = "";
+      managedWrapperPrompt = "";
+      rebuiltWrapperPrompt = "";
     }
   }
 
@@ -728,7 +741,11 @@
     event.preventDefault();
     settingsError = "";
     try {
-      await putJson("/api/settings", { default_cost_bps: parseInt(defaultCostBps, 10) || 0 });
+      await putJson("/api/settings", {
+        default_cost_bps: parseInt(defaultCostBps, 10) || 0,
+        managed_wrapper_prompt: managedWrapperPrompt,
+        rebuilt_wrapper_prompt: rebuiltWrapperPrompt,
+      });
       flash("Settings saved.");
     } catch (e) {
       settingsError = e instanceof Error ? e.message : "Save failed";
@@ -1003,6 +1020,17 @@
                 <p class="muted hint">No prompts yet — create one in the Prompts tab first.</p>
               {/if}
             </div>
+            <div class="field">
+              <label for="np-prompt-mode">Prompt version</label>
+              <select id="np-prompt-mode" bind:value={newPromptMode}>
+                <option value="managed">Managed</option>
+                <option value="rebuilt">Rebuilt</option>
+              </select>
+              <p class="muted hint">
+                Managed receives prior portfolio state; Rebuilt is evaluated without holdings, notes, history,
+                performance, or costs.
+              </p>
+            </div>
 
             {#if portfolioError}
               <div class="error-box" role="alert">{portfolioError}</div>
@@ -1043,6 +1071,13 @@
                   </select>
                 </div>
                 <div class="field">
+                  <label for="epf-prompt-mode-{portfolio.id}">Prompt version</label>
+                  <select id="epf-prompt-mode-{portfolio.id}" bind:value={editPortfolio.prompt_mode}>
+                    <option value="managed">Managed</option>
+                    <option value="rebuilt">Rebuilt</option>
+                  </select>
+                </div>
+                <div class="field">
                   <label for="epf-cost-{portfolio.id}">Cost bps</label>
                   <input
                     id="epf-cost-{portfolio.id}"
@@ -1061,7 +1096,8 @@
                 <div>
                   <strong>{portfolio.name}</strong>
                   <span class="muted">
-                    · {portfolio.agent.name} · {portfolio.cost_bps} bps · {portfolio.status}</span
+                    · {portfolio.agent.name} · {portfolio.prompt_mode ?? "—"} · {portfolio.cost_bps} bps ·
+                    {portfolio.status}</span
                   >
                 </div>
                 <div class="row-actions">
@@ -1073,6 +1109,7 @@
                         name: portfolio.name,
                         agent_id: portfolio.agent.id ?? agents[0]?.id ?? 0,
                         prompt_id: portfolio.prompt?.id ?? prompts[0]?.id ?? 0,
+                        prompt_mode: portfolio.prompt_mode ?? "managed",
                         cost_bps: String(portfolio.cost_bps),
                       })}
                   >
@@ -1619,6 +1656,29 @@
               <label for="set-cost">Default cost bps for new portfolios</label>
               <input id="set-cost" type="number" min="0" bind:value={defaultCostBps} />
             </div>
+            <div class="field">
+              <label for="set-managed-wrapper">Managed wrapper prompt</label>
+              <textarea id="set-managed-wrapper" bind:value={managedWrapperPrompt} rows="18" required
+              ></textarea>
+              <p class="muted hint">
+                Managed evaluations receive holdings, allocation history, notes, performance, and costs.
+              </p>
+            </div>
+            <div class="field">
+              <label for="set-rebuilt-wrapper">Rebuilt wrapper prompt</label>
+              <textarea id="set-rebuilt-wrapper" bind:value={rebuiltWrapperPrompt} rows="18" required
+              ></textarea>
+              <p class="muted hint">
+                Rebuilt evaluations never receive prior portfolio state, regardless of this wording.
+              </p>
+            </div>
+            <p class="muted hint">
+              Both wrappers must include
+              <code>{"{{portfolio_slug}}"}</code>,
+              <code>{"{{strategy_text}}"}</code>,
+              <code>{"{{allocation_policy}}"}</code>, and
+              <code>{"{{submission_instructions}}"}</code>. Unknown placeholders are rejected.
+            </p>
             <button class="btn primary" type="submit">Save settings</button>
           </form>
           {#if settingsError}

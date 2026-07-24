@@ -43,10 +43,11 @@ trading and not advice.
 - **Portfolio resets are explicit and destructive.** Resetting a contestant deletes its complete
   allocation and performance history, cancels in-flight evaluator work, and preserves its identity,
   configuration, schedule, and evaluator audit records so the next allocation starts from scratch.
-- **One contestant portfolio, one prompt.** A contestant has a fixed configurable prompt chosen at
-  creation, like its agent; it can be reassigned later but is not chosen per allocation. SPY/RSP
-  benchmarks use a hardcoded identity and buy-and-hold strategy rather than Agent, Model, or Prompt
-  records.
+- **One canonical strategy, two execution modes.** A contestant has one configurable strategy
+  prompt plus a `managed` or `rebuilt` mode. Managed evaluations receive holdings, allocation
+  history, notes, performance, and costs; rebuilt evaluations receive no prior portfolio state.
+  Each mode has a global editable wrapper prompt under Admin → Settings. SPY/RSP benchmarks use a
+  hardcoded identity and buy-and-hold strategy rather than Agent, Model, or Prompt records.
 - **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
   position weights. The default is 10–25%, which implies 4–10 positions.
 - **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system
@@ -77,10 +78,11 @@ per-portfolio history) — **except** API-key management, which stays in the adm
 - **Auth.** Every request needs an API key (`Authorization: Bearer <key>`, or `X-API-Key`);
   there is no anonymous access. Create and revoke keys in the admin panel's **API Keys** tab.
   The plaintext key is shown once at creation; only a SHA-256 hash is stored.
-- **Flagship read tools.** `get_portfolio(slug_or_id)` returns everything an agent needs to
-  rebalance one portfolio (strategy and structured policy, drifted holdings with entry/current
-  prices, the full allocation history with general and per-position notes, performance metrics).
-  `get_arena_overview()` compares every portfolio's performance at once.
+- **Flagship read tools.** `get_portfolio(slug_or_id)` always returns the strategy, structured
+  policy, prompt mode, and next effective date. Managed mode also returns drifted holdings with
+  entry/current prices, the full allocation history with notes, performance, and costs. Rebuilt
+  mode intentionally omits that prior state. `get_arena_overview()` compares every portfolio's
+  performance at once.
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
   `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
   `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
@@ -118,7 +120,8 @@ submission deadline when it is queued. Harness defaults are used; Portfolio Aren
 a service tier. Pausing stops new claims while active work finishes. Queued work can be cancelled
 immediately; running work receives a cancellation request and its Codex process is terminated.
 Failed runs can be retried manually. All paths use the same server-side proposal and symbol
-validation and atomic allocation write.
+validation and atomic allocation write. At claim time, the worker receives a complete execution
+prompt rendered from the portfolio's canonical strategy and the editable wrapper for its mode.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are

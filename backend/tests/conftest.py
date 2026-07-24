@@ -300,7 +300,12 @@ def sample_portfolio(client, admin_headers, sample_agent, sample_prompt) -> dict
     tab); the returned dict keeps an ``allocation`` key for dependent tests."""
     created = client.post(
         "/api/portfolios",
-        json={"name": "Claude Weekly", "agent_id": sample_agent["id"], "prompt_id": sample_prompt["id"]},
+        json={
+            "name": "Claude Weekly",
+            "agent_id": sample_agent["id"],
+            "prompt_id": sample_prompt["id"],
+            "prompt_mode": "managed",
+        },
         headers=admin_headers,
     )
     assert created.status_code == 201, created.text

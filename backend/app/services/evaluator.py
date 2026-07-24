@@ -21,6 +21,7 @@ from . import admin_ops
 from .admin_ops import AdminOpError
 from .harnesses import automation_harness_ids, supports_automation
 from .model_catalog import agent_out, agent_snapshot_out, model_ref
+from .prompt_policy import automated_execution_prompt
 from .serialize import serialize_allocation
 from .trading_calendar import close_at, effective_date_for, is_trading_day
 
@@ -105,7 +106,7 @@ def run_out(run: EvaluationRun) -> dict:
 
 def _run_query():
     return select(EvaluationRun).options(
-        selectinload(EvaluationRun.portfolio),
+        selectinload(EvaluationRun.portfolio).selectinload(Portfolio.prompt),
         selectinload(EvaluationRun.agent)
         .selectinload(Agent.model)
         .selectinload(ModelDefinition.capabilities),
@@ -121,6 +122,16 @@ def _load_run(session: Session, run_id: int, *, lock: bool = False) -> Evaluatio
     if run is None:
         raise AdminOpError(404, "Evaluation run not found")
     return run
+
+
+def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
+    wrapper_prompt = admin_ops.wrapper_prompt_for_portfolio(session, run.portfolio)
+    if wrapper_prompt is None:
+        raise AdminOpError(409, "Benchmark portfolios cannot be evaluated")
+    return {
+        **run_out(run),
+        "execution_prompt": automated_execution_prompt(run.portfolio, wrapper_prompt),
+    }
 
 
 def get_settings(session: Session, *, lock: bool = False) -> EvaluatorSettings:
@@ -642,9 +653,10 @@ def claim_runs(
                 run.lease_expires_at = current_time + timedelta(seconds=run.timeout_seconds + 60)
                 claimed.append(run)
     session.commit()
+    claimed_runs = [_load_run(session, run.id) for run in claimed]
     return {
         "settings": settings_out(settings),
-        "runs": [run_out(_load_run(session, run.id)) for run in claimed],
+        "runs": [_claimed_run_out(session, run) for run in claimed_runs],
     }
 
 

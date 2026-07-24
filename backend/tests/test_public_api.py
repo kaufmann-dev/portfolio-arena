@@ -3,6 +3,11 @@ benchmark auto-seeding."""
 
 from datetime import UTC, datetime, timedelta
 
+from app.services.prompt_policy import (
+    DEFAULT_MANAGED_WRAPPER_PROMPT,
+    DEFAULT_REBUILT_WRAPPER_PROMPT,
+)
+
 from .util import backdate_allocation
 
 
@@ -24,6 +29,7 @@ class TestLeaderboard:
 
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row is not None
+        assert row["prompt_mode"] == "managed"
         assert row["metrics"]["has_data"]
         assert row["metrics"]["itd_return"] is not None
         assert row["metrics"]["vs_spy"] is not None
@@ -58,6 +64,7 @@ class TestLeaderboard:
                 "name": "Later Portfolio",
                 "agent_id": sample_agent["id"],
                 "prompt_id": sample_prompt["id"],
+                "prompt_mode": "managed",
             },
             headers=admin_headers,
         ).json()
@@ -156,7 +163,7 @@ class TestLeaderboard:
 
 
 class TestPortfolioDetail:
-    def test_detail_shape(self, client, sample_portfolio):
+    def test_detail_shape(self, client, sample_portfolio, sample_prompt):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
         payload = client.get(f"/api/portfolios/{sample_portfolio['slug']}").json()
 
@@ -169,14 +176,18 @@ class TestPortfolioDetail:
         assert symbols == {"AAPL", "MSFT"}
 
         assert portfolio["prompt"]["slug"] == "weekly-manager-v1"
+        assert portfolio["prompt_mode"] == "managed"
         execution_prompt = portfolio["execution_prompt"]
         assert execution_prompt.startswith("Evaluate the Portfolio Arena portfolio")
+        assert sample_portfolio["slug"] in execution_prompt
+        assert sample_prompt["text"] in execution_prompt
         assert execution_prompt.count("If the returned allocation history is empty") == 1
         assert "construct the portfolio's initial allocation" in execution_prompt
-        assert "produce its next allocation according to the returned strategy" in execution_prompt
-        assert "do not rebuild it from scratch" not in execution_prompt
-        assert "after transaction costs" not in execution_prompt
-        assert "Prefer retaining the existing allocation" not in execution_prompt
+        assert "do not rebuild it from scratch" in execution_prompt
+        assert "after\ntransaction costs" in execution_prompt
+        assert "prefer retaining the existing allocation" in execution_prompt
+        assert "call `create_allocation` exactly once" in execution_prompt
+        assert "{{" not in execution_prompt
 
         allocation = portfolio["allocations"][0]
         assert allocation["locked"] is True
@@ -186,7 +197,7 @@ class TestPortfolioDetail:
     def test_404(self, client):
         assert client.get("/api/portfolios/nope").status_code == 404
 
-    def test_execution_prompt_allows_strategy_to_reconstruct_from_scratch(
+    def test_rebuilt_execution_prompt_reconstructs_from_scratch(
         self,
         client,
         admin_headers,
@@ -203,14 +214,41 @@ class TestPortfolioDetail:
             headers=admin_headers,
         )
         assert response.status_code == 200
+        response = client.patch(
+            f"/api/portfolios/{sample_portfolio['id']}",
+            json={"prompt_mode": "rebuilt"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
 
         payload = client.get(f"/api/portfolios/{sample_portfolio['slug']}").json()
         execution_prompt = payload["portfolio"]["execution_prompt"]
 
+        assert payload["portfolio"]["prompt_mode"] == "rebuilt"
         assert reconstruction_strategy in execution_prompt
-        assert "do not rebuild it from scratch" not in execution_prompt
+        assert "rebuild the complete target portfolio independently from scratch" in execution_prompt
         assert "continuity is useful" not in execution_prompt
-        assert "Prefer retaining the existing allocation" not in execution_prompt
+        assert "prefer retaining the existing allocation" not in execution_prompt
+
+    def test_strategy_placeholders_are_not_expanded(
+        self,
+        client,
+        admin_headers,
+        sample_portfolio,
+        sample_prompt,
+    ):
+        strategy = "Keep this literal token in the strategy: {{portfolio_slug}}."
+        response = client.patch(
+            f"/api/prompts/{sample_prompt['id']}",
+            json={"text": strategy},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+
+        payload = client.get(f"/api/portfolios/{sample_portfolio['slug']}").json()
+        execution_prompt = payload["portfolio"]["execution_prompt"]
+        assert strategy in execution_prompt
+        assert execution_prompt.count("{{portfolio_slug}}") == 1
 
 
 class TestCompare:
@@ -330,9 +368,48 @@ class TestPromptsAndAgents:
 
 class TestAdminMisc:
     def test_settings_roundtrip(self, client, admin_headers):
-        assert client.get("/api/settings", headers=admin_headers).json() == {"default_cost_bps": 10}
-        client.put("/api/settings", json={"default_cost_bps": 25}, headers=admin_headers)
-        assert client.get("/api/settings", headers=admin_headers).json() == {"default_cost_bps": 25}
+        original = client.get("/api/settings", headers=admin_headers).json()
+        assert original == {
+            "default_cost_bps": 10,
+            "managed_wrapper_prompt": DEFAULT_MANAGED_WRAPPER_PROMPT,
+            "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+        }
+        updated_managed = DEFAULT_MANAGED_WRAPPER_PROMPT.replace(
+            "produce its next allocation",
+            "produce a carefully reviewed next allocation",
+        )
+        response = client.put(
+            "/api/settings",
+            json={
+                "default_cost_bps": 25,
+                "managed_wrapper_prompt": updated_managed,
+                "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+            },
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+        assert client.get("/api/settings", headers=admin_headers).json() == {
+            "default_cost_bps": 25,
+            "managed_wrapper_prompt": updated_managed,
+            "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+        }
+
+    def test_settings_reject_invalid_wrapper_placeholders(self, client, admin_headers):
+        for invalid in (
+            DEFAULT_MANAGED_WRAPPER_PROMPT.replace("{{strategy_text}}", ""),
+            DEFAULT_MANAGED_WRAPPER_PROMPT.replace("{{strategy_text}}", "{{unknown}}"),
+            f"{DEFAULT_MANAGED_WRAPPER_PROMPT}\n{{{{malformed",
+        ):
+            response = client.put(
+                "/api/settings",
+                json={
+                    "default_cost_bps": 10,
+                    "managed_wrapper_prompt": invalid,
+                    "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+                },
+                headers=admin_headers,
+            )
+            assert response.status_code == 422, response.text
 
     def test_clear_price_cache(self, client, admin_headers, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"])

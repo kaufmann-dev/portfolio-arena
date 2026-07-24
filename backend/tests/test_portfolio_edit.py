@@ -1,19 +1,49 @@
-"""Creating a portfolio with its fixed prompt, and editing name/agent/prompt/cost via PATCH."""
+"""Creating and editing portfolios with canonical prompts and execution modes."""
 
 
 class TestCreatePortfolioPrompt:
     def test_create_requires_prompt(self, client, admin_headers, sample_agent):
         resp = client.post(
             "/api/portfolios",
-            json={"name": "No Prompt", "agent_id": sample_agent["id"]},
+            json={"name": "No Prompt", "agent_id": sample_agent["id"], "prompt_mode": "managed"},
             headers=admin_headers,
         )
         assert resp.status_code == 422  # prompt_id is required
 
+    def test_create_requires_prompt_mode(self, client, admin_headers, sample_agent, sample_prompt):
+        resp = client.post(
+            "/api/portfolios",
+            json={
+                "name": "No Mode",
+                "agent_id": sample_agent["id"],
+                "prompt_id": sample_prompt["id"],
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+
+    def test_create_rejects_unknown_prompt_mode(self, client, admin_headers, sample_agent, sample_prompt):
+        resp = client.post(
+            "/api/portfolios",
+            json={
+                "name": "Bad Mode",
+                "agent_id": sample_agent["id"],
+                "prompt_id": sample_prompt["id"],
+                "prompt_mode": "hybrid",
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+
     def test_create_missing_prompt_rejected(self, client, admin_headers, sample_agent):
         resp = client.post(
             "/api/portfolios",
-            json={"name": "Bad Prompt", "agent_id": sample_agent["id"], "prompt_id": 999999},
+            json={
+                "name": "Bad Prompt",
+                "agent_id": sample_agent["id"],
+                "prompt_id": 999999,
+                "prompt_mode": "managed",
+            },
             headers=admin_headers,
         )
         assert resp.status_code == 422
@@ -25,6 +55,7 @@ class TestCreatePortfolioPrompt:
             if p["id"] == sample_portfolio["id"]
         )
         assert row["prompt"]["slug"] == "weekly-manager-v1"
+        assert row["prompt_mode"] == "managed"
 
 
 class TestEditPortfolio:
@@ -61,6 +92,22 @@ class TestEditPortfolio:
         assert row["name"] == "Renamed Weekly"
         assert row["agent"]["id"] == other["id"]
         assert row["cost_bps"] == 25
+
+    def test_patch_changes_prompt_mode(self, client, admin_headers, sample_portfolio):
+        resp = client.patch(
+            f"/api/portfolios/{sample_portfolio['id']}",
+            json={"prompt_mode": "rebuilt"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["prompt_mode"] == "rebuilt"
+
+        row = next(
+            p
+            for p in client.get("/api/leaderboard").json()["portfolios"]
+            if p["id"] == sample_portfolio["id"]
+        )
+        assert row["prompt_mode"] == "rebuilt"
 
     def test_patch_changes_prompt(self, client, admin_headers, sample_portfolio):
         other = client.post(

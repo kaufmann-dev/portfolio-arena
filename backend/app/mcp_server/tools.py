@@ -69,11 +69,11 @@ def _resolve_portfolio(session: Session, slug_or_id: str) -> Portfolio:
 
 @mcp.tool()
 def get_portfolio(slug_or_id: str) -> dict:
-    """Everything needed to rebalance ONE portfolio: its prompt text, current
-    drifted holdings (entry vs current price, per-position notes), the full
-    allocation history with general and per-position notes, performance metrics,
-    and the effective date a new allocation entered now would take. Accepts a
-    slug or a numeric id."""
+    """Everything needed to evaluate ONE portfolio. Managed mode includes
+    drifted holdings, notes, allocation history, performance, and costs. Rebuilt
+    mode intentionally excludes all prior portfolio state. Both modes include
+    the canonical strategy, allocation policy, prompt mode, and next effective
+    date. Accepts a slug or a numeric id."""
     with _session() as session:
         portfolio_id = _resolve_portfolio(session, slug_or_id).id
         detail = _guard(admin_ops.portfolio_admin_detail, session, portfolio_id)
@@ -93,6 +93,21 @@ def get_portfolio(slug_or_id: str) -> dict:
                 "text": BENCHMARK_STRATEGY["text"],
                 "notes": "Hardcoded benchmark strategy.",
             }
+        if payload.get("prompt_mode") == "rebuilt":
+            for key in (
+                "cost_bps",
+                "inception",
+                "age_days",
+                "too_early",
+                "allocation_count",
+                "metrics",
+                "stale_data",
+                "frozen_symbols",
+                "error",
+                "holdings",
+                "allocations",
+            ):
+                payload.pop(key, None)
         now = datetime.now(UTC)
         payload["next_entry"] = {
             "entered_at": now.isoformat(),
@@ -367,9 +382,15 @@ def delete_prompt(prompt_id: int) -> dict:
 
 
 @mcp.tool()
-def create_portfolio(name: str, agent_id: int, prompt_id: int, cost_bps: int | None = None) -> dict:
-    """Create a portfolio bound to an agent and a prompt. `cost_bps` defaults to
-    the configured default. Enter its first allocation with `create_allocation`."""
+def create_portfolio(
+    name: str,
+    agent_id: int,
+    prompt_id: int,
+    prompt_mode: str,
+    cost_bps: int | None = None,
+) -> dict:
+    """Create a portfolio bound to an agent, canonical prompt, and prompt mode
+    (`managed` or `rebuilt`). `cost_bps` defaults to the configured default."""
     with _session() as session:
         return _guard(
             admin_ops.create_portfolio,
@@ -377,6 +398,7 @@ def create_portfolio(name: str, agent_id: int, prompt_id: int, cost_bps: int | N
             name=name,
             agent_id=agent_id,
             prompt_id=prompt_id,
+            prompt_mode=prompt_mode,
             cost_bps=cost_bps,
         )
 
@@ -388,11 +410,12 @@ def update_portfolio(
     status: str | None = None,
     agent_id: int | None = None,
     prompt_id: int | None = None,
+    prompt_mode: str | None = None,
     cost_bps: int | None = None,
 ) -> dict:
     """Edit a portfolio: rename, archive/unarchive (`status` = "active" |
-    "archived"), reassign agent/prompt, or change cost_bps. Omitted fields are
-    left unchanged."""
+    "archived"), reassign agent/prompt, select `managed` or `rebuilt` prompt
+    mode, or change cost_bps. Omitted fields are left unchanged."""
     with _session() as session:
         return _guard(
             admin_ops.update_portfolio,
@@ -402,6 +425,7 @@ def update_portfolio(
             status=status,
             agent_id=agent_id,
             prompt_id=prompt_id,
+            prompt_mode=prompt_mode,
             cost_bps=cost_bps,
         )
 
@@ -551,13 +575,23 @@ def list_evaluation_runs(
 
 @mcp.tool()
 def get_settings() -> dict:
-    """Read arena settings (the default cost_bps applied to new portfolios)."""
+    """Read the default cost and managed/rebuilt wrapper prompt templates."""
     with _session() as session:
-        return admin_ops.get_default_cost_bps(session)
+        return admin_ops.get_app_settings(session)
 
 
 @mcp.tool()
-def update_settings(default_cost_bps: int) -> dict:
-    """Set the default cost_bps applied to new portfolios."""
+def update_settings(
+    default_cost_bps: int,
+    managed_wrapper_prompt: str,
+    rebuilt_wrapper_prompt: str,
+) -> dict:
+    """Atomically update the default cost and both wrapper prompt templates."""
     with _session() as session:
-        return admin_ops.set_default_cost_bps(session, default_cost_bps)
+        return _guard(
+            admin_ops.update_app_settings,
+            session,
+            default_cost_bps=default_cost_bps,
+            managed_wrapper_prompt=managed_wrapper_prompt,
+            rebuilt_wrapper_prompt=rebuilt_wrapper_prompt,
+        )

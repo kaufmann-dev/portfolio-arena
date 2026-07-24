@@ -1,8 +1,11 @@
 """Pydantic request/response models."""
 
 import math
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .services.prompt_policy import validate_wrapper_prompt
 
 
 class CurrentUser(BaseModel):
@@ -96,6 +99,7 @@ class PortfolioCreate(BaseModel):
     slug: str | None = None
     agent_id: int
     prompt_id: int
+    prompt_mode: Literal["managed", "rebuilt"]
     cost_bps: int | None = Field(default=None, ge=0)
 
 
@@ -104,11 +108,22 @@ class PortfolioPatch(BaseModel):
     status: str | None = Field(default=None, pattern="^(active|archived)$")
     agent_id: int | None = None
     prompt_id: int | None = None
+    prompt_mode: Literal["managed", "rebuilt"] | None = None
     cost_bps: int | None = Field(default=None, ge=0)
 
 
 class SettingsUpdate(BaseModel):
     default_cost_bps: int = Field(ge=0)
+    managed_wrapper_prompt: str = Field(min_length=1)
+    rebuilt_wrapper_prompt: str = Field(min_length=1)
+
+    @field_validator("managed_wrapper_prompt", "rebuilt_wrapper_prompt")
+    @classmethod
+    def validate_wrapper(cls, value: str) -> str:
+        try:
+            return validate_wrapper_prompt(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
 
 
 class EvaluatorSettingsUpdate(BaseModel):

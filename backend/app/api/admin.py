@@ -206,6 +206,7 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
         name=body.name,
         agent_id=body.agent_id,
         prompt_id=body.prompt_id,
+        prompt_mode=body.prompt_mode,
         slug=body.slug,
         cost_bps=body.cost_bps,
     )
@@ -221,6 +222,7 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
         status=body.status,
         agent_id=body.agent_id,
         prompt_id=body.prompt_id,
+        prompt_mode=body.prompt_mode,
         cost_bps=body.cost_bps,
     )
 
@@ -323,12 +325,12 @@ def delete_allocation(allocation_id: int, session: Session = Depends(get_session
 
 @router.get("/settings")
 def get_app_settings(session: Session = Depends(get_session)):
-    return admin_ops.get_default_cost_bps(session)
+    return admin_ops.get_app_settings(session)
 
 
 @router.put("/settings")
 def put_app_settings(body: SettingsUpdate, session: Session = Depends(get_session)):
-    return admin_ops.set_default_cost_bps(session, body.default_cost_bps)
+    return _run(admin_ops.update_app_settings, session, **body.model_dump())
 
 
 @router.delete("/prices/cache")

@@ -9,7 +9,12 @@ def _create_with_notes(client, admin_headers, agent_id, prompt_id) -> dict:
     Returns the portfolio dict with an ``allocation`` key."""
     created = client.post(
         "/api/portfolios",
-        json={"name": "Notes Weekly", "agent_id": agent_id, "prompt_id": prompt_id},
+        json={
+            "name": "Notes Weekly",
+            "agent_id": agent_id,
+            "prompt_id": prompt_id,
+            "prompt_mode": "managed",
+        },
         headers=admin_headers,
     )
     assert created.status_code == 201, created.text

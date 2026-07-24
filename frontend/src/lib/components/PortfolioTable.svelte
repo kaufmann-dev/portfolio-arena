@@ -161,6 +161,9 @@
   {:else}
     <span class="muted">—</span>
   {/if}
+  {#if row.prompt_mode}
+    <span class="prompt-mode">· {row.prompt_mode}</span>
+  {/if}
 {/snippet}
 
 {#snippet mobileMetric(label: string, value: string, valueClass = "")}
@@ -383,6 +386,11 @@
 
   .portfolio-link {
     font-weight: 650;
+  }
+
+  .prompt-mode {
+    color: var(--text-tertiary);
+    text-transform: capitalize;
   }
 
   .badges {

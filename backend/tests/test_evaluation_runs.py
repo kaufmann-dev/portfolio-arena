@@ -2,7 +2,7 @@
 
 from datetime import UTC, date, datetime, timedelta
 
-from app.services import evaluator
+from app.services import admin_ops, evaluator
 from app.services.trading_calendar import close_at, effective_date_for
 
 from .util import backdate_allocation
@@ -23,6 +23,17 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
     backdate_allocation(sample_portfolio["allocation"]["id"])
     now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
+        app_settings = admin_ops.get_app_settings(session)
+        managed_wrapper = app_settings["managed_wrapper_prompt"].replace(
+            "Evaluate the Portfolio Arena portfolio",
+            "Managed wrapper marker for",
+        )
+        admin_ops.update_app_settings(
+            session,
+            default_cost_bps=app_settings["default_cost_bps"],
+            managed_wrapper_prompt=managed_wrapper,
+            rebuilt_wrapper_prompt=app_settings["rebuilt_wrapper_prompt"],
+        )
         _enable(session, sample_portfolio)
         queued = evaluator.enqueue_manual_runs(
             session,
@@ -39,6 +50,12 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
             now=now,
         )
         assert [run["id"] for run in claimed["runs"]] == [run_id]
+        execution_prompt = claimed["runs"][0]["execution_prompt"]
+        assert sample_portfolio["slug"] in execution_prompt
+        assert "Managed wrapper marker for" in execution_prompt
+        assert "manage and rebalance the existing portfolio" in execution_prompt
+        assert "Do not call any write tool" in execution_prompt
+        assert "{{" not in execution_prompt
 
         submitted = evaluator.submit_run(
             session,
