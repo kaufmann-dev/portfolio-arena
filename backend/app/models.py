@@ -154,9 +154,17 @@ class Portfolio(Base):
         CheckConstraint("status IN ('active', 'archived')", name="portfolios_status_check"),
         CheckConstraint("cost_bps >= 0", name="portfolios_cost_bps_check"),
         CheckConstraint(
+            "prompt_mode IS NULL OR prompt_mode IN ('managed', 'rebuilt')",
+            name="portfolios_prompt_mode_check",
+        ),
+        CheckConstraint(
             "(is_benchmark AND agent_id IS NULL AND prompt_id IS NULL) OR "
             "(NOT is_benchmark AND agent_id IS NOT NULL AND prompt_id IS NOT NULL)",
             name="portfolios_identity_assignment_check",
+        ),
+        CheckConstraint(
+            "(is_benchmark AND prompt_mode IS NULL) OR (NOT is_benchmark AND prompt_mode IS NOT NULL)",
+            name="portfolios_prompt_mode_assignment_check",
         ),
     )
 
@@ -165,6 +173,7 @@ class Portfolio(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     agent_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"), nullable=True)
     prompt_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=True)
+    prompt_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     is_benchmark: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

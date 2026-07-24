@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..db import get_session
 from ..models import Agent, ModelDefinition, Portfolio, Prompt
 from ..ratelimit import limiter
+from ..services import admin_ops
 from ..services.arena import compute_valuations, load_portfolios
 from ..services.benchmarks import reconcile_benchmark_allocations
 from ..services.model_catalog import agent_out
@@ -47,7 +48,14 @@ def portfolio_detail(slug: str, request: Request, session: Session = Depends(get
     valuation = valuations.by_portfolio_id.get(match.id)
     if valuation is None:
         raise HTTPException(404, "Portfolio not found")
-    return {"as_of": valuations.as_of, "portfolio": serialize_detail(valuation, valuations)}
+    return {
+        "as_of": valuations.as_of,
+        "portfolio": serialize_detail(
+            valuation,
+            valuations,
+            wrapper_prompt=admin_ops.wrapper_prompt_for_portfolio(session, match),
+        ),
+    }
 
 
 @router.get("/compare")

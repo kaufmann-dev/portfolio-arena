@@ -33,9 +33,9 @@ Portfolio Arena tracks AI-managed stock portfolios against SPY/RSP benchmarks.
 NAVs are recomputed from locked allocations plus cached prices — nothing is
 snapshotted. Typical rebalance workflow for one portfolio:
 
-1. `get_portfolio(slug_or_id)` — read its prompt, drifted holdings (entry vs
-   current price), full allocation history with the general note and per-position
-   notes, and performance metrics.
+1. `get_portfolio(slug_or_id)` — read its canonical prompt, prompt mode, and
+allowed evaluation context. Managed portfolios include holdings, notes, history,
+and performance; rebuilt portfolios intentionally expose none of that state.
 2. Follow the returned prompt allocation policy. Weights must sum to exactly
    100 across USD-denominated equities and ETFs. Validate unfamiliar tickers
    with `validate_symbol` / `search_symbols`.

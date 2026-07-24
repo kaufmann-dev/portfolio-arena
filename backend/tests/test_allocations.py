@@ -24,6 +24,7 @@ class TestCreation:
                 "name": "Empty Weekly",
                 "agent_id": sample_agent["id"],
                 "prompt_id": sample_prompt["id"],
+                "prompt_mode": "managed",
             },
             headers=admin_headers,
         )
@@ -165,7 +166,12 @@ class TestCreation:
         ).json()
         portfolio = client.post(
             "/api/portfolios",
-            json={"name": "Policy Test", "agent_id": sample_agent["id"], "prompt_id": prompt["id"]},
+            json={
+                "name": "Policy Test",
+                "agent_id": sample_agent["id"],
+                "prompt_id": prompt["id"],
+                "prompt_mode": "managed",
+            },
             headers=admin_headers,
         ).json()
         response = client.post(

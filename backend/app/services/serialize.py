@@ -110,6 +110,7 @@ def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations
         "name": portfolio.name,
         "agent": agent_ref(portfolio),
         "prompt": prompt_ref(portfolio),
+        "prompt_mode": portfolio.prompt_mode,
         "is_benchmark": portfolio.is_benchmark,
         "status": portfolio.status,
         "cost_bps": portfolio.cost_bps,
@@ -125,7 +126,12 @@ def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations
     }
 
 
-def serialize_detail(valuation: PortfolioValuation, valuations: ArenaValuations, admin: bool = False) -> dict:
+def serialize_detail(
+    valuation: PortfolioValuation,
+    valuations: ArenaValuations,
+    admin: bool = False,
+    wrapper_prompt: str | None = None,
+) -> dict:
     portfolio = valuation.portfolio
     result = valuation.result
     now = datetime.now(UTC)
@@ -142,7 +148,14 @@ def serialize_detail(valuation: PortfolioValuation, valuations: ArenaValuations,
 
     return {
         **serialize_summary(valuation, valuations),
-        "execution_prompt": None if portfolio.is_benchmark else manual_execution_prompt(portfolio),
+        "execution_prompt": (
+            None
+            if portfolio.is_benchmark
+            else manual_execution_prompt(
+                portfolio,
+                wrapper_prompt or "",
+            )
+        ),
         "series": series,
         "spy_series": spy_overlay,
         "holdings": [

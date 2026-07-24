@@ -14,7 +14,6 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
-from ..services.prompt_policy import INITIAL_ALLOCATION_INSTRUCTION
 from .config import EvaluatorRuntimeSettings
 
 logger = logging.getLogger(__name__)
@@ -63,6 +62,7 @@ class ClaimedRun(BaseModel):
     reasoning_effort: str | None
     timeout_seconds: int
     deadline_at: datetime | None
+    execution_prompt: str = Field(min_length=1)
 
 
 class ClaimSettings(BaseModel):
@@ -186,26 +186,7 @@ async def codex_is_authenticated() -> bool:
 
 
 def evaluator_prompt(run: ClaimedRun) -> str:
-    return f"""\
-Evaluate the Portfolio Arena portfolio `{run.portfolio.slug}` and produce its next allocation.
-
-Call the Portfolio Arena `get_portfolio` tool first and treat the returned strategy, allocation
-policy, holdings, notes, history, performance, and effective date as authoritative.
-{INITIAL_ALLOCATION_INSTRUCTION}
-Research all decision-relevant current information with Massive and live web search.
-
-Produce a proposal that obeys the returned allocation policy exactly. Use only USD-denominated
-equities and ETFs accepted by Portfolio Arena. Do not use cash, mutual funds, options, futures,
-indices, FX, shorts, or leverage. Validate every final symbol. Do not call any write tool: the
-worker will validate and submit your final structured proposal atomically.
-
-The report should briefly explain the portfolio-level decision, key evidence, material risks, and
-what would change the next evaluation. Position notes should be concise handoff context.
-
-Return `status` as `proposal` with an empty `error` for a valid allocation. If `get_portfolio`
-fails or no valid allocation can be produced, return `status` as `blocked`, no positions, and a
-concise `error`; never invent a placeholder symbol.
-"""
+    return run.execution_prompt
 
 
 async def _wait_for_cancellation(

@@ -39,6 +39,7 @@ def _run(reasoning_effort: str | None = "xhigh") -> ClaimedRun:
             "reasoning_effort": reasoning_effort,
             "timeout_seconds": 300,
             "deadline_at": None,
+            "execution_prompt": "Rendered wrapper prompt.",
         }
     )
 
@@ -145,16 +146,10 @@ def test_run_codex_omits_reasoning_when_model_has_none(tmp_path, monkeypatch):
     assert not any("model_reasoning_effort" in item for item in captured)
 
 
-def test_evaluator_prompt_is_lifecycle_neutral():
+def test_evaluator_uses_the_rendered_wrapper_prompt():
     prompt = evaluator_prompt(_run())
 
-    assert prompt.count("If the returned allocation history is empty") == 1
-    assert "construct the portfolio's initial allocation" in prompt
-    assert "produce its next allocation according to the returned strategy" in prompt
-    assert "do not rebuild it from scratch" not in prompt
-    assert "continuity is useful" not in prompt
-    assert "after transaction costs" not in prompt
-    assert "Prefer retaining the existing allocation" not in prompt
+    assert prompt == "Rendered wrapper prompt."
 
 
 def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):
@@ -214,6 +209,7 @@ def test_scheduler_refills_completed_slots_while_other_runs_continue(tmp_path, m
             "reasoning_effort": None,
             "timeout_seconds": 300,
             "deadline_at": None,
+            "execution_prompt": f"Evaluate portfolio {run_id}.",
         }
 
     async def fake_codex_version():

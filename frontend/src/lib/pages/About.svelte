@@ -57,14 +57,15 @@
         <ol>
           <li>
             An <strong>agent</strong> (a model + harness + optional reasoning profile, e.g. "GPT-5.6 Sol
-            (Codex, Extra high)") is paired with a fixed <strong>prompt</strong> to form a
-            <strong>portfolio</strong>. SPY and RSP benchmarks instead use a hardcoded identity and
-            buy-and-hold strategy, so they do not appear in the configurable Agents, Models, or Prompts
-            catalogs.
+            (Codex, Extra high)") is paired with a canonical strategy <strong>prompt</strong> and either the
+            <strong>managed</strong> or <strong>rebuilt</strong> execution mode to form a portfolio. SPY and RSP
+            benchmarks instead use a hardcoded identity and buy-and-hold strategy, so they do not appear in the
+            configurable Agents, Models, or Prompts catalogs.
           </li>
           <li>
-            On a selected weekday cadence, the evaluator gives Codex the fixed prompt and current holdings and
-            asks for new target weights. An operator can also start an evaluation at any time.
+            On a selected weekday cadence, the evaluator renders that strategy inside the mode's editable
+            wrapper and asks Codex for new target weights. Managed mode receives prior portfolio state;
+            rebuilt mode does not. An operator can also start an evaluation at any time.
           </li>
           <li>
             The proposed <strong>allocation</strong> is validated and recorded automatically, by hand in the
@@ -166,9 +167,9 @@
             age, allocation count): the leaderboard as data, for judging who is performing.
           </li>
           <li>
-            <code>get_portfolio(slug_or_id)</code> — one portfolio in full: its prompt text, current drifted holdings
-            (entry vs. current price), the complete allocation history with the general and per-position notes,
-            and performance metrics. Read this before proposing a rebalance.
+            <code>get_portfolio(slug_or_id)</code> — one portfolio's canonical strategy, allocation policy, prompt
+            mode, and next effective date. Managed portfolios also include current drifted holdings, allocation
+            history, notes, performance, and costs; rebuilt portfolios intentionally omit all prior portfolio state.
           </li>
         </ul>
 
@@ -199,12 +200,16 @@
         <h3>Portfolios</h3>
         <ul class="tools">
           <li>
-            <code>create_portfolio(name, agent_id, prompt_id, cost_bps?)</code> — start a new contestant bound to
-            an agent and a prompt; cost defaults to the configured value.
+            <code>create_portfolio(name, agent_id, prompt_id, prompt_mode, cost_bps?)</code> — start a new contestant
+            bound to an agent, canonical strategy, and either managed or rebuilt mode; cost defaults to the configured
+            value.
           </li>
           <li>
-            <code>update_portfolio(portfolio_id, name?, status?, agent_id?, prompt_id?, cost_bps?)</code> — rename,
-            archive/unarchive, reassign the agent or prompt, or change the cost.
+            <code
+              >update_portfolio(portfolio_id, name?, status?, agent_id?, prompt_id?, prompt_mode?, cost_bps?)</code
+            >
+            — rename, archive/unarchive, reassign the agent or strategy, select the execution mode, or change the
+            cost.
           </li>
           <li>
             <code>delete_portfolio(portfolio_id)</code> — delete a portfolio and all of its allocations.
@@ -271,8 +276,13 @@
 
         <h3>Settings</h3>
         <ul class="tools">
-          <li><code>get_settings()</code> — the default cost (bps) applied to new portfolios.</li>
-          <li><code>update_settings(default_cost_bps)</code> — change that default.</li>
+          <li>
+            <code>get_settings()</code> — the default cost and the editable managed and rebuilt wrapper prompts.
+          </li>
+          <li>
+            <code>update_settings(default_cost_bps, managed_wrapper_prompt, rebuilt_wrapper_prompt)</code> — replace
+            those settings after validating the wrappers' required placeholders.
+          </li>
         </ul>
 
         <h2>Connecting</h2>

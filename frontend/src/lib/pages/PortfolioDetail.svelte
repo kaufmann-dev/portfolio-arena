@@ -106,12 +106,14 @@
           {:else if portfolio.prompt}
             · strategy {portfolio.prompt.name}
           {/if}
+          {#if portfolio.prompt_mode}· {portfolio.prompt_mode}{/if}
           · costs {portfolio.cost_bps} bps on turnover
           {#if data.as_of}· as of <span class="num">{data.as_of}</span>{/if}
         </p>
       </div>
       <div class="head-badges">
         {#if portfolio.is_benchmark}<span class="badge accent">benchmark</span>{/if}
+        {#if portfolio.prompt_mode}<span class="badge">{portfolio.prompt_mode}</span>{/if}
         {#if portfolio.status === "archived"}<span class="badge">archived</span>{/if}
         {#if portfolio.too_early && !portfolio.is_benchmark}
           <span class="badge warn">too early to judge · {ageLabel(portfolio.age_days)}</span>

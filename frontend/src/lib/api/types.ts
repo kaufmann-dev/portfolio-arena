@@ -23,6 +23,14 @@ export interface PromptRef {
   allocation_policy: AllocationPolicy;
 }
 
+export type PromptMode = "managed" | "rebuilt";
+
+export interface AppSettings {
+  default_cost_bps: number;
+  managed_wrapper_prompt: string;
+  rebuilt_wrapper_prompt: string;
+}
+
 export interface Metrics {
   has_data: boolean;
   start_date?: string;
@@ -47,6 +55,7 @@ export interface PortfolioSummary {
   name: string;
   agent: AgentRef;
   prompt: PromptRef | null;
+  prompt_mode: PromptMode | null;
   is_benchmark: boolean;
   status: "active" | "archived";
   cost_bps: number;

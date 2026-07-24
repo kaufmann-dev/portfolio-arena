@@ -114,10 +114,46 @@ class TestMcpTools:
         data = _call_tool(client, mcp_headers, "get_portfolio", {"slug_or_id": sample_portfolio["slug"]})
         portfolio = data["portfolio"]
         assert portfolio["prompt"]["text"]  # full prompt text, for the rebalancing agent
+        assert portfolio["prompt_mode"] == "managed"
         assert portfolio["allocations"]  # history with notes
         assert "next_entry" in portfolio
         for stripped in ("execution_prompt", "series", "spy_series", "sparkline", "stale_days"):
             assert stripped not in portfolio
+
+    def test_get_rebuilt_portfolio_omits_prior_state(
+        self,
+        client,
+        mcp_headers,
+        admin_headers,
+        sample_portfolio,
+    ):
+        response = client.patch(
+            f"/api/portfolios/{sample_portfolio['id']}",
+            json={"prompt_mode": "rebuilt"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+
+        data = _call_tool(client, mcp_headers, "get_portfolio", {"slug_or_id": sample_portfolio["slug"]})
+        portfolio = data["portfolio"]
+        assert portfolio["prompt_mode"] == "rebuilt"
+        assert portfolio["prompt"]["text"]
+        assert portfolio["prompt"]["allocation_policy"]
+        assert "next_entry" in portfolio
+        for hidden in (
+            "cost_bps",
+            "inception",
+            "age_days",
+            "too_early",
+            "allocation_count",
+            "metrics",
+            "stale_data",
+            "frozen_symbols",
+            "error",
+            "holdings",
+            "allocations",
+        ):
+            assert hidden not in portfolio
 
     def test_benchmark_portfolio_uses_hardcoded_strategy(
         self,
@@ -179,7 +215,12 @@ class TestMcpTools:
             client,
             mcp_headers,
             "create_portfolio",
-            {"name": "MCP Portfolio", "agent_id": agent["id"], "prompt_id": prompt["id"]},
+            {
+                "name": "MCP Portfolio",
+                "agent_id": agent["id"],
+                "prompt_id": prompt["id"],
+                "prompt_mode": "managed",
+            },
         )
         allocation = _call_tool(
             client,

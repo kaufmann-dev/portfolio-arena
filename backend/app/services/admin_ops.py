@@ -26,7 +26,11 @@ from ..models import (
     Prompt,
     Setting,
 )
-from ..seed import DEFAULT_COST_BPS_KEY
+from ..seed import (
+    DEFAULT_COST_BPS_KEY,
+    MANAGED_WRAPPER_PROMPT_KEY,
+    REBUILT_WRAPPER_PROMPT_KEY,
+)
 from ..util import slugify
 from .arena import compute_valuations, load_portfolios
 from .benchmarks import reconcile_benchmark_allocations
@@ -41,7 +45,14 @@ from .model_catalog import (
     validate_agent_profile,
     validate_capabilities,
 )
-from .prompt_policy import allocation_policy_out, validate_position_weights
+from .prompt_policy import (
+    DEFAULT_MANAGED_WRAPPER_PROMPT,
+    DEFAULT_REBUILT_WRAPPER_PROMPT,
+    PROMPT_MODES,
+    allocation_policy_out,
+    validate_position_weights,
+    validate_wrapper_prompt,
+)
 from .serialize import serialize_allocation, serialize_detail
 from .symbols import (
     SymbolValidationError,
@@ -62,6 +73,11 @@ def unique_slug(session: Session, model, wanted: str) -> str:
         candidate = f"{slug}-{suffix}"
         suffix += 1
     return candidate
+
+
+def _validate_prompt_mode(prompt_mode: str) -> None:
+    if prompt_mode not in PROMPT_MODES:
+        raise AdminOpError(422, "Prompt mode must be 'managed' or 'rebuilt'.")
 
 
 # --- Models and agents ------------------------------------------------------
@@ -435,9 +451,11 @@ def create_portfolio(
     name: str,
     agent_id: int,
     prompt_id: int,
+    prompt_mode: str,
     slug: str | None = None,
     cost_bps: int | None = None,
 ) -> dict:
+    _validate_prompt_mode(prompt_mode)
     agent = session.get(Agent, agent_id)
     if agent is None:
         raise AdminOpError(422, "Agent not found")
@@ -450,6 +468,7 @@ def create_portfolio(
         name=name,
         agent_id=agent.id,
         prompt_id=prompt.id,
+        prompt_mode=prompt_mode,
         cost_bps=_default_cost_bps(session) if cost_bps is None else cost_bps,
     )
     session.add(portfolio)
@@ -458,6 +477,7 @@ def create_portfolio(
         "id": portfolio.id,
         "slug": portfolio.slug,
         "name": portfolio.name,
+        "prompt_mode": portfolio.prompt_mode,
         "cost_bps": portfolio.cost_bps,
     }
 
@@ -470,6 +490,7 @@ def update_portfolio(
     status: str | None = None,
     agent_id: int | None = None,
     prompt_id: int | None = None,
+    prompt_mode: str | None = None,
     cost_bps: int | None = None,
 ) -> dict:
     portfolio = writable_portfolio(session, portfolio_id)
@@ -492,6 +513,9 @@ def update_portfolio(
         if session.get(Prompt, prompt_id) is None:
             raise AdminOpError(422, "Prompt not found")
         portfolio.prompt_id = prompt_id
+    if prompt_mode is not None:
+        _validate_prompt_mode(prompt_mode)
+        portfolio.prompt_mode = prompt_mode
     if cost_bps is not None:
         portfolio.cost_bps = cost_bps
     session.commit()
@@ -502,6 +526,7 @@ def update_portfolio(
         "status": portfolio.status,
         "agent_id": portfolio.agent_id,
         "prompt_id": portfolio.prompt_id,
+        "prompt_mode": portfolio.prompt_mode,
         "cost_bps": portfolio.cost_bps,
     }
 
@@ -573,7 +598,16 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
     valuation = valuations.by_portfolio_id.get(match.id) if match else None
     if valuation is None:
         raise AdminOpError(404, "Portfolio not found")
-    return {"as_of": valuations.as_of, "portfolio": serialize_detail(valuation, valuations, admin=True)}
+    wrapper_prompt = wrapper_prompt_for_portfolio(session, match)
+    return {
+        "as_of": valuations.as_of,
+        "portfolio": serialize_detail(
+            valuation,
+            valuations,
+            admin=True,
+            wrapper_prompt=wrapper_prompt,
+        ),
+    }
 
 
 # --- Allocations ------------------------------------------------------------
@@ -722,15 +756,57 @@ def delete_allocation(session: Session, allocation_id: int) -> dict:
 # --- Settings ---------------------------------------------------------------
 
 
-def get_default_cost_bps(session: Session) -> dict:
-    return {"default_cost_bps": _default_cost_bps(session)}
+def _setting_value(session: Session, key: str, fallback: str) -> str:
+    setting = session.get(Setting, key)
+    return setting.value if setting is not None else fallback
 
 
-def set_default_cost_bps(session: Session, value: int) -> dict:
-    setting = session.get(Setting, DEFAULT_COST_BPS_KEY)
-    if setting is None:
-        session.add(Setting(key=DEFAULT_COST_BPS_KEY, value=str(value)))
-    else:
-        setting.value = str(value)
+def get_app_settings(session: Session) -> dict:
+    return {
+        "default_cost_bps": _default_cost_bps(session),
+        "managed_wrapper_prompt": _setting_value(
+            session,
+            MANAGED_WRAPPER_PROMPT_KEY,
+            DEFAULT_MANAGED_WRAPPER_PROMPT,
+        ),
+        "rebuilt_wrapper_prompt": _setting_value(
+            session,
+            REBUILT_WRAPPER_PROMPT_KEY,
+            DEFAULT_REBUILT_WRAPPER_PROMPT,
+        ),
+    }
+
+
+def wrapper_prompt_for_portfolio(session: Session, portfolio: Portfolio) -> str | None:
+    if portfolio.is_benchmark:
+        return None
+    settings = get_app_settings(session)
+    if portfolio.prompt_mode == "managed":
+        return settings["managed_wrapper_prompt"]
+    if portfolio.prompt_mode == "rebuilt":
+        return settings["rebuilt_wrapper_prompt"]
+    raise ValueError("Contestant portfolio is missing a valid prompt mode")
+
+
+def update_app_settings(
+    session: Session,
+    *,
+    default_cost_bps: int,
+    managed_wrapper_prompt: str,
+    rebuilt_wrapper_prompt: str,
+) -> dict:
+    if default_cost_bps < 0:
+        raise AdminOpError(422, "Default cost bps cannot be negative")
+    values = {
+        DEFAULT_COST_BPS_KEY: str(default_cost_bps),
+        MANAGED_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(managed_wrapper_prompt),
+        REBUILT_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(rebuilt_wrapper_prompt),
+    }
+    for key, value in values.items():
+        setting = session.get(Setting, key)
+        if setting is None:
+            session.add(Setting(key=key, value=value))
+        else:
+            setting.value = value
     session.commit()
-    return {"default_cost_bps": value}
+    return get_app_settings(session)
