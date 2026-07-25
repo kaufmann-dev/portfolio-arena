@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
 
   import { apiJson } from "../api/client";
-  import type { CompareResponse, LeaderboardResponse, PortfolioSummary } from "../api/types";
+  import type { CompareResponse, LeaderboardResponse, PortfolioSummary, PromptMode } from "../api/types";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import PortfolioTable from "../components/PortfolioTable.svelte";
   import SelectField from "../components/ui/SelectField.svelte";
@@ -13,6 +13,7 @@
   let showArchived = $state(false);
   let agentFilter = $state("all");
   let promptFilter = $state("all");
+  let promptModeFilter = $state<PromptMode | "all">("all");
   let selected = $state<string[]>([]);
   let compareData = $state.raw<CompareResponse | null>(null);
   let compareLoading = $state(false);
@@ -61,12 +62,21 @@
     ...prompts.map(([value, label]) => ({ value, label })),
   ]);
 
+  const promptModeOptions = [
+    { value: "all", label: "All modes" },
+    { value: "managed", label: "Managed" },
+    { value: "rebuilt", label: "Rebuilt" },
+  ];
+
   const rows = $derived.by(() => {
     let out: PortfolioSummary[] = data?.portfolios ?? [];
     if (!showArchived) out = out.filter((row) => row.status === "active");
     if (agentFilter !== "all") out = out.filter((row) => row.is_benchmark || row.agent.slug === agentFilter);
     if (promptFilter !== "all") {
       out = out.filter((row) => row.is_benchmark || row.prompt?.slug === promptFilter);
+    }
+    if (promptModeFilter !== "all") {
+      out = out.filter((row) => row.is_benchmark || row.prompt_mode === promptModeFilter);
     }
     return out;
   });
@@ -162,6 +172,13 @@
           label="Prompt"
           options={promptOptions}
           bind:value={promptFilter}
+          compact
+        />
+        <SelectField
+          id="leaderboard-prompt-mode"
+          label="Prompt mode"
+          options={promptModeOptions}
+          bind:value={promptModeFilter}
           compact
         />
         <ToggleSwitch label="Show archived" bind:checked={showArchived} />
@@ -283,7 +300,7 @@
 
   .filter-controls {
     display: grid;
-    grid-template-columns: minmax(170px, 220px) minmax(170px, 220px) auto;
+    grid-template-columns: repeat(3, minmax(160px, 220px)) auto;
     align-items: end;
     gap: 12px;
   }
