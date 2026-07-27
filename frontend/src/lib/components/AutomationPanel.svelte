@@ -382,7 +382,7 @@
               id="eval-timeout"
               type="number"
               min="60"
-              max="1500"
+              max="7200"
               bind:value={settingsDraft.attempt_timeout_seconds}
             />
           </div>

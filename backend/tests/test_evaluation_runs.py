@@ -34,6 +34,7 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
             managed_wrapper_prompt=managed_wrapper,
             rebuilt_wrapper_prompt=app_settings["rebuilt_wrapper_prompt"],
         )
+        evaluator.update_settings(session, attempt_timeout_seconds=7200)
         _enable(session, sample_portfolio)
         queued = evaluator.enqueue_manual_runs(
             session,
@@ -41,6 +42,7 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
             now=now,
         )
         run_id = queued["items"][0]["run"]["id"]
+        assert queued["items"][0]["run"]["timeout_seconds"] == 7200
         claimed = evaluator.claim_runs(
             session,
             worker_id="worker-1",
@@ -321,13 +323,28 @@ def test_admin_dashboard_and_internal_worker_auth(
             "enabled": True,
             "max_concurrency": 5,
             "poll_seconds": 60,
-            "attempt_timeout_seconds": 1500,
+            "attempt_timeout_seconds": 7200,
             "max_attempts": 2,
             "queue_before_close_minutes": 120,
         },
     )
     assert updated.status_code == 200
+    assert updated.json()["attempt_timeout_seconds"] == 7200
     assert updated.json()["queue_before_close_minutes"] == 120
+
+    rejected = client.put(
+        "/api/evaluator/settings",
+        headers=admin_headers,
+        json={
+            "enabled": True,
+            "max_concurrency": 5,
+            "poll_seconds": 60,
+            "attempt_timeout_seconds": 7201,
+            "max_attempts": 2,
+            "queue_before_close_minutes": 120,
+        },
+    )
+    assert rejected.status_code == 422
 
     denied = client.post(
         "/api/internal/evaluator/claim",
