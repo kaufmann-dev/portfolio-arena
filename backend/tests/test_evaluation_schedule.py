@@ -3,21 +3,20 @@
 from datetime import date, time
 
 from app.models import EvaluatorSettings, PortfolioEvaluatorConfig
-from app.services.evaluator import evaluation_window, is_due_on
+from app.services.evaluator import is_due_on, scheduled_enqueue_window
 from app.services.trading_calendar import NY
 
 
-def test_early_close_window_uses_configured_offsets():
+def test_early_close_queue_window_uses_configured_offset_and_close():
     settings = EvaluatorSettings(
         id=1,
-        start_before_close_minutes=120,
-        cutoff_before_close_minutes=15,
+        queue_before_close_minutes=120,
     )
 
-    opens_at, cutoff_at = evaluation_window(date(2026, 11, 27), settings)
+    queue_at, closes_at = scheduled_enqueue_window(date(2026, 11, 27), settings)
 
-    assert opens_at.astimezone(NY).time() == time(11)
-    assert cutoff_at.astimezone(NY).time() == time(12, 45)
+    assert queue_at.astimezone(NY).time() == time(11)
+    assert closes_at.astimezone(NY).time() == time(13)
 
 
 def test_selected_holiday_weekday_shifts_to_next_trading_day():

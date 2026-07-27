@@ -132,14 +132,7 @@ class EvaluatorSettingsUpdate(BaseModel):
     poll_seconds: int = Field(ge=10, le=300)
     attempt_timeout_seconds: int = Field(ge=60, le=1500)
     max_attempts: int = Field(ge=1, le=5)
-    start_before_close_minutes: int = Field(ge=15, le=240)
-    cutoff_before_close_minutes: int = Field(ge=0, le=60)
-
-    @model_validator(mode="after")
-    def validate_window(self):
-        if self.start_before_close_minutes <= self.cutoff_before_close_minutes:
-            raise ValueError("Evaluation start must be earlier than the submission cutoff.")
-        return self
+    queue_before_close_minutes: int = Field(ge=15, le=240)
 
 
 class PortfolioEvaluatorConfigUpdate(BaseModel):

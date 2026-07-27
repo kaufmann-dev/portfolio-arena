@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -61,7 +60,6 @@ class ClaimedRun(BaseModel):
     execution_model_id: str
     reasoning_effort: str | None
     timeout_seconds: int
-    deadline_at: datetime | None
     execution_prompt: str = Field(min_length=1)
 
 
@@ -76,7 +74,7 @@ class ClaimResponse(BaseModel):
 
 
 class RunCancelled(RuntimeError):
-    """The administrator or scheduled cutoff cancelled an active process."""
+    """The administrator cancelled an active process."""
 
 
 class EvaluationBlocked(RuntimeError):
@@ -195,8 +193,6 @@ async def _wait_for_cancellation(
 ) -> str:
     while True:
         await asyncio.sleep(2)
-        if run.deadline_at is not None and datetime.now(UTC) >= run.deadline_at:
-            return "Scheduled evaluation cutoff passed."
         try:
             control = await internal_request(settings, "GET", f"/runs/{run.id}/control")
         except Exception:

@@ -495,8 +495,7 @@ def update_evaluator_settings(
     poll_seconds: int,
     attempt_timeout_seconds: int,
     max_attempts: int,
-    start_before_close_minutes: int,
-    cutoff_before_close_minutes: int,
+    queue_before_close_minutes: int,
 ) -> dict:
     """Update global evaluator scheduling and execution settings."""
     with _session() as session:
@@ -508,8 +507,7 @@ def update_evaluator_settings(
             poll_seconds=poll_seconds,
             attempt_timeout_seconds=attempt_timeout_seconds,
             max_attempts=max_attempts,
-            start_before_close_minutes=start_before_close_minutes,
-            cutoff_before_close_minutes=cutoff_before_close_minutes,
+            queue_before_close_minutes=queue_before_close_minutes,
         )
 
 

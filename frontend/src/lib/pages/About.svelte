@@ -81,9 +81,9 @@
         <p>
           Every contestant is measured against <strong>SPY Buy &amp; Hold</strong> and
           <strong>RSP Buy &amp; Hold</strong>
-          benchmarks run through the exact same valuation engine, so the comparison is apples-to-apples. A strict
-          set of integrity rules (no backdating, positions that lock, honest labels) keeps the track records real
-          — see the next tab.
+          benchmarks run through the exact same valuation engine, so the comparison is apples-to-apples. A defined
+          set of accounting rules (manual-entry timing, positions that lock, honest labels) keeps the track records
+          reproducible — see the next tab.
         </p>
 
         <p class="muted">
@@ -95,14 +95,16 @@
         <h2 class="flush">Integrity rules</h2>
         <ul>
           <li>
-            <strong>No backdating, no lookahead.</strong> An allocation entered at time T takes effect at the first
-            market close strictly after T. Entered Saturday → effective Monday's close. Prices before entry can
-            never be claimed.
+            <strong>Manual entries never backdate; scheduled automation is an explicit exception.</strong> A manual
+            allocation entered at time T takes effect at the first market close strictly after T. A scheduled automated
+            run always targets its scheduled session, even when queueing or execution delays its submission until
+            after that close. This means scheduled runs can use post-close information while receiving the scheduled
+            close.
           </li>
           <li>
             <strong>Positions lock at the effective close.</strong> Until then there is a typo-correction window;
-            afterwards the positions backing the track record are frozen forever. Only metadata (prompt reference,
-            notes) stays editable.
+            afterwards the positions backing the track record are frozen forever. A scheduled allocation submitted
+            after its effective close is locked immediately. Only metadata (prompt reference, notes) stays editable.
           </li>
           <li>
             <strong>Benchmarks run through the identical engine.</strong> SPY (primary) and RSP (equal-weight, secondary)
@@ -193,7 +195,7 @@
           </li>
           <li>
             <code>get_effective_date()</code> — the market close an allocation entered right now would take (the
-            no-backdating rule).
+            manual-entry no-backdating rule).
           </li>
         </ul>
 
@@ -238,7 +240,7 @@
           </li>
           <li>
             <code>update_evaluator_settings(...)</code> — pause or resume scheduling and configure concurrency,
-            attempts, timeouts, and the pre-close window.
+            attempts, timeouts, and the pre-close queue offset.
           </li>
           <li>
             <code>configure_portfolio_evaluator(portfolio_id, enabled, weekdays)</code> — enable a Codex-Agent portfolio

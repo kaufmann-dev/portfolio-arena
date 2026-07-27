@@ -99,6 +99,91 @@ def test_scheduled_run_is_created_only_during_configured_window(sample_portfolio
     assert claimed["runs"][0]["scheduled_for"] == scheduled_for.isoformat()
 
 
+def test_scheduled_run_is_not_backfilled_after_market_close(sample_portfolio):
+    from app.db import session_factory
+
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    scheduled_for = date(2026, 7, 20)
+    after_close = close_at(scheduled_for) + timedelta(minutes=1)
+    with session_factory()() as session:
+        _enable(session, sample_portfolio, [scheduled_for.weekday()])
+        claimed = evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
+            limit=5,
+            now=after_close,
+        )
+        history = evaluator.list_runs(session)
+
+    assert claimed["runs"] == []
+    assert history["items"] == []
+
+
+def test_queued_scheduled_run_retries_and_submits_after_market_close(sample_portfolio):
+    from app.db import session_factory
+
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    scheduled_for = date(2026, 7, 20)
+    before_close = close_at(scheduled_for) - timedelta(minutes=60)
+    after_close = close_at(scheduled_for) + timedelta(minutes=1)
+    with session_factory()() as session:
+        _enable(session, sample_portfolio, [scheduled_for.weekday()])
+        queued = evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
+            limit=0,
+            now=before_close,
+        )
+        assert queued["runs"] == []
+
+        first_claim = evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
+            limit=1,
+            now=after_close,
+        )
+        run_id = first_claim["runs"][0]["id"]
+        failed = evaluator.fail_run(
+            session,
+            run_id=run_id,
+            error="temporary research failure",
+            now=after_close + timedelta(minutes=1),
+        )
+        assert failed["status"] == "queued"
+
+        second_claim = evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
+            limit=1,
+            now=after_close + timedelta(minutes=2),
+        )
+        assert second_claim["runs"][0]["attempt_count"] == 2
+
+        submitted = evaluator.submit_run(
+            session,
+            run_id=run_id,
+            positions=[
+                {"symbol": "AAPL", "weight_pct": 55, "note": "consumer resilience"},
+                {"symbol": "MSFT", "weight_pct": 45, "note": "cloud growth"},
+            ],
+            note="Scheduled allocation submitted after close",
+            report="The scheduled session remains authoritative.",
+            now=after_close + timedelta(minutes=3),
+        )
+
+    assert submitted["run"]["status"] == "succeeded"
+    assert submitted["allocation"]["effective_date"] == scheduled_for.isoformat()
+    assert submitted["allocation"]["locked"] is True
+
+
 def test_pause_keeps_queued_work_and_stops_claiming(sample_portfolio):
     from app.db import session_factory
 
@@ -226,6 +311,23 @@ def test_admin_dashboard_and_internal_worker_auth(
     dashboard = client.get("/api/evaluator", headers=admin_headers)
     assert dashboard.status_code == 200
     assert dashboard.json()["settings"]["max_concurrency"] == 5
+    assert dashboard.json()["settings"]["queue_before_close_minutes"] == 90
+    assert "cutoff_before_close_minutes" not in dashboard.json()["settings"]
+
+    updated = client.put(
+        "/api/evaluator/settings",
+        headers=admin_headers,
+        json={
+            "enabled": True,
+            "max_concurrency": 5,
+            "poll_seconds": 60,
+            "attempt_timeout_seconds": 1500,
+            "max_attempts": 2,
+            "queue_before_close_minutes": 120,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["queue_before_close_minutes"] == 120
 
     denied = client.post(
         "/api/internal/evaluator/claim",

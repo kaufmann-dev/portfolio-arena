@@ -242,8 +242,7 @@ export interface EvaluatorSettings {
   poll_seconds: number;
   attempt_timeout_seconds: number;
   max_attempts: number;
-  start_before_close_minutes: number;
-  cutoff_before_close_minutes: number;
+  queue_before_close_minutes: number;
   updated_at: string;
 }
 
@@ -285,7 +284,6 @@ export interface EvaluationRun {
   trigger_kind: EvaluationTriggerKind;
   retry_of_run_id: number | null;
   scheduled_for: string | null;
-  deadline_at: string | null;
   harness: string;
   execution_model_id: string;
   reasoning_effort: string | null;

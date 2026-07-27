@@ -38,7 +38,6 @@ def _run(reasoning_effort: str | None = "xhigh") -> ClaimedRun:
             "execution_model_id": "gpt-5.6-sol",
             "reasoning_effort": reasoning_effort,
             "timeout_seconds": 300,
-            "deadline_at": None,
             "execution_prompt": "Rendered wrapper prompt.",
         }
     )
@@ -208,7 +207,6 @@ def test_scheduler_refills_completed_slots_while_other_runs_continue(tmp_path, m
             "execution_model_id": "gpt-5.6-sol",
             "reasoning_effort": None,
             "timeout_seconds": 300,
-            "deadline_at": None,
             "execution_prompt": f"Evaluate portfolio {run_id}.",
         }
 

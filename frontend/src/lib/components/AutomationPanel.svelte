@@ -72,8 +72,7 @@
       poll_seconds: settings.poll_seconds,
       attempt_timeout_seconds: settings.attempt_timeout_seconds,
       max_attempts: settings.max_attempts,
-      start_before_close_minutes: settings.start_before_close_minutes,
-      cutoff_before_close_minutes: settings.cutoff_before_close_minutes,
+      queue_before_close_minutes: settings.queue_before_close_minutes,
     };
   }
 
@@ -354,7 +353,11 @@
       <div class="panel-head">
         <div>
           <h2>Global evaluator settings</h2>
-          <p class="muted">Changes apply to newly queued runs; active runs keep their captured settings.</p>
+          <p class="muted">
+            Changes apply to newly queued runs; active runs keep their captured settings. Due runs enter the
+            queue at the configured offset, but polling and concurrency can delay their start. Once queued,
+            they may start or finish after close.
+          </p>
         </div>
       </div>
       <form onsubmit={saveSettings}>
@@ -388,23 +391,13 @@
             <input id="eval-attempts" type="number" min="1" max="5" bind:value={settingsDraft.max_attempts} />
           </div>
           <div class="field">
-            <label for="eval-opens">Start before close (min)</label>
+            <label for="eval-queue">Queue before close (min)</label>
             <input
-              id="eval-opens"
+              id="eval-queue"
               type="number"
               min="15"
               max="240"
-              bind:value={settingsDraft.start_before_close_minutes}
-            />
-          </div>
-          <div class="field">
-            <label for="eval-cutoff">Cutoff before close (min)</label>
-            <input
-              id="eval-cutoff"
-              type="number"
-              min="0"
-              max="60"
-              bind:value={settingsDraft.cutoff_before_close_minutes}
+              bind:value={settingsDraft.queue_before_close_minutes}
             />
           </div>
         </div>

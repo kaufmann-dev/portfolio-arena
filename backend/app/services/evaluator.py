@@ -43,8 +43,7 @@ def settings_out(settings: EvaluatorSettings) -> dict:
         "poll_seconds": settings.poll_seconds,
         "attempt_timeout_seconds": settings.attempt_timeout_seconds,
         "max_attempts": settings.max_attempts,
-        "start_before_close_minutes": settings.start_before_close_minutes,
-        "cutoff_before_close_minutes": settings.cutoff_before_close_minutes,
+        "queue_before_close_minutes": settings.queue_before_close_minutes,
         "updated_at": settings.updated_at.isoformat(),
     }
 
@@ -83,7 +82,6 @@ def run_out(run: EvaluationRun) -> dict:
         "trigger_kind": run.trigger_kind,
         "retry_of_run_id": run.retry_of_run_id,
         "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None,
-        "deadline_at": _iso(run.deadline_at),
         "harness": run.harness,
         "execution_model_id": run.execution_model_id,
         "reasoning_effort": run.reasoning_effort,
@@ -152,15 +150,12 @@ def _validate_settings(values: dict) -> None:
         "poll_seconds": (10, 300),
         "attempt_timeout_seconds": (60, 1500),
         "max_attempts": (1, 5),
-        "start_before_close_minutes": (15, 240),
-        "cutoff_before_close_minutes": (0, 60),
+        "queue_before_close_minutes": (15, 240),
     }
     for key, (minimum, maximum) in ranges.items():
         value = values[key]
         if not minimum <= value <= maximum:
             raise AdminOpError(422, f"{key} must be between {minimum} and {maximum}")
-    if values["start_before_close_minutes"] <= values["cutoff_before_close_minutes"]:
-        raise AdminOpError(422, "Evaluation start must be earlier than the submission cutoff")
 
 
 def update_settings(session: Session, **values) -> dict:
@@ -173,8 +168,7 @@ def update_settings(session: Session, **values) -> dict:
             "poll_seconds",
             "attempt_timeout_seconds",
             "max_attempts",
-            "start_before_close_minutes",
-            "cutoff_before_close_minutes",
+            "queue_before_close_minutes",
         )
     }
     _validate_settings(merged)
@@ -299,14 +293,14 @@ def get_dashboard(session: Session, *, now: datetime | None = None) -> dict:
     }
 
 
-def evaluation_window(
+def scheduled_enqueue_window(
     scheduled_for: date,
     settings: EvaluatorSettings,
 ) -> tuple[datetime, datetime]:
     close = close_at(scheduled_for)
     return (
-        close - timedelta(minutes=settings.start_before_close_minutes),
-        close - timedelta(minutes=settings.cutoff_before_close_minutes),
+        close - timedelta(minutes=settings.queue_before_close_minutes),
+        close,
     )
 
 
@@ -342,7 +336,6 @@ def _new_run(
     *,
     trigger_kind: str,
     scheduled_for: date | None = None,
-    deadline_at: datetime | None = None,
     retry_of_run_id: int | None = None,
 ) -> EvaluationRun:
     portfolio = config.portfolio
@@ -360,7 +353,6 @@ def _new_run(
         agent_id=agent.id,
         model_id=agent.model_id,
         scheduled_for=scheduled_for,
-        deadline_at=deadline_at,
         trigger_kind=trigger_kind,
         retry_of_run_id=retry_of_run_id,
         harness=agent.harness,
@@ -507,8 +499,8 @@ def _enqueue_scheduled(session: Session, settings: EvaluatorSettings, now: datet
     local_date = now.astimezone(NY).date()
     if not is_trading_day(local_date):
         return
-    starts_at, deadline_at = evaluation_window(local_date, settings)
-    if not starts_at <= now < deadline_at:
+    enqueue_at, close = scheduled_enqueue_window(local_date, settings)
+    if not enqueue_at <= now < close:
         return
     configs = session.scalars(
         select(PortfolioEvaluatorConfig)
@@ -542,7 +534,6 @@ def _enqueue_scheduled(session: Session, settings: EvaluatorSettings, now: datet
                 settings,
                 trigger_kind="scheduled",
                 scheduled_for=local_date,
-                deadline_at=deadline_at,
             )
         )
     session.flush()
@@ -563,7 +554,7 @@ def _recover_stale_runs(session: Session, now: datetime) -> None:
             run.status = "cancelled"
             run.finished_at = now
             run.error = "Cancelled after the worker lease expired."
-        elif run.attempt_count < run.max_attempts and (run.deadline_at is None or now < run.deadline_at):
+        elif run.attempt_count < run.max_attempts:
             run.status = "queued"
             run.worker_id = None
             run.lease_expires_at = None
@@ -610,20 +601,6 @@ def claim_runs(
     _cancel_archived_queued_runs(session, current_time)
     _enqueue_scheduled(session, settings, current_time)
 
-    expired = session.scalars(
-        select(EvaluationRun)
-        .where(
-            EvaluationRun.status == "queued",
-            EvaluationRun.deadline_at.is_not(None),
-            EvaluationRun.deadline_at <= current_time,
-        )
-        .with_for_update(skip_locked=True)
-    ).all()
-    for run in expired:
-        run.status = "skipped"
-        run.finished_at = current_time
-        run.error = "Scheduled evaluation cutoff passed before the run started."
-
     claimed: list[EvaluationRun] = []
     if settings.enabled:
         active_count = session.scalar(
@@ -664,7 +641,6 @@ def run_control(session: Session, *, run_id: int) -> dict:
     run = _load_run(session, run_id)
     return {
         "status": run.status,
-        "deadline_at": _iso(run.deadline_at),
         "lease_expires_at": _iso(run.lease_expires_at),
     }
 
@@ -706,13 +682,6 @@ def submit_run(
         raise AdminOpError(409, f"Evaluation run is {run.status}, not running")
     if run.lease_expires_at is None or current_time >= run.lease_expires_at:
         raise AdminOpError(409, "Evaluation run lease expired")
-    if run.deadline_at is not None and current_time >= run.deadline_at:
-        run.status = "failed"
-        run.error = "Scheduled evaluation cutoff passed before submission."
-        run.finished_at = current_time
-        run.lease_expires_at = None
-        session.commit()
-        raise AdminOpError(409, "Scheduled evaluation cutoff passed")
     if run.portfolio.status != "active":
         run.status = "skipped"
         run.error = "Portfolio was archived before evaluation submission."
@@ -776,7 +745,7 @@ def fail_run(
     if cancelled or run.status == "cancel_requested":
         run.status = "cancelled"
         run.finished_at = current_time
-    elif run.attempt_count < run.max_attempts and (run.deadline_at is None or current_time < run.deadline_at):
+    elif run.attempt_count < run.max_attempts:
         run.status = "queued"
     else:
         run.status = "failed"
