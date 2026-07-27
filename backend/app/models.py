@@ -264,7 +264,7 @@ class EvaluationRun(Base):
         ),
         CheckConstraint("attempt_count >= 0", name="evaluation_runs_attempt_count_check"),
         CheckConstraint("max_attempts BETWEEN 1 AND 5", name="evaluation_runs_max_attempts_check"),
-        CheckConstraint("timeout_seconds BETWEEN 60 AND 1500", name="evaluation_runs_timeout_check"),
+        CheckConstraint("timeout_seconds BETWEEN 60 AND 7200", name="evaluation_runs_timeout_check"),
         Index("idx_evaluation_runs_scheduled_id", "scheduled_for", "id"),
         Index(
             "evaluation_runs_portfolio_session_key",
@@ -335,7 +335,7 @@ class EvaluatorSettings(Base):
             name="evaluator_settings_poll_check",
         ),
         CheckConstraint(
-            "attempt_timeout_seconds BETWEEN 60 AND 1500",
+            "attempt_timeout_seconds BETWEEN 60 AND 7200",
             name="evaluator_settings_timeout_check",
         ),
         CheckConstraint(

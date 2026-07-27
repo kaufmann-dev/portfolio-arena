@@ -148,7 +148,7 @@ def _validate_settings(values: dict) -> None:
     ranges = {
         "max_concurrency": (1, 20),
         "poll_seconds": (10, 300),
-        "attempt_timeout_seconds": (60, 1500),
+        "attempt_timeout_seconds": (60, 7200),
         "max_attempts": (1, 5),
         "queue_before_close_minutes": (15, 240),
     }

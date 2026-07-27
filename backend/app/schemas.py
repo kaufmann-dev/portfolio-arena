@@ -130,7 +130,7 @@ class EvaluatorSettingsUpdate(BaseModel):
     enabled: bool
     max_concurrency: int = Field(ge=1, le=20)
     poll_seconds: int = Field(ge=10, le=300)
-    attempt_timeout_seconds: int = Field(ge=60, le=1500)
+    attempt_timeout_seconds: int = Field(ge=60, le=7200)
     max_attempts: int = Field(ge=1, le=5)
     queue_before_close_minutes: int = Field(ge=15, le=240)
 
