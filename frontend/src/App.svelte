@@ -391,7 +391,7 @@
   }
 
   :global(.account-trigger) {
-    min-height: 40px;
+    height: 44px;
     max-width: 240px;
     padding: 0 10px;
     display: inline-flex;
