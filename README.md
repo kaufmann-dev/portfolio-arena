@@ -34,12 +34,14 @@ trading and not advice.
 
 ## Experiment-integrity rules (enforced in code)
 
-- **No backdating / no lookahead.** An allocation entered at time T takes effect at the first
-  market close strictly after T (early closes honored). Entered Saturday → effective Monday's
+- **Manual entries do not backdate; scheduled automation is an explicit exception.** A manual
+  allocation entered at time T takes effect at the first market close strictly after T (early
+  closes honored). Scheduled evaluator runs always target their scheduled session, even when they
+  submit after that close, so they may use post-close information while receiving the scheduled
   close.
 - **Positions lock at the effective close.** Until then there is a typo-correction window
-  (edit/delete allowed); afterwards positions and effective date are frozen — only the note
-  stays editable.
+  (edit/delete allowed); afterwards positions and effective date are frozen — only the note stays
+  editable. A scheduled allocation submitted after its effective close is locked immediately.
 - **Portfolio resets are explicit and destructive.** Resetting a contestant deletes its complete
   allocation and performance history, cancels in-flight evaluator work, and preserves its identity,
   configuration, schedule, and evaluator audit records so the next allocation starts from scratch.
@@ -115,13 +117,16 @@ evaluation shifts to the next trading day and is deduplicated if multiple select
 the same session. Scheduled close times honor early closes and daylight-saving changes.
 
 The website can queue an enabled portfolio at any time. Each run captures its Agent and model IDs,
-harness, harness-specific execution model ID, optional reasoning effort, timeout, attempt limit, and
-submission deadline when it is queued. Harness defaults are used; Portfolio Arena does not configure
-a service tier. Pausing stops new claims while active work finishes. Queued work can be cancelled
-immediately; running work receives a cancellation request and its Codex process is terminated.
-Failed runs can be retried manually. All paths use the same server-side proposal and symbol
-validation and atomic allocation write. At claim time, the worker receives a complete execution
-prompt rendered from the portfolio's canonical strategy and the editable wrapper for its mode.
+harness, harness-specific execution model ID, optional reasoning effort, timeout, and attempt limit
+when it is queued. Harness defaults are used; Portfolio Arena does not configure a service tier.
+Scheduled runs enter the queue at the configured offset before close; polling and concurrency may
+delay their actual start. Runs queued before close remain eligible afterward, and successful
+scheduled submissions use the scheduled session even if they finish after its close. Pausing stops
+new claims while active work finishes. Queued work can be cancelled immediately; running work
+receives a cancellation request and its Codex process is terminated. Failed runs can be retried
+manually. All paths use the same server-side proposal and symbol validation and atomic allocation
+write. At claim time, the worker receives a complete execution prompt rendered from the portfolio's
+canonical strategy and the editable wrapper for its mode.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
@@ -193,10 +198,10 @@ Web app:
 | Variable                   | Purpose                                                               |
 | -------------------------- | --------------------------------------------------------------------- |
 | `DATABASE_URL`             | PostgreSQL connection URL                                             |
-| `ARENA_PUBLIC_URL`         | Canonical externally reachable origin, with no path    (**required**) |
-| `ARENA_OIDC_ISSUER_URL`    | OIDC issuer URL used for discovery                    (**required**)  |
-| `ARENA_OIDC_CLIENT_ID`     | Confidential OIDC client ID                           (**required**)  |
-| `ARENA_OIDC_CLIENT_SECRET` | Confidential OIDC client secret                       (**required**)  |
+| `ARENA_PUBLIC_URL`         | Canonical externally reachable origin, with no path (**required**)    |
+| `ARENA_OIDC_ISSUER_URL`    | OIDC issuer URL used for discovery (**required**)                     |
+| `ARENA_OIDC_CLIENT_ID`     | Confidential OIDC client ID (**required**)                            |
+| `ARENA_OIDC_CLIENT_SECRET` | Confidential OIDC client secret (**required**)                        |
 | `ARENA_OIDC_STATE_SECRET`  | Random secret of at least 32 characters for OIDC state (**required**) |
 | `MASSIVE_API_KEY`          | Massive market-data credential used only by the evaluator worker      |
 

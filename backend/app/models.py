@@ -297,7 +297,6 @@ class EvaluationRun(Base):
     reasoning_effort: Mapped[str | None] = mapped_column(Text, nullable=True)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1500")
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
-    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     harness_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     worker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
@@ -344,16 +343,8 @@ class EvaluatorSettings(Base):
             name="evaluator_settings_attempts_check",
         ),
         CheckConstraint(
-            "start_before_close_minutes BETWEEN 15 AND 240",
-            name="evaluator_settings_start_check",
-        ),
-        CheckConstraint(
-            "cutoff_before_close_minutes BETWEEN 0 AND 60",
-            name="evaluator_settings_cutoff_check",
-        ),
-        CheckConstraint(
-            "start_before_close_minutes > cutoff_before_close_minutes",
-            name="evaluator_settings_window_check",
+            "queue_before_close_minutes BETWEEN 15 AND 240",
+            name="evaluator_settings_queue_check",
         ),
     )
 
@@ -363,8 +354,7 @@ class EvaluatorSettings(Base):
     poll_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")
     attempt_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1500")
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
-    start_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")
-    cutoff_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="10")
+    queue_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

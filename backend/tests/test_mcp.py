@@ -102,6 +102,8 @@ class TestMcpTools:
         data = _call_tool(client, mcp_headers, "get_evaluator_dashboard")
         assert set(data) == {"settings", "portfolios", "runtime"}
         assert data["settings"]["enabled"] is True
+        assert data["settings"]["queue_before_close_minutes"] == 90
+        assert "cutoff_before_close_minutes" not in data["settings"]
         assert data["runtime"]["online"] is False
 
     def test_arena_overview(self, client, mcp_headers, sample_portfolio):
