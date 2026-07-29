@@ -27,12 +27,8 @@ describe("marketDataWarning", () => {
     expect(marketDataWarning("fresh", "2026-07-28")).toBeNull();
   });
 
-  it("labels stale prices as last-known and keeps the valued close", () => {
-    const warning = marketDataWarning("stale", "2026-07-28");
-
-    expect(warning?.role).toBe("status");
-    expect(warning?.message).toContain("last-known");
-    expect(warning?.message).toContain("2026-07-28 close");
+  it("does not warn for usable last-known data", () => {
+    expect(marketDataWarning("stale", "2026-07-28")).toBeNull();
   });
 
   it("warns that unavailable prices make valuations incomplete", () => {

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import TOO_EARLY_AGE_DAYS
 from ..models import Agent, Allocation, ModelDefinition, Portfolio
 from . import massive, price_cache
+from .trading_calendar import NY
 from .valuation import (
     AllocationInput,
     PositionInput,
@@ -45,6 +46,7 @@ class PortfolioValuation:
 @dataclass
 class ArenaValuations:
     as_of: str | None
+    current_date: date
     market_data_status: MarketDataStatus
     spy_series: Series  # raw total-return closes (for identical-window overlays)
     calendar: list[str]
@@ -224,9 +226,18 @@ def compute_valuations(
 ) -> ArenaValuations:
     """Value the given portfolios (callers pass benchmark-seeded sessions)."""
     now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    current_date = now.astimezone(NY).date()
 
     def no_data(status: MarketDataStatus = "fresh") -> ArenaValuations:
-        empty = ArenaValuations(as_of=None, market_data_status=status, spy_series=[], calendar=[])
+        empty = ArenaValuations(
+            as_of=None,
+            current_date=current_date,
+            market_data_status=status,
+            spy_series=[],
+            calendar=[],
+        )
         for portfolio in portfolios:
             empty.by_portfolio_id[portfolio.id] = PortfolioValuation(
                 portfolio=portfolio, result=None, metrics={"has_data": False}
@@ -249,6 +260,7 @@ def compute_valuations(
 
     valuations = ArenaValuations(
         as_of=as_of,
+        current_date=current_date,
         market_data_status=price_load.status,
         spy_series=spy_series,
         calendar=calendar,
@@ -282,11 +294,11 @@ def compute_valuations(
     return valuations
 
 
-def age_days(valuation: PortfolioValuation, as_of: str | None) -> int | None:
-    if not valuation.result or not valuation.result.series or as_of is None:
+def age_days(valuation: PortfolioValuation, current_date: date) -> int | None:
+    if not valuation.result or not valuation.result.series:
         return None
     inception = date.fromisoformat(valuation.result.series[0]["date"])
-    return (date.fromisoformat(as_of) - inception).days
+    return (current_date - inception).days
 
 
 def too_early(age: int | None) -> bool:
