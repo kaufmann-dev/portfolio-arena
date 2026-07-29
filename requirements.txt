@@ -10,4 +10,4 @@ itsdangerous>=2.2,<3
 httpx>=0.27,<1
 slowapi>=0.1.9,<1
 mcp>=1.28,<2
-mcp_massive @ https://github.com/massive-com/mcp_massive/archive/refs/tags/v0.10.0.tar.gz
+mcp_massive @ https://codeload.github.com/massive-com/mcp_massive/tar.gz/c58ec7e4df7482c53fc4adeb2de0e979f77f3a23
