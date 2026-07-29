@@ -17,10 +17,10 @@ SESSION_ABSOLUTE_SECONDS = 7 * 24 * 60 * 60
 
 PRICE_FETCH_MAX_WORKERS = 16
 PRICE_FETCH_TIMEOUT_SECONDS = 8
-PRICE_FETCH_TOTAL_TIMEOUT_SECONDS = 10
+PRICE_FETCH_TOTAL_TIMEOUT_SECONDS = 20
 PRICE_FAILURE_COOLDOWN_SECONDS = 300
-YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
-YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+MASSIVE_BASE_URL = "https://api.massive.com"
+MASSIVE_DATA_DELAY_MINUTES = 15
 
 # Benchmark portfolios are valued by the identical engine, at zero cost.
 BENCHMARKS = [
@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     oidc_client_id: str = Field(min_length=1, validation_alias="ARENA_OIDC_CLIENT_ID")
     oidc_client_secret: SecretStr = Field(min_length=1, validation_alias="ARENA_OIDC_CLIENT_SECRET")
     oidc_state_secret: SecretStr = Field(min_length=32, validation_alias="ARENA_OIDC_STATE_SECRET")
+    massive_api_key: SecretStr = Field(min_length=1, validation_alias="MASSIVE_API_KEY")
     internal_mcp_api_key: SecretStr | None = Field(
         default=None,
         validation_alias="ARENA_INTERNAL_MCP_API_KEY",

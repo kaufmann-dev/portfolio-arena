@@ -73,8 +73,8 @@
             <button class="linklike" onclick={() => (tab = "mcp")}>MCP server</button>.
           </li>
           <li>
-            The app values it forward from Yahoo Finance adjusted closes and plots its NAV against SPY, with
-            realistic trading costs applied.
+            The app values it forward from Massive split-adjusted daily closes and dividend adjustments, then
+            plots its NAV against SPY with realistic trading costs applied.
           </li>
         </ol>
 
@@ -127,8 +127,8 @@
             Prompt-specific minimum and maximum position weights are enforced by the server.
           </li>
           <li>
-            Total-return basis: Yahoo <em>adjusted closes</em> (dividends included) for positions and for SPY. Base
-            currency is USD.
+            Total-return basis: Massive split-adjusted daily closes plus cumulative dividend adjustments for
+            positions and for SPY. Base currency is USD.
           </li>
           <li>
             Raw indices, FX pairs, and futures are rejected at entry — investable ETFs (SPY, SH, SSO, GLD,
@@ -187,11 +187,11 @@
           </li>
           <li><code>get_prompt(slug_or_id)</code> — one prompt's full text.</li>
           <li>
-            <code>search_symbols(query)</code> — search the investable universe (equities, ETFs, funds) for tickers.
+            <code>search_symbols(query)</code> — search accepted equities, ADRs, and ETFs for tickers.
           </li>
           <li>
-            <code>validate_symbol(symbol)</code> — resolve one ticker and confirm it's allowed; indices, FX pairs,
-            and futures are rejected with a hint.
+            <code>validate_symbol(symbol)</code> — resolve one ticker and confirm it's allowed; non-USD assets,
+            mutual funds, indices, FX pairs, and futures are rejected with a hint.
           </li>
           <li>
             <code>get_effective_date()</code> — the market close an allocation entered right now would take (the

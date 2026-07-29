@@ -2,9 +2,10 @@
   import { Accordion } from "bits-ui";
 
   import { apiJson } from "../api/client";
-  import type { AllocationOut, PortfolioDetail } from "../api/types";
+  import type { AllocationOut, PortfolioDetail, PortfolioDetailResponse } from "../api/types";
   import { ChevronDown, ChevronRight } from "@lucide/svelte";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
+  import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import { ageLabel, fmtDate, fmtDateTime, num, pct, pctPoints, signClass } from "../format";
   import { link } from "../stores/router.svelte";
 
@@ -54,7 +55,7 @@
 </script>
 
 {#key slug}
-  {@const request = apiJson<{ as_of: string | null; portfolio: PortfolioDetail }>(`/api/portfolios/${slug}`)}
+  {@const request = apiJson<PortfolioDetailResponse>(`/api/portfolios/${slug}`)}
   {#await request}
     <div class="loading-block"><span class="spinner" aria-hidden="true"></span> Valuing portfolio…</div>
   {:then data}
@@ -120,6 +121,8 @@
         {/if}
       </div>
     </div>
+
+    <MarketDataWarning status={data.market_data_status} asOf={data.as_of} />
 
     {#if portfolio.error}
       <div class="error-box" role="alert">Valuation failed: {portfolio.error}</div>

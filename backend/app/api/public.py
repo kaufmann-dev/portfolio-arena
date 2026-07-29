@@ -35,7 +35,11 @@ def leaderboard(request: Request, session: Session = Depends(get_session)):
         for portfolio in portfolios
         if portfolio.id in valuations.by_portfolio_id
     ]
-    return {"as_of": valuations.as_of, "portfolios": rows}
+    return {
+        "as_of": valuations.as_of,
+        "market_data_status": valuations.market_data_status,
+        "portfolios": rows,
+    }
 
 
 @router.get("/portfolios/{slug}")
@@ -50,6 +54,7 @@ def portfolio_detail(slug: str, request: Request, session: Session = Depends(get
         raise HTTPException(404, "Portfolio not found")
     return {
         "as_of": valuations.as_of,
+        "market_data_status": valuations.market_data_status,
         "portfolio": serialize_detail(
             valuation,
             valuations,
@@ -79,7 +84,12 @@ def compare(slugs: str, request: Request, session: Session = Depends(get_session
     ]
     with_data = [(p, r) for p, r in with_data if r.series]
     if not with_data:
-        return {"as_of": valuations.as_of, "start": None, "series": []}
+        return {
+            "as_of": valuations.as_of,
+            "market_data_status": valuations.market_data_status,
+            "start": None,
+            "series": [],
+        }
 
     common_start = max(result.series[0]["date"] for _, result in with_data)
     out = []
@@ -97,7 +107,13 @@ def compare(slugs: str, request: Request, session: Session = Depends(get_session
             }
         )
     spy = rebase_series(valuations.spy_series, common_start, valuations.as_of or common_start)
-    return {"as_of": valuations.as_of, "start": common_start, "series": out, "spy_series": spy}
+    return {
+        "as_of": valuations.as_of,
+        "market_data_status": valuations.market_data_status,
+        "start": common_start,
+        "series": out,
+        "spy_series": spy,
+    }
 
 
 @router.get("/prompts")
@@ -136,6 +152,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
     users = [p for p in portfolios if p.prompt_id == prompt.id]
     return {
         "as_of": valuations.as_of,
+        "market_data_status": valuations.market_data_status,
         "prompt": {
             "id": prompt.id,
             "slug": prompt.slug,
@@ -195,6 +212,7 @@ def agent_detail(slug: str, request: Request, session: Session = Depends(get_ses
     own = [p for p in portfolios if p.agent_id == agent.id]
     return {
         "as_of": valuations.as_of,
+        "market_data_status": valuations.market_data_status,
         "agent": {**agent_out(agent), "created_at": agent.created_at.isoformat()},
         "portfolios": [
             serialize_summary(valuations.by_portfolio_id[p.id], valuations)

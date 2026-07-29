@@ -15,7 +15,9 @@
     LeaderboardResponse,
     ModelDefinition,
     ModelHarnessCapability,
+    MarketDataStatus,
     PortfolioDetail,
+    PortfolioDetailResponse,
     PortfolioResetResult,
     PortfolioSummary,
     PromptMode,
@@ -23,6 +25,7 @@
   } from "../api/types";
   import AllocationForm, { type AllocationPayload } from "../components/AllocationForm.svelte";
   import AutomationPanel from "../components/AutomationPanel.svelte";
+  import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import ConfirmDialog from "../components/ui/ConfirmDialog.svelte";
   import { fmtDate, num, pctPoints, signClass } from "../format";
   import { auth } from "../stores/auth.svelte";
@@ -79,6 +82,8 @@
   let agents = $state<AgentOut[]>([]);
   let models = $state<ModelDefinition[]>([]);
   let harnesses = $state<HarnessDefinition[]>([]);
+  let marketDataStatus = $state<MarketDataStatus>("fresh");
+  let marketDataAsOf = $state<string | null>(null);
   let notice = $state("");
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -97,6 +102,8 @@
       apiJson<HarnessesResponse>("/api/harnesses"),
     ]);
     portfolios = leaderboard.portfolios;
+    marketDataStatus = leaderboard.market_data_status;
+    marketDataAsOf = leaderboard.as_of;
     prompts = promptsPayload.prompts;
     agents = agentsPayload.agents;
     models = modelsPayload.models;
@@ -120,6 +127,7 @@
   let selectedSlug = $state("");
   let detail = $state<PortfolioDetail | null>(null);
   let detailAsOf = $state<string | null>(null);
+  let detailMarketDataStatus = $state<MarketDataStatus>("fresh");
   let detailLoading = $state(false);
   let editingAllocation = $state<AllocationOut | null>(null);
   let formKey = $state(0);
@@ -144,11 +152,10 @@
         return;
       }
       // Admin endpoint: carries per-position notes + holding entry/current prices.
-      const payload = await apiJson<{ as_of: string | null; portfolio: PortfolioDetail }>(
-        `/api/portfolios/${summary.id}/detail`,
-      );
+      const payload = await apiJson<PortfolioDetailResponse>(`/api/portfolios/${summary.id}/detail`);
       detail = payload.portfolio;
       detailAsOf = payload.as_of;
+      detailMarketDataStatus = payload.market_data_status;
       formKey += 1;
     } finally {
       detailLoading = false;
@@ -156,6 +163,8 @@
   }
 
   const latestAllocation = $derived(detail?.allocations[0] ?? null);
+  const displayedMarketDataStatus = $derived(detail ? detailMarketDataStatus : marketDataStatus);
+  const displayedMarketDataAsOf = $derived(detail ? detailAsOf : marketDataAsOf);
 
   function buildHandoff(): string {
     if (!detail) return "";
@@ -789,6 +798,8 @@
       <p class="muted">Configure portfolios, agents, automation, and protected access.</p>
     </div>
   </div>
+
+  <MarketDataWarning status={displayedMarketDataStatus} asOf={displayedMarketDataAsOf} />
 
   {#if notice}
     <div class="notice" role="status">{notice}</div>
@@ -1687,7 +1698,8 @@
 
           <h2 class="spaced">Price cache</h2>
           <p class="muted cache-note">
-            Series are cached for an hour. Clearing forces a fresh Yahoo fetch on the next request.
+            Massive total-return series are cached for an hour. Clearing forces a fresh fetch on the next
+            valuation request.
           </p>
           <button class="btn" onclick={clearCache}>Clear price cache</button>
         </section>

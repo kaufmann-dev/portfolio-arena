@@ -18,6 +18,7 @@ def find(rows, slug):
 class TestLeaderboard:
     def test_empty_arena(self, client):
         payload = client.get("/api/leaderboard").json()
+        assert payload["market_data_status"] == "fresh"
         # Benchmarks exist but have no allocations until a real portfolio does.
         slugs = {row["slug"] for row in payload["portfolios"]}
         assert {"spy-buy-and-hold", "rsp-buy-and-hold"} <= slugs
@@ -160,6 +161,144 @@ class TestLeaderboard:
         payload = client.get("/api/leaderboard").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row["metrics"]["has_data"] is False
+
+    def test_expired_cache_fallback_reports_stale_on_valuation_routes(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+        sample_portfolio,
+        sample_prompt,
+        monkeypatch,
+    ):
+        from sqlalchemy import update
+
+        from app.db import session_factory
+        from app.models import PriceCache
+        from app.services import massive
+
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        assert client.get("/api/leaderboard").json()["market_data_status"] == "fresh"
+        with session_factory()() as session:
+            session.execute(update(PriceCache).values(fetched_at=datetime.now(UTC) - timedelta(hours=2)))
+            session.commit()
+        monkeypatch.setattr(
+            massive,
+            "download_prices",
+            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
+        )
+
+        requests = [
+            ("/api/leaderboard", {}),
+            (f"/api/portfolios/{sample_portfolio['slug']}", {}),
+            (f"/api/compare?slugs={sample_portfolio['slug']}", {}),
+            (f"/api/prompts/{sample_prompt['slug']}", {}),
+            (f"/api/agents/{sample_agent['slug']}", {}),
+            (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
+        ]
+        for url, headers in requests:
+            payload = client.get(url, headers=headers).json()
+            assert payload["market_data_status"] == "stale", url
+            assert payload["as_of"] is not None, url
+
+    def test_missing_prices_report_unavailable_on_valuation_routes(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+        sample_portfolio,
+        sample_prompt,
+        monkeypatch,
+    ):
+        from app.services import massive
+
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        monkeypatch.setattr(
+            massive,
+            "download_prices",
+            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
+        )
+
+        requests = [
+            ("/api/leaderboard", {}),
+            (f"/api/portfolios/{sample_portfolio['slug']}", {}),
+            (f"/api/compare?slugs={sample_portfolio['slug']}", {}),
+            (f"/api/prompts/{sample_prompt['slug']}", {}),
+            (f"/api/agents/{sample_agent['slug']}", {}),
+            (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
+        ]
+        for url, headers in requests:
+            payload = client.get(url, headers=headers).json()
+            assert payload["market_data_status"] == "unavailable", url
+            assert payload["as_of"] is None, url
+
+    def test_carried_forward_price_promotes_fresh_load_to_stale(
+        self,
+        client,
+        sample_portfolio,
+        monkeypatch,
+    ):
+        from sqlalchemy import select
+
+        from app.db import session_factory
+        from app.models import PriceCache
+        from app.services import arena
+
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        assert client.get("/api/leaderboard").json()["market_data_status"] == "fresh"
+        with session_factory()() as session:
+            cached = {
+                row.symbol: row.series
+                for row in session.scalars(select(PriceCache).order_by(PriceCache.symbol)).all()
+            }
+        aapl = cached["AAPL"]
+        missing_index = len(aapl) // 2
+        cached["AAPL"] = aapl[:missing_index] + aapl[missing_index + 1 :]
+        monkeypatch.setattr(
+            arena,
+            "load_price_series",
+            lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
+        )
+
+        payload = client.get("/api/leaderboard").json()
+        row = find(payload["portfolios"], sample_portfolio["slug"])
+
+        assert payload["market_data_status"] == "stale"
+        assert row["stale_data"] is True
+
+    def test_missing_inception_price_promotes_fresh_load_to_unavailable(
+        self,
+        client,
+        sample_portfolio,
+        monkeypatch,
+    ):
+        from sqlalchemy import select
+
+        from app.db import session_factory
+        from app.models import PriceCache
+        from app.services import arena
+
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        assert client.get("/api/leaderboard").json()["market_data_status"] == "fresh"
+        with session_factory()() as session:
+            cached = {
+                row.symbol: row.series
+                for row in session.scalars(select(PriceCache).order_by(PriceCache.symbol)).all()
+            }
+        cached["AAPL"] = [cached["AAPL"][-1]]
+        monkeypatch.setattr(
+            arena,
+            "load_price_series",
+            lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
+        )
+
+        payload = client.get("/api/leaderboard").json()
+        row = find(payload["portfolios"], sample_portfolio["slug"])
+
+        assert payload["market_data_status"] == "unavailable"
+        assert payload["as_of"] is not None
+        assert row["metrics"]["has_data"] is False
+        assert row["error"]
 
 
 class TestPortfolioDetail:

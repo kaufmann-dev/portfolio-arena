@@ -1,6 +1,7 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { PortfolioSummary, PromptOut } from "../api/types";
+  import type { MarketDataStatus, PortfolioSummary, PromptOut } from "../api/types";
+  import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import PortfolioTable from "../components/PortfolioTable.svelte";
   import { link } from "../stores/router.svelte";
 
@@ -12,6 +13,7 @@
 
   interface Payload {
     as_of: string | null;
+    market_data_status: MarketDataStatus;
     prompt: PromptOut & { created_at: string; updated_at: string };
     portfolios: PortfolioSummary[];
   }
@@ -40,6 +42,8 @@
           updated <span class="num">{data.prompt.updated_at.slice(0, 10)}</span>
         </p>
       </header>
+
+      <MarketDataWarning status={data.market_data_status} asOf={data.as_of} />
 
       <section class="detail-section prompt-card">
         <h2>Strategy</h2>

@@ -4,9 +4,11 @@
   import { apiJson } from "../api/client";
   import type { CompareResponse, LeaderboardResponse, PortfolioSummary, PromptMode } from "../api/types";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
+  import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import PortfolioTable from "../components/PortfolioTable.svelte";
   import SelectField from "../components/ui/SelectField.svelte";
   import ToggleSwitch from "../components/ui/ToggleSwitch.svelte";
+  import { combineMarketData } from "../marketData";
 
   let data = $state<LeaderboardResponse | null>(null);
   let error = $state("");
@@ -124,6 +126,7 @@
       dashed: entry.is_benchmark,
     }));
   });
+  const displayedMarketData = $derived(combineMarketData(data, compareData));
 </script>
 
 <svelte:head>
@@ -141,9 +144,15 @@
     </div>
     <div class="valuation-stamp">
       <span>Valuation</span>
-      <strong class="num">{data?.as_of ? `${data.as_of} close` : "Pending"}</strong>
+      <strong class="num">
+        {displayedMarketData.asOf ? `${displayedMarketData.asOf} close` : "Pending"}
+      </strong>
     </div>
   </header>
+
+  {#if data}
+    <MarketDataWarning status={displayedMarketData.status} asOf={displayedMarketData.asOf} />
+  {/if}
 
   {#if error}
     <div class="error-box load-error" role="alert">

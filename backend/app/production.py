@@ -82,7 +82,7 @@ async def run() -> int:
     base_environment.setdefault("CODEX_HOME", "/var/lib/codex")
 
     web_environment = base_environment.copy()
-    for name in ("MASSIVE_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"):
+    for name in ("OPENAI_API_KEY", "CODEX_API_KEY"):
         web_environment.pop(name, None)
     evaluator_environment = base_environment.copy()
     evaluator_environment.pop("OPENAI_API_KEY", None)

@@ -24,6 +24,7 @@ export interface PromptRef {
 }
 
 export type PromptMode = "managed" | "rebuilt";
+export type MarketDataStatus = "fresh" | "stale" | "unavailable";
 
 export interface AppSettings {
   default_cost_bps: number;
@@ -121,7 +122,14 @@ export interface PortfolioResetResult {
 
 export interface LeaderboardResponse {
   as_of: string | null;
+  market_data_status: MarketDataStatus;
   portfolios: PortfolioSummary[];
+}
+
+export interface PortfolioDetailResponse {
+  as_of: string | null;
+  market_data_status: MarketDataStatus;
+  portfolio: PortfolioDetail;
 }
 
 export interface PromptOut {
@@ -201,6 +209,7 @@ export interface CompareEntry {
 
 export interface CompareResponse {
   as_of: string | null;
+  market_data_status: MarketDataStatus;
   start: string | null;
   series: CompareEntry[];
   spy_series?: SeriesPoint[];
