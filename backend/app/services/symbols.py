@@ -2,20 +2,30 @@
 
 from dataclasses import dataclass
 
-from . import yahoo
+from . import massive
 
-# Yahoo instrumentType values acceptable as long-only positions.
-ALLOWED_INSTRUMENT_TYPES = {"EQUITY", "ETF"}
+# Massive reference ticker type codes accepted as long-only positions.
+SECURITY_TYPES = {
+    "CS": "equity",
+    "ADRC": "equity",
+    "ETF": "etf",
+}
+SECURITY_MARKETS = {"stocks", "otc"}
+SEARCH_RESULT_LIMIT = 8
 
 REJECTION_HINTS = {
     "index": "Raw index symbols are not investable. Use an ETF instead (e.g. SPY, QQQ, IWM).",
     "fx": "FX pairs are not supported. Use a USD-denominated equity or ETF.",
     "futures": (
-        "Futures are not supported — Yahoo continuous contracts have roll artifacts. "
+        "Futures are not supported — continuous contracts have roll artifacts. "
         "Use ETF equivalents instead (e.g. SSO for leveraged index, GLD for gold, TLT for duration)."
     ),
     "type": "Only equities and ETFs are supported.",
     "currency": "Only USD-denominated equities and ETFs are supported.",
+    "total_return": (
+        "Massive does not provide complete dividend adjustment data for this ticker, "
+        "so it cannot be valued on a total-return basis."
+    ),
 }
 
 
@@ -53,43 +63,48 @@ def check_syntax(symbol: str) -> None:
 
 
 def resolve_symbol(raw: str) -> ResolvedSymbol:
-    """Validate + resolve one symbol against Yahoo. Raises SymbolValidationError."""
+    """Validate + resolve one symbol against Massive. Raises SymbolValidationError."""
     symbol = normalize_symbol(raw)
     check_syntax(symbol)
 
-    meta = yahoo.fetch_chart_meta(symbol)
+    meta = massive.fetch_ticker_details(symbol)
     if meta is None:
-        raise SymbolValidationError(f"Symbol {symbol} was not found on Yahoo Finance.")
+        raise SymbolValidationError(f"Symbol {symbol} was not found on Massive.")
 
-    instrument_type = (meta.get("instrumentType") or "").upper()
-    if instrument_type == "INDEX":
-        raise SymbolValidationError(REJECTION_HINTS["index"])
-    if instrument_type == "CURRENCY":
-        raise SymbolValidationError(REJECTION_HINTS["fx"])
-    if instrument_type == "FUTURE":
-        raise SymbolValidationError(REJECTION_HINTS["futures"])
-    if instrument_type not in ALLOWED_INSTRUMENT_TYPES:
+    if meta.get("active") is not True:
+        raise SymbolValidationError(f"Symbol {symbol} is inactive.")
+    if str(meta.get("market") or "").lower() not in SECURITY_MARKETS:
+        raise SymbolValidationError(REJECTION_HINTS["type"])
+    instrument_type = str(meta.get("type") or "").upper()
+    security_type = SECURITY_TYPES.get(instrument_type)
+    if security_type is None:
         raise SymbolValidationError(REJECTION_HINTS["type"])
     currency = str(meta.get("currency") or "").upper()
     if currency != "USD":
         raise SymbolValidationError(REJECTION_HINTS["currency"])
+    if not massive.has_complete_dividend_adjustments(symbol):
+        raise SymbolValidationError(f"Symbol {symbol} is unsupported. {REJECTION_HINTS['total_return']}")
 
     return ResolvedSymbol(
         symbol=symbol,
-        security_type=instrument_type.lower(),
+        security_type=security_type,
         name=meta.get("name") or symbol,
         currency=currency,
-        exchange=meta.get("exchangeName"),
+        exchange=meta.get("exchange"),
     )
 
 
-SEARCHABLE_TYPES = ALLOWED_INSTRUMENT_TYPES
-
-
 def search_symbols_allowed(query: str) -> list[dict]:
-    """Yahoo symbol search filtered to instrument types the arena accepts."""
-    results = yahoo.search_symbols(query)
-    return [item for item in results if str(item.get("type") or "").upper() in SEARCHABLE_TYPES]
+    """Massive ticker search filtered to the arena's investable universe."""
+    results = massive.search_tickers(query)
+    return [
+        item
+        for item in results
+        if SECURITY_TYPES.get(str(item.get("type") or "").upper())
+        and item.get("active") is True
+        and str(item.get("market") or "").lower() in SECURITY_MARKETS
+        and str(item.get("currency") or "").upper() == "USD"
+    ][:SEARCH_RESULT_LIMIT]
 
 
 def validate_positions(positions: list[dict]) -> None:

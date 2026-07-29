@@ -415,7 +415,7 @@ class ApiKey(Base):
 
 
 class PriceCache(Base):
-    """Daily adjusted-close series per USD-denominated equity or ETF."""
+    """Daily total-return close series per USD-denominated equity or ETF."""
 
     __tablename__ = "price_cache"
     __table_args__ = (Index("idx_price_cache_fetched_at", "fetched_at"),)
@@ -423,6 +423,7 @@ class PriceCache(Base):
     symbol: Mapped[str] = mapped_column(Text, primary_key=True)
     series: Mapped[list] = mapped_column(JSONB, nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

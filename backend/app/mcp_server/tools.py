@@ -113,7 +113,11 @@ def get_portfolio(slug_or_id: str) -> dict:
             "entered_at": now.isoformat(),
             "effective_date": effective_date_for(now).isoformat(),
         }
-        return {"as_of": detail["as_of"], "portfolio": payload}
+        return {
+            "as_of": detail["as_of"],
+            "market_data_status": detail["market_data_status"],
+            "portfolio": payload,
+        }
 
 
 @mcp.tool()
@@ -134,7 +138,11 @@ def get_arena_overview() -> dict:
             summary = serialize_summary(valuation, valuations)
             summary.pop("sparkline", None)
             rows.append(summary)
-        return {"as_of": valuations.as_of, "portfolios": rows}
+        return {
+            "as_of": valuations.as_of,
+            "market_data_status": valuations.market_data_status,
+            "portfolios": rows,
+        }
 
 
 # --- Supporting reads -------------------------------------------------------
@@ -216,9 +224,9 @@ def search_symbols(query: str) -> dict:
 
 @mcp.tool()
 def validate_symbol(symbol: str) -> dict:
-    """Resolve and validate one symbol against Yahoo Finance. Returns its
+    """Resolve and validate one symbol against Massive. Returns its
     security type/name/currency/exchange, or errors with a hint. Non-USD assets,
-    funds, indices, FX pairs, and futures are rejected."""
+    mutual funds, indices, FX pairs, and futures are rejected."""
     try:
         resolved = resolve_symbol(symbol)
     except SymbolValidationError as exc:

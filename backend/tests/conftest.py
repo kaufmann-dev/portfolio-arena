@@ -1,13 +1,15 @@
-"""Shared fixtures: a real PostgreSQL (testcontainers, or TEST_DATABASE_URL),
+"""Shared fixtures: a real PostgreSQL (direct Podman, or TEST_DATABASE_URL),
 the app under TestClient with lifespan (migrations + seed), a local admin
-session, and stubbed Yahoo fetching (tests never hit the network).
+session, and stubbed Massive fetching (tests never hit the network).
 
 Environment must be configured before any `app.*` import, because Settings
 is cached at first use.
 """
 
 import os
-from pathlib import Path
+import subprocess
+import time
+from uuid import uuid4
 
 os.environ.setdefault("ARENA_PUBLIC_URL", "https://testserver")
 os.environ.setdefault("ARENA_OIDC_ISSUER_URL", "https://idp.test/application/o/portfolio-arena")
@@ -20,12 +22,7 @@ os.environ.setdefault(
 os.environ.setdefault("ARENA_DB_CONNECT_RETRIES", "3")
 os.environ.setdefault("ARENA_DB_CONNECT_RETRY_DELAY", "0.2")
 os.environ.setdefault("ARENA_INTERNAL_MCP_API_KEY", "test-internal-worker-token")
-
-# Let testcontainers talk to podman when no docker daemon is configured.
-_PODMAN_SOCK = Path(f"/run/user/{os.getuid()}/podman/podman.sock")
-if "TEST_DATABASE_URL" not in os.environ and "DOCKER_HOST" not in os.environ and _PODMAN_SOCK.exists():
-    os.environ["DOCKER_HOST"] = f"unix://{_PODMAN_SOCK}"
-    os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
+os.environ.setdefault("MASSIVE_API_KEY", "test-massive-api-key")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,10 +38,61 @@ def database_url():
         yield url
         return
 
-    from testcontainers.postgres import PostgresContainer
+    container_name = f"portfolio-arena-tests-{uuid4().hex}"
 
-    with PostgresContainer("postgres:16-alpine") as postgres:
-        yield postgres.get_connection_url()
+    def podman(*args: str, timeout_seconds: float = 15) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["podman", *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+
+    try:
+        started = podman(
+            "run",
+            "--detach",
+            "--name",
+            container_name,
+            "--userns",
+            "keep-id:uid=70,gid=70",
+            "--env",
+            "POSTGRES_USER=test",
+            "--env",
+            "POSTGRES_PASSWORD=test",
+            "--env",
+            "POSTGRES_DB=test",
+            "--publish",
+            "127.0.0.1::5432",
+            "docker.io/library/postgres:16-alpine",
+            timeout_seconds=120,
+        )
+        if started.returncode != 0:
+            raise RuntimeError(f"Could not start test Postgres with Podman: {started.stderr.strip()}")
+
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            ready = podman("exec", container_name, "pg_isready", "--username", "test", "--dbname", "test")
+            if ready.returncode == 0:
+                break
+
+            state = podman("inspect", "--format", "{{.State.Status}}", container_name)
+            if state.returncode != 0 or state.stdout.strip() != "running":
+                logs = podman("logs", container_name)
+                raise RuntimeError(f"Test Postgres exited before it was ready:\n{logs.stdout}{logs.stderr}")
+            time.sleep(0.2)
+        else:
+            logs = podman("logs", container_name)
+            raise RuntimeError(f"Test Postgres did not become ready:\n{logs.stdout}{logs.stderr}")
+
+        published = podman("port", container_name, "5432/tcp")
+        if published.returncode != 0:
+            raise RuntimeError(f"Could not resolve test Postgres port: {published.stderr.strip()}")
+        port = published.stdout.strip().rsplit(":", maxsplit=1)[-1]
+        yield f"postgresql+psycopg2://test:test@127.0.0.1:{port}/test"
+    finally:
+        podman("rm", "--force", "--ignore", "--volumes", container_name)
 
 
 @pytest.fixture(scope="session")
@@ -94,12 +142,12 @@ def clean_db(client):
 
 
 @pytest.fixture(autouse=True)
-def stub_yahoo(monkeypatch):
-    """No test may hit Yahoo. Symbols resolve from a small static universe and
+def stub_massive(monkeypatch):
+    """No test may hit Massive. Symbols resolve from a small static universe and
     price downloads return deterministic synthetic series."""
     from datetime import UTC, datetime, timedelta
 
-    from app.services import yahoo
+    from app.services import massive
     from app.services.trading_calendar import is_trading_day
 
     universe = {
@@ -107,64 +155,91 @@ def stub_yahoo(monkeypatch):
             "symbol": "SPY",
             "name": "SPDR S&P 500 ETF Trust",
             "currency": "USD",
-            "exchangeName": "NYSEArca",
-            "instrumentType": "ETF",
+            "exchange": "ARCX",
+            "type": "ETF",
+            "active": True,
+            "market": "stocks",
+            "locale": "us",
         },
         "RSP": {
             "symbol": "RSP",
             "name": "Invesco S&P 500 Equal Weight ETF",
             "currency": "USD",
-            "exchangeName": "NYSEArca",
-            "instrumentType": "ETF",
+            "exchange": "ARCX",
+            "type": "ETF",
+            "active": True,
+            "market": "stocks",
+            "locale": "us",
         },
         "AAPL": {
             "symbol": "AAPL",
             "name": "Apple Inc.",
             "currency": "USD",
-            "exchangeName": "NasdaqGS",
-            "instrumentType": "EQUITY",
+            "exchange": "XNAS",
+            "type": "CS",
+            "active": True,
+            "market": "stocks",
+            "locale": "us",
         },
         "MSFT": {
             "symbol": "MSFT",
             "name": "Microsoft Corporation",
             "currency": "USD",
-            "exchangeName": "NasdaqGS",
-            "instrumentType": "EQUITY",
+            "exchange": "XNAS",
+            "type": "CS",
+            "active": True,
+            "market": "stocks",
+            "locale": "us",
         },
         "SAP.DE": {
             "symbol": "SAP.DE",
             "name": "SAP SE",
             "currency": "EUR",
-            "exchangeName": "XETRA",
-            "instrumentType": "EQUITY",
+            "exchange": "XETR",
+            "type": "CS",
+            "active": True,
+            "market": "stocks",
+            "locale": "de",
         },
         "VFIAX": {
             "symbol": "VFIAX",
             "name": "Vanguard 500 Index Fund Admiral Shares",
             "currency": "USD",
-            "exchangeName": "Nasdaq",
-            "instrumentType": "MUTUALFUND",
+            "exchange": "XNAS",
+            "type": "MF",
+            "active": True,
+            "market": "stocks",
+            "locale": "us",
         },
         "EURUSD=X": {
             "symbol": "EURUSD=X",
             "name": "EUR/USD",
             "currency": "USD",
-            "exchangeName": "CCY",
-            "instrumentType": "CURRENCY",
+            "exchange": None,
+            "type": "CURRENCY",
+            "active": True,
+            "market": "fx",
+            "locale": "global",
         },
         "GC=F": {
             "symbol": "GC=F",
             "name": "Gold Futures",
             "currency": "USD",
-            "exchangeName": "CMX",
-            "instrumentType": "FUTURE",
+            "exchange": "XCEC",
+            "type": "FUTURE",
+            "active": True,
+            "market": "futures",
+            "locale": "us",
         },
         "BTC-USD": {
             "symbol": "BTC-USD",
             "name": "Bitcoin USD",
             "currency": "USD",
-            "exchangeName": "CCC",
-            "instrumentType": "CRYPTOCURRENCY",
+            "exchange": None,
+            "type": "CRYPTO",
+            "active": True,
+            "market": "crypto",
+            "locale": "global",
         },
     }
     base_prices = {"SPY": 500.0, "RSP": 180.0, "AAPL": 200.0, "MSFT": 400.0, "EURUSD=X": 1.10}
@@ -172,9 +247,9 @@ def stub_yahoo(monkeypatch):
     def fake_meta(symbol):
         return universe.get(symbol)
 
-    def fake_download(symbols, start):
-        result = yahoo.PriceDownloadResult()
-        end = datetime.now(UTC).date()
+    def fake_download(symbols, start, end=None):
+        result = massive.PriceDownloadResult()
+        end = end or datetime.now(UTC).date()
         for symbol in symbols:
             base = base_prices.get(symbol)
             if base is None:
@@ -191,16 +266,13 @@ def stub_yahoo(monkeypatch):
             result[symbol] = points
         return result
 
-    monkeypatch.setattr(yahoo, "fetch_chart_meta", fake_meta)
-    monkeypatch.setattr(yahoo, "download_prices", fake_download)
+    monkeypatch.setattr(massive, "fetch_ticker_details", fake_meta)
+    monkeypatch.setattr(massive, "has_complete_dividend_adjustments", lambda _symbol: True)
+    monkeypatch.setattr(massive, "download_prices", fake_download)
     monkeypatch.setattr(
-        yahoo,
-        "search_symbols",
-        lambda q: [
-            {"symbol": s, "name": m["name"], "exchange": m["exchangeName"], "type": m["instrumentType"]}
-            for s, m in universe.items()
-            if q.upper() in s
-        ],
+        massive,
+        "search_tickers",
+        lambda q: [dict(m) for s, m in universe.items() if q.upper() in s],
     )
     yield
 

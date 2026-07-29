@@ -28,6 +28,7 @@ def _settings_values(**overrides):
         "ARENA_OIDC_CLIENT_ID": "portfolio-arena-test",
         "ARENA_OIDC_CLIENT_SECRET": "test-client-secret",
         "ARENA_OIDC_STATE_SECRET": "test-state-secret-0123456789abcdef0123456789abcdef",
+        "MASSIVE_API_KEY": "test-massive-api-key",
     }
     values.update(overrides)
     return values

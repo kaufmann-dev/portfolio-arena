@@ -315,7 +315,7 @@ def _nav_at_or_before(series: Series, day: str) -> float | None:
 
 def compute_metrics(result: ValuationResult, spy_series: Series) -> dict:
     """Portfolio metrics from the base-100 series; SPY compared over the
-    identical window using its adjusted closes."""
+    identical window using its total-return closes."""
     series = result.series
     if not series:
         return {"has_data": False}

@@ -601,6 +601,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
     wrapper_prompt = wrapper_prompt_for_portfolio(session, match)
     return {
         "as_of": valuations.as_of,
+        "market_data_status": valuations.market_data_status,
         "portfolio": serialize_detail(
             valuation,
             valuations,
@@ -615,7 +616,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
 
 def _normalize_positions(prompt: Prompt, positions: list[dict]) -> list[dict]:
     """Normalize symbols and enforce the position-set rules (sum to 100, no dups,
-    long-only) plus per-symbol resolution against Yahoo."""
+    long-only) plus per-symbol resolution against Massive."""
     normalized = [
         {
             "symbol": normalize_symbol(p["symbol"]),

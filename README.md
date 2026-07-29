@@ -8,7 +8,7 @@ harness-specific capabilities, combines them into reusable Agents, and controls 
 concurrency, immediate runs, cancellation, retries, and history. Manual allocation and authenticated
 MCP workflows remain available.
 
-The app simulates the allocations as paper portfolios from Yahoo Finance data and tracks them live
+The app simulates the allocations as paper portfolios from Massive market data and tracks them live
 against SPY on a public leaderboard. It is an _arena_: honest, deterministic measurement — not
 trading and not advice.
 
@@ -23,11 +23,15 @@ trading and not advice.
   restarts the worker if it fails, and shuts both down together.
 - **Admin authentication** — confidential OpenID Connect Authorization Code + PKCE, backed by
   opaque server-side sessions. Public leaderboard and detail views remain anonymous.
-- **Prices** — Yahoo Finance chart endpoint (daily adjusted closes), fetched in parallel with
-  httpx and cached in Postgres with a ~1h TTL.
+- **Prices** — Massive daily stock aggregates, fetched in parallel with httpx and converted to a
+  split-and-dividend total-return basis. Series are cached in Postgres with a ~1h TTL.
 - **No stored NAVs.** Every NAV series is recomputed on request from the
-  entered allocations + cached price series. Adjusted closes change retroactively
-  (dividends/splits), so recomputation is _more_ correct than snapshotting.
+  entered allocations + cached price series. Corporate-action adjustments change retroactively,
+  so recomputation is _more_ correct than snapshotting.
+- **Last-known-data fallback.** An expired cache row remains available until a Massive refresh
+  succeeds. The cache refreshes after its TTL and when a newly closed session should be available
+  after Massive's 15-minute delay. Responses label market data `fresh`, `stale`, or `unavailable`;
+  `as_of` remains the authoritative valued close.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
   endpoint exposing the full app surface as tools, including evaluator administration. The
   worker-only queue and submission protocol is private to the deployment.
@@ -64,11 +68,14 @@ trading and not advice.
 
 ## Instruments
 
-Portfolios are fully invested, long-only, and USD-denominated. Accepted Yahoo instrument types are
-`EQUITY` and `ETF`; adjusted closes provide the total-return basis. Cash, mutual funds, crypto,
-raw indices, FX pairs, futures, shorts, and leverage are rejected. Current S&P 500 membership can
-be part of a strategy prompt, but is deliberately a research judgment rather than a stale hard-coded
-symbol list.
+Portfolios are fully invested, long-only, and USD-denominated. Accepted Massive ticker types are
+common stock (`CS`), ADR common stock (`ADRC`), and ETF (`ETF`). Massive split-adjusted daily
+aggregates plus cumulative dividend adjustment factors provide the total-return basis. A ticker is
+rejected when Massive's recent dividend history lacks those factors, because distributions without
+a cumulative adjustment factor cannot be reconstructed reliably from aggregate prices alone.
+Inactive or non-USD tickers, cash, mutual funds, crypto, raw indices, FX pairs, futures, shorts, and
+leverage are also rejected. Current S&P 500 membership can be part of a strategy prompt, but is
+deliberately a research judgment rather than a stale hard-coded symbol list.
 
 ## MCP server
 
@@ -130,8 +137,8 @@ canonical strategy and the editable wrapper for its mode.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
-deployment-only: `MASSIVE_API_KEY` is passed to the worker but removed from the web process, and the
-internal worker bearer token is generated in memory at startup.
+deployment-only: `MASSIVE_API_KEY` is passed to both the web process for valuations and the worker
+for research, while the internal worker bearer token is generated in memory at startup.
 
 When upgrading an existing Arena database, migration `0006` intentionally aborts if historical cash
 positions exist. Back up the database and resolve those rows before deploying; the migration will
@@ -140,6 +147,9 @@ not silently rewrite the experiment's history.
 Migration `0007` preserves portfolios, allocations, prompts, agents, settings, evaluation history,
 price data, and MCP API keys. It removes only the obsolete local-password user table and replaces it
 with short-lived browser-session records; existing JWT browser sessions stop working immediately.
+
+Migration `0015` clears cached Yahoo-originated price series once so they cannot mix with Massive
+total-return data. The cache refills on the next valuation request.
 
 ## Development
 
@@ -155,6 +165,7 @@ export ARENA_OIDC_ISSUER_URL=https://identity.example.com/application/o/portfoli
 export ARENA_OIDC_CLIENT_ID=portfolio-arena-local
 export ARENA_OIDC_CLIENT_SECRET=set-locally
 export ARENA_OIDC_STATE_SECRET="$(openssl rand -hex 32)"
+export MASSIVE_API_KEY=set-locally
 cd backend && ../.venv/bin/uvicorn app.main:app --reload
 
 # Frontend dev server (proxies /api to :8000)
@@ -165,13 +176,15 @@ cd frontend && npm install && npm run dev
 
 ```sh
 cd backend && ../.venv/bin/python -m pytest        # valuation engine, calendar, API
+cd frontend && npm run test                        # warning-state unit tests
 cd frontend && npm run check && npm run build      # svelte-check + production build
 cd frontend && npm run format                      # Prettier (format:check to verify only)
 ```
 
-API tests use [testcontainers](https://testcontainers.com/) and start a throwaway Postgres via
-the podman user socket (`systemctl --user start podman.socket`), or set `TEST_DATABASE_URL` to
-reuse an existing database. Yahoo is stubbed in tests; nothing hits the network.
+API tests start a throwaway Postgres directly with rootless Podman, using an explicit keep-id user
+mapping so the official image can initialize its data directory. Set `TEST_DATABASE_URL` to reuse
+an existing database instead. Massive is stubbed in application tests; dedicated provider tests use
+an in-memory HTTP transport, so nothing hits the network.
 
 ## Coolify Deployment
 
@@ -203,7 +216,7 @@ Web app:
 | `ARENA_OIDC_CLIENT_ID`     | Confidential OIDC client ID (**required**)                            |
 | `ARENA_OIDC_CLIENT_SECRET` | Confidential OIDC client secret (**required**)                        |
 | `ARENA_OIDC_STATE_SECRET`  | Random secret of at least 32 characters for OIDC state (**required**) |
-| `MASSIVE_API_KEY`          | Massive market-data credential used only by the evaluator worker      |
+| `MASSIVE_API_KEY`          | Massive credential used for web valuations and evaluator research     |
 
 **Optional**
 
@@ -214,7 +227,7 @@ Web app:
 | `ARENA_DEFAULT_COST_BPS`        | `10`             | Default cost bps for new portfolios           |
 | `ARENA_DB_CONNECT_RETRIES`      | `30`             | Retries before failing startup                |
 | `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`            | Seconds between retries                       |
-| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`           | Price cache TTL                               |
+| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`           | Seconds before a price refresh is due         |
 | `CODEX_HOME`                    | `/var/lib/codex` | Codex authentication and generated config dir |
 | `PORT`                          | `8000`           | Listen port; normally injected by Coolify     |
 

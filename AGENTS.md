@@ -7,14 +7,14 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
 
 - One venv at the repo root: `python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`.
 - Backend tests: `cd backend && ../.venv/bin/python -m pytest`. Tests spin up a throwaway
-  Postgres via testcontainers over the podman socket (`systemctl --user start podman.socket`),
-  or set `TEST_DATABASE_URL` to reuse a database. Yahoo is stubbed — no test hits the network.
+  Postgres directly with rootless Podman, or set `TEST_DATABASE_URL` to reuse a database.
+  Massive is stubbed — no test hits the network.
 - Lint/format (ruff, config in `backend/pyproject.toml`, line length 110):
   `cd backend && ../.venv/bin/ruff check . && ../.venv/bin/ruff format .`.
-- Frontend: `cd frontend && npm run check && npm run build` (svelte-check + production build).
-  There are no frontend unit tests; `check` + `build` is the verification.
-- Running the backend needs `DATABASE_URL`, `ARENA_PUBLIC_URL`, and the four required
-  `ARENA_OIDC_*` variables (see `README.md` Development).
+- Frontend: `cd frontend && npm run test && npm run check && npm run build` (unit tests,
+  svelte-check, and production build).
+- Running the backend needs `DATABASE_URL`, `MASSIVE_API_KEY`, `ARENA_PUBLIC_URL`, and the four
+  required `ARENA_OIDC_*` variables (see `README.md` Development).
 
 ## Project Structure
 
@@ -52,7 +52,7 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
 
 - Tests live in `backend/tests/` (pytest). Shared fixtures in `conftest.py`: `client`,
   `admin_headers`, `sample_agent`, `sample_prompt`, `sample_portfolio`; each test truncates
-  and reseeds all tables. `stub_yahoo` provides a fixed symbol universe (SPY, RSP, AAPL,
+  and reseeds all tables. `stub_massive` provides a fixed symbol universe (SPY, RSP, AAPL,
   MSFT, EURUSD=X, GC=F, BTC-USD) with deterministic prices — use those symbols.
 - Use `backdate_allocation` (`backend/tests/util.py`) to make an allocation locked/valued,
   since real allocations can never be backdated through the API.

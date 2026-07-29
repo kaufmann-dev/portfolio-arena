@@ -107,14 +107,94 @@ class TestMcpTools:
         assert data["runtime"]["online"] is False
 
     def test_arena_overview(self, client, mcp_headers, sample_portfolio):
+        from .util import backdate_allocation
+
+        backdate_allocation(sample_portfolio["allocation"]["id"])
         data = _call_tool(client, mcp_headers, "get_arena_overview")
         assert data["portfolios"]
+        assert data["market_data_status"] == "fresh"
         # Curated: the token-heavy sparkline is stripped.
         assert all("sparkline" not in row for row in data["portfolios"])
 
+    def test_valuation_tools_report_stale_cache_fallback(
+        self,
+        client,
+        mcp_headers,
+        sample_portfolio,
+        monkeypatch,
+    ):
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import update
+
+        from app.db import session_factory
+        from app.models import PriceCache
+        from app.services import massive
+
+        from .util import backdate_allocation
+
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        assert _call_tool(client, mcp_headers, "get_arena_overview")["market_data_status"] == "fresh"
+        with session_factory()() as session:
+            session.execute(update(PriceCache).values(fetched_at=datetime.now(UTC) - timedelta(hours=2)))
+            session.commit()
+        monkeypatch.setattr(
+            massive,
+            "download_prices",
+            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
+        )
+
+        overview = _call_tool(client, mcp_headers, "get_arena_overview")
+        portfolio = _call_tool(
+            client,
+            mcp_headers,
+            "get_portfolio",
+            {"slug_or_id": sample_portfolio["slug"]},
+        )
+
+        assert overview["market_data_status"] == "stale"
+        assert portfolio["market_data_status"] == "stale"
+        assert overview["as_of"] is not None
+        assert portfolio["as_of"] is not None
+
+    def test_valuation_tools_report_unavailable_prices(
+        self,
+        client,
+        mcp_headers,
+        sample_portfolio,
+        monkeypatch,
+    ):
+        from app.services import massive
+
+        from .util import backdate_allocation
+
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+        monkeypatch.setattr(
+            massive,
+            "download_prices",
+            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
+        )
+
+        overview = _call_tool(client, mcp_headers, "get_arena_overview")
+        portfolio = _call_tool(
+            client,
+            mcp_headers,
+            "get_portfolio",
+            {"slug_or_id": sample_portfolio["slug"]},
+        )
+
+        assert overview["market_data_status"] == "unavailable"
+        assert portfolio["market_data_status"] == "unavailable"
+        assert overview["as_of"] is None
+        assert portfolio["as_of"] is None
+
     def test_get_portfolio_is_curated(self, client, mcp_headers, sample_portfolio):
+        from .util import backdate_allocation
+
+        backdate_allocation(sample_portfolio["allocation"]["id"])
         data = _call_tool(client, mcp_headers, "get_portfolio", {"slug_or_id": sample_portfolio["slug"]})
         portfolio = data["portfolio"]
+        assert data["market_data_status"] == "fresh"
         assert portfolio["prompt"]["text"]  # full prompt text, for the rebalancing agent
         assert portfolio["prompt_mode"] == "managed"
         assert portfolio["allocations"]  # history with notes
