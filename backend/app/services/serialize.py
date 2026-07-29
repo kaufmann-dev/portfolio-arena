@@ -103,7 +103,7 @@ def _flags(valuation: PortfolioValuation) -> dict:
 def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations) -> dict:
     portfolio = valuation.portfolio
     allocations = portfolio.allocations
-    age = age_days(valuation, valuations.as_of)
+    age = age_days(valuation, valuations.current_date)
     return {
         "id": portfolio.id,
         "slug": portfolio.slug,

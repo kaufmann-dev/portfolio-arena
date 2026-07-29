@@ -49,17 +49,7 @@ export function marketDataWarning(
   status: MarketDataStatus,
   asOf: string | null,
 ): MarketDataWarningContent | null {
-  if (status === "fresh") return null;
-
-  if (status === "stale") {
-    return {
-      title: "Market data refresh delayed",
-      message: asOf
-        ? `Showing last-known prices valued through the ${asOf} close.`
-        : "Showing last-known prices while the latest market data refresh is retried.",
-      role: "status",
-    };
-  }
+  if (status !== "unavailable") return null;
 
   return {
     title: "Market data incomplete",

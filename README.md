@@ -31,7 +31,8 @@ trading and not advice.
 - **Last-known-data fallback.** An expired cache row remains available until a Massive refresh
   succeeds. The cache refreshes after its TTL and when a newly closed session should be available
   after Massive's 15-minute delay. Responses label market data `fresh`, `stale`, or `unavailable`;
-  `as_of` remains the authoritative valued close.
+  `as_of` remains the authoritative valued close. Ordinary complete last-known data does not raise
+  a UI warning; warnings are reserved for unavailable data that can make valuations incomplete.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
   endpoint exposing the full app surface as tools, including evaluator administration. The
   worker-only queue and submission protocol is private to the deployment.
@@ -63,8 +64,9 @@ trading and not advice.
 - **Costs on turnover.** Every trade pays a flat fee (default 10 bps of traded notional, frozen
   per portfolio at creation). Initial deployment pays one side; rebalances pay both sides.
 - **Notes.** Each allocation has an optional free-text note (e.g. the model's regime call).
-- **Honesty labels.** Portfolios younger than 6 months are badged "too early to judge"; stale or
-  frozen (possibly delisted) price data is flagged, never guessed.
+- **Honesty labels.** Portfolio age is elapsed New York calendar days from inception, independent
+  of the last valued close. Portfolios younger than 6 months are badged "too early to judge";
+  incomplete, carried-forward, or frozen (possibly delisted) price data is flagged, never guessed.
 
 ## Instruments
 
