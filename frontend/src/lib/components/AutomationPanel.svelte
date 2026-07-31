@@ -54,16 +54,28 @@
 
   const enabledPortfolioIds = $derived(
     dashboard?.portfolios
-      .filter((config) => config.enabled && config.portfolio.status === "active")
+      .filter((config) => config.enabled && !evaluatorBlocked(config))
       .map((config) => config.portfolio.id) ?? [],
   );
   const portfolioFilterOptions = $derived<SelectOption[]>([
     { value: "", label: "All portfolios" },
     ...(dashboard?.portfolios.map((config) => ({
       value: String(config.portfolio.id),
-      label: config.portfolio.name,
+      label: `${config.portfolio.name} · ${config.portfolio.direction}`,
     })) ?? []),
   ]);
+
+  function evaluatorBlocked(config: PortfolioEvaluatorConfig): boolean {
+    return (
+      config.portfolio.status !== "active" ||
+      (config.portfolio.prompt_mode === "managed" && Boolean(config.portfolio.is_liquidated))
+    );
+  }
+
+  function retryBlocked(run: EvaluationRun): boolean {
+    const config = dashboard?.portfolios.find((candidate) => candidate.portfolio.id === run.portfolio.id);
+    return config ? evaluatorBlocked(config) : true;
+  }
 
   function settingsBody(settings: EvaluatorSettings) {
     return {
@@ -428,7 +440,15 @@
             <article class="portfolio-config">
               <div class="config-head">
                 <div>
-                  <strong>{config.portfolio.name}</strong>
+                  <div class="config-title">
+                    <strong>{config.portfolio.name}</strong>
+                    <span class="badge">{config.portfolio.direction}</span>
+                    {#if config.portfolio.is_liquidated}
+                      <span class="badge neg">
+                        {config.portfolio.prompt_mode === "rebuilt" ? "policy liquidated" : "liquidated"}
+                      </span>
+                    {/if}
+                  </div>
                   <div class="muted num">{config.portfolio.slug}</div>
                   <div class="muted">
                     {config.agent.name} · {config.agent.execution_model_id}
@@ -440,9 +460,19 @@
                 <ToggleSwitch
                   label="Enabled"
                   bind:checked={draft.enabled}
-                  disabled={config.portfolio.status !== "active"}
+                  disabled={evaluatorBlocked(config) && !draft.enabled}
                 />
               </div>
+              {#if config.portfolio.prompt_mode === "managed" && config.portfolio.is_liquidated}
+                <p class="liquidation-note">
+                  This managed portfolio is liquidated. Automated and manual evaluator runs are disabled.
+                </p>
+              {:else if config.portfolio.prompt_mode === "rebuilt" && config.portfolio.is_liquidated}
+                <p class="liquidation-note contextual">
+                  The selected rebuilt policy is liquidated. Independent daily signals continue to feed other
+                  policies and future cohorts.
+                </p>
+              {/if}
               <div class="config-fields">
                 <div class="field">
                   <span class="field-label">Automatic days</span>
@@ -452,10 +482,12 @@
                         type="button"
                         class={["weekday", { selected: draft.weekdays.includes(weekday.value) }]}
                         aria-pressed={draft.weekdays.includes(weekday.value)}
-                        disabled={config.portfolio.prompt_mode === "rebuilt"}
+                        disabled={config.portfolio.prompt_mode === "rebuilt" || evaluatorBlocked(config)}
                         title={config.portfolio.prompt_mode === "rebuilt"
                           ? "Rebuilt signals are required every trading day"
-                          : undefined}
+                          : evaluatorBlocked(config)
+                            ? "This portfolio is not eligible for evaluator runs"
+                            : undefined}
                         onclick={() => toggleWeekday(config.portfolio.id, weekday.value)}
                       >
                         {weekday.label}
@@ -470,7 +502,8 @@
                   class="btn small"
                   type="button"
                   onclick={() => savePortfolio(config)}
-                  disabled={busyAction === `save-${config.portfolio.id}`}
+                  disabled={busyAction === `save-${config.portfolio.id}` ||
+                    (evaluatorBlocked(config) && draft.enabled)}
                 >
                   {busyAction === `save-${config.portfolio.id}` ? "Saving…" : "Save"}
                 </button>
@@ -478,7 +511,7 @@
                   class="btn small primary"
                   type="button"
                   onclick={() => queueRuns([config.portfolio.id], `run-${config.portfolio.id}`)}
-                  disabled={!settingsDraft?.enabled || !draft.enabled || config.portfolio.status !== "active"}
+                  disabled={!settingsDraft?.enabled || !draft.enabled || evaluatorBlocked(config)}
                 >
                   {busyAction === `run-${config.portfolio.id}` ? "Queueing…" : "Run now"}
                 </button>
@@ -551,6 +584,7 @@
               </td>
               <td>
                 <strong>{run.portfolio.name}</strong>
+                <span class="badge">{run.portfolio.direction}</span>
                 <div class="muted num">{run.portfolio.slug}</div>
               </td>
               <td>
@@ -594,7 +628,9 @@
                       class="btn small"
                       type="button"
                       onclick={() => retryRun(run)}
-                      disabled={busyAction === `retry-${run.id}` || !settingsDraft?.enabled}
+                      disabled={busyAction === `retry-${run.id}` ||
+                        !settingsDraft?.enabled ||
+                        retryBlocked(run)}
                     >
                       Retry
                     </button>
@@ -734,6 +770,27 @@
     align-items: center;
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .config-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+
+  .liquidation-note {
+    padding: 10px 14px;
+    margin: 0;
+    color: var(--neg);
+    border-bottom: 1px solid var(--border-subtle);
+    background: color-mix(in srgb, var(--neg) 7%, transparent);
+    font-size: 12.5px;
+  }
+
+  .liquidation-note.contextual {
+    color: var(--text-secondary);
+    background: var(--bg-inset);
   }
 
   .config-fields {

@@ -1,4 +1,14 @@
-import type { CostBasis, RebuiltAnalysisContext, RebuiltObjective, RebuiltView } from "./api/types";
+import type {
+  CostBasis,
+  Direction,
+  RebuiltAnalysisContext,
+  RebuiltObjective,
+  RebuiltView,
+} from "./api/types";
+
+export function parseDirection(value: string | null): Direction {
+  return value === "short" ? "short" : "long";
+}
 
 export function rebuiltContext(
   view: RebuiltView,
@@ -31,9 +41,11 @@ export function rebuiltContextParams(context: RebuiltAnalysisContext, includeTra
 export function portfolioAnalysisHref(
   slug: string,
   track: "managed" | "rebuilt",
+  direction: Direction,
   context?: RebuiltAnalysisContext,
 ): string {
-  if (track === "managed") return `/p/${slug}?track=managed`;
+  if (track === "managed") return `/p/${slug}?track=managed&direction=${direction}`;
   const query = rebuiltContextParams(context ?? rebuiltContext("common", "canonical", "net", 1), true);
+  query.set("direction", direction);
   return `/p/${slug}?${query.toString()}`;
 }

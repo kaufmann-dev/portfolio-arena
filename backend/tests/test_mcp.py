@@ -91,6 +91,7 @@ class TestMcpTools:
             "create_signal",
             "update_signal",
             "delete_signal",
+            "archive_prompt",
             "reset_portfolio",
             "get_evaluator_dashboard",
             "configure_portfolio_evaluator",
@@ -99,6 +100,7 @@ class TestMcpTools:
             "retry_evaluation_run",
             "list_evaluation_runs",
         } <= names
+        assert "delete_prompt" not in names
         # Key management is never exposed as a tool.
         assert not any("key" in name.lower() for name in names)
 
@@ -114,7 +116,12 @@ class TestMcpTools:
         from .util import backdate_allocation
 
         backdate_allocation(sample_portfolio["allocation"]["id"])
-        data = _call_tool(client, mcp_headers, "get_arena_overview")
+        data = _call_tool(
+            client,
+            mcp_headers,
+            "get_arena_overview",
+            {"direction": "long"},
+        )
         assert data["managed"]["portfolios"]
         assert data["managed"]["market_data_status"] == "fresh"
         assert data["rebuilt"]["portfolios"][0]["kind"] == "benchmark"
@@ -142,7 +149,13 @@ class TestMcpTools:
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
         assert (
-            _call_tool(client, mcp_headers, "get_arena_overview")["managed"]["market_data_status"] == "fresh"
+            _call_tool(
+                client,
+                mcp_headers,
+                "get_arena_overview",
+                {"direction": "long"},
+            )["managed"]["market_data_status"]
+            == "fresh"
         )
         with session_factory()() as session:
             session.execute(update(PriceCache).values(fetched_at=datetime.now(UTC) - timedelta(hours=2)))
@@ -153,7 +166,12 @@ class TestMcpTools:
             lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
         )
 
-        overview = _call_tool(client, mcp_headers, "get_arena_overview")
+        overview = _call_tool(
+            client,
+            mcp_headers,
+            "get_arena_overview",
+            {"direction": "long"},
+        )
         portfolio = _call_tool(
             client,
             mcp_headers,
@@ -184,7 +202,12 @@ class TestMcpTools:
             lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
         )
 
-        overview = _call_tool(client, mcp_headers, "get_arena_overview")
+        overview = _call_tool(
+            client,
+            mcp_headers,
+            "get_arena_overview",
+            {"direction": "long"},
+        )
         portfolio = _call_tool(
             client,
             mcp_headers,
@@ -226,6 +249,7 @@ class TestMcpTools:
                 "agent_id": sample_agent["id"],
                 "prompt_id": sample_prompt["id"],
                 "prompt_mode": "rebuilt",
+                "direction": "long",
             },
             headers=admin_headers,
         )
@@ -275,6 +299,7 @@ class TestMcpTools:
                 "objective": "canonical",
                 "cost_basis": "gross",
                 "horizon": 1,
+                "direction": "long",
             },
         )
         assert analysis["context"]["horizon"] == 1
@@ -319,6 +344,7 @@ class TestMcpTools:
                 "agent_id": agent["id"],
                 "prompt_id": prompt["id"],
                 "prompt_mode": "managed",
+                "direction": "long",
             },
         )
         allocation = _call_tool(

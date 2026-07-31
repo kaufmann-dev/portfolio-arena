@@ -11,10 +11,11 @@ from app.services.prompt_policy import (
 )
 
 
-def _portfolio(prompt_mode: str):
+def _portfolio(prompt_mode: str, direction: str = "long"):
     return SimpleNamespace(
         slug=f"{prompt_mode}-strategy",
         prompt_mode=prompt_mode,
+        direction=direction,
         prompt=SimpleNamespace(
             text="Use current, security-specific evidence.",
             min_position_weight_pct=10,
@@ -45,6 +46,17 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
     assert "previous signals" in manual
     assert "valid signal allocation" in automated
     assert "create_allocation" not in manual
+
+
+def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_polarity():
+    portfolio = _portfolio("managed", "short")
+
+    prompt = manual_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT)
+
+    assert "prices are expected to underperform SPY" in prompt
+    assert "short book can outperform the Short SPY reference" in prompt
+    assert "Submit positive weights totaling exactly 100%" in prompt
+    assert "server interprets every position as gross short exposure" in prompt
 
 
 def test_v2_rebuilt_catalog_rewrites_exactly_eight_weekly_strategies():

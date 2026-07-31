@@ -4,6 +4,8 @@
 
   import { apiJson, del, patchJson, postJson, putJson } from "../api/client";
   import type {
+    AdminPrompt,
+    AdminPromptsResponse,
     AgentOut,
     AllocationOut,
     AdminPortfolioDetailResponse,
@@ -12,6 +14,7 @@
     ApiKeyCreated,
     ApiKeyOut,
     ApiKeysResponse,
+    Direction,
     HarnessDefinition,
     HarnessesResponse,
     ManagedArenaResponse,
@@ -21,7 +24,8 @@
     MarketDataStatus,
     PortfolioResetResult,
     PromptMode,
-    PromptOut,
+    PromptVersion,
+    PromptVersionsResponse,
     RebuiltArenaResponse,
     RebuiltPortfolioDetail,
     SignalOut,
@@ -81,7 +85,7 @@
 
   // ── Shared data ──────────────────────────────
   let portfolios = $state.raw<ArenaPortfolio[]>([]);
-  let prompts = $state.raw<PromptOut[]>([]);
+  let prompts = $state.raw<AdminPrompt[]>([]);
   let agents = $state.raw<AgentOut[]>([]);
   let models = $state.raw<ModelDefinition[]>([]);
   let harnesses = $state.raw<HarnessDefinition[]>([]);
@@ -89,6 +93,7 @@
   let marketDataAsOf = $state<string | null>(null);
   let notice = $state("");
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  const activePrompts = $derived(prompts.filter((prompt) => prompt.status === "active"));
 
   function flash(message: string) {
     notice = message;
@@ -97,27 +102,44 @@
   }
 
   async function loadAll() {
-    const [managed, rebuilt, promptsPayload, agentsPayload, modelsPayload, harnessesPayload] =
-      await Promise.all([
-        apiJson<ManagedArenaResponse>("/api/arena/managed"),
-        apiJson<RebuiltArenaResponse>("/api/arena/rebuilt?view=tuned&objective=canonical&cost_basis=net"),
-        apiJson<{ prompts: PromptOut[] }>("/api/prompts"),
-        apiJson<{ agents: AgentOut[] }>("/api/agents"),
-        apiJson<{ models: ModelDefinition[] }>("/api/models"),
-        apiJson<HarnessesResponse>("/api/harnesses"),
-      ]);
+    const [
+      managedLong,
+      rebuiltLong,
+      managedShort,
+      rebuiltShort,
+      promptsPayload,
+      agentsPayload,
+      modelsPayload,
+      harnessesPayload,
+    ] = await Promise.all([
+      apiJson<ManagedArenaResponse>("/api/arena/managed?direction=long"),
+      apiJson<RebuiltArenaResponse>(
+        "/api/arena/rebuilt?direction=long&view=tuned&objective=canonical&cost_basis=net",
+      ),
+      apiJson<ManagedArenaResponse>("/api/arena/managed?direction=short"),
+      apiJson<RebuiltArenaResponse>(
+        "/api/arena/rebuilt?direction=short&view=tuned&objective=canonical&cost_basis=net",
+      ),
+      apiJson<AdminPromptsResponse>("/api/admin/prompts?status=all"),
+      apiJson<{ agents: AgentOut[] }>("/api/agents"),
+      apiJson<{ models: ModelDefinition[] }>("/api/models"),
+      apiJson<HarnessesResponse>("/api/harnesses"),
+    ]);
+    const arenaPayloads = [managedLong, rebuiltLong, managedShort, rebuiltShort];
     portfolios = [
-      ...managed.portfolios.filter((row) => row.kind === "managed"),
-      ...rebuilt.portfolios.filter((row) => row.kind === "rebuilt"),
+      ...managedLong.portfolios.filter((row) => row.kind === "managed"),
+      ...rebuiltLong.portfolios.filter((row) => row.kind === "rebuilt"),
+      ...managedShort.portfolios.filter((row) => row.kind === "managed"),
+      ...rebuiltShort.portfolios.filter((row) => row.kind === "rebuilt"),
     ];
-    marketDataStatus =
-      managed.market_data_status === "unavailable" || rebuilt.market_data_status === "unavailable"
-        ? "unavailable"
-        : managed.market_data_status === "stale" || rebuilt.market_data_status === "stale"
-          ? "stale"
-          : "fresh";
+    marketDataStatus = arenaPayloads.some((payload) => payload.market_data_status === "unavailable")
+      ? "unavailable"
+      : arenaPayloads.some((payload) => payload.market_data_status === "stale")
+        ? "stale"
+        : "fresh";
     marketDataAsOf =
-      [managed.as_of, rebuilt.as_of]
+      arenaPayloads
+        .map((payload) => payload.as_of)
         .filter((value): value is string => value !== null)
         .sort()
         .at(-1) ?? null;
@@ -128,7 +150,7 @@
   }
 
   async function refreshPrompts() {
-    const payload = await apiJson<{ prompts: PromptOut[] }>("/api/prompts");
+    const payload = await apiJson<AdminPromptsResponse>("/api/admin/prompts?status=all");
     prompts = payload.prompts;
   }
 
@@ -190,16 +212,17 @@
       `${detail.name} — current state as of ${detailAsOf ?? "n/a"}`,
       `Overall note: ${latestAllocation?.note?.trim() || "—"}`,
       "",
-      "Holdings:",
+      `${detail.direction === "short" ? "Short" : "Long"} holdings:`,
     ];
     if (detail.holdings.length) {
       for (const h of detail.holdings) {
         if (h.entry_price != null && h.current_price != null) {
-          const chg = h.entry_price ? (h.current_price / h.entry_price - 1) * 100 : 0;
-          const sign = chg >= 0 ? "+" : "";
+          const priceMove = h.entry_price ? (h.current_price / h.entry_price - 1) * 100 : 0;
+          const positionReturn = detail.direction === "short" ? -priceMove : priceMove;
+          const sign = positionReturn >= 0 ? "+" : "";
           lines.push(
-            `- ${h.symbol}: bought @ ${h.entry_price.toFixed(2)} → now ${h.current_price.toFixed(2)} ` +
-              `(${sign}${chg.toFixed(2)}%); weight ${h.weight_pct.toFixed(1)}% (target ${h.target_weight_pct.toFixed(1)}%)`,
+            `- ${h.symbol}: ${detail.direction === "short" ? "shorted" : "bought"} @ ${h.entry_price.toFixed(2)} → now ${h.current_price.toFixed(2)} ` +
+              `(${sign}${positionReturn.toFixed(2)}% position return); weight ${h.weight_pct.toFixed(1)}% (target ${h.target_weight_pct.toFixed(1)}%)`,
           );
         } else {
           lines.push(
@@ -343,6 +366,7 @@
   let newAgentId = $state<number | null>(null);
   let newPromptId = $state<number | null>(null);
   let newPromptMode = $state<PromptMode>("managed");
+  let newDirection = $state<Direction>("long");
   let newCostBps = $state<string>("");
   let portfolioError = $state("");
 
@@ -358,6 +382,7 @@
       agent_id: newAgentId,
       prompt_id: newPromptId,
       prompt_mode: newPromptMode,
+      direction: newDirection,
     };
     if (newCostBps.trim() !== "") body.cost_bps = parseInt(newCostBps, 10);
     try {
@@ -369,6 +394,7 @@
       newAgentId = null;
       newPromptId = null;
       newPromptMode = "managed";
+      newDirection = "long";
       newCostBps = "";
       await loadAll();
       // Jump to Portfolio state with the new portfolio selected.
@@ -594,18 +620,29 @@
   }
 
   // ── Tab 4: prompts ───────────────────────────
-  let editPrompt = $state<PromptOut | null>(null);
+  type PromptStatusFilter = "active" | "archived" | "all";
+  let promptStatusFilter = $state<PromptStatusFilter>("active");
+  let editPrompt = $state<AdminPrompt | null>(null);
   let newPromptName = $state("");
   let newPromptText = $state("");
   let newPromptNotes = $state("");
   let newPromptMinWeight = $state(10);
   let newPromptMaxWeight = $state(25);
+  let historyPromptId = $state<number | null>(null);
+  let promptVersions = $state.raw<PromptVersion[]>([]);
+  let promptHistoryLoading = $state(false);
+  let promptHistoryError = $state("");
+  let promptAction = $state("");
+  let promptHistorySequence = 0;
+  const filteredPrompts = $derived(
+    prompts.filter((prompt) => promptStatusFilter === "all" || prompt.status === promptStatusFilter),
+  );
 
   async function createPrompt(event: SubmitEvent) {
     event.preventDefault();
     if (!newPromptName.trim() || !newPromptText.trim()) return;
     try {
-      await postJson("/api/prompts", {
+      await postJson("/api/admin/prompts", {
         name: newPromptName.trim(),
         text: newPromptText,
         notes: newPromptNotes.trim(),
@@ -629,33 +666,95 @@
   async function savePrompt(event: SubmitEvent) {
     event.preventDefault();
     if (!editPrompt) return;
-    await patchJson(`/api/prompts/${editPrompt.id}`, {
-      name: editPrompt.name,
-      text: editPrompt.text,
-      notes: editPrompt.notes,
-      allocation_policy: {
-        min_position_weight_pct: editPrompt.allocation_policy.min_position_weight_pct,
-        max_position_weight_pct: editPrompt.allocation_policy.max_position_weight_pct,
-      },
-    });
-    editPrompt = null;
-    await refreshPrompts();
-    flash("Prompt saved.");
+    const promptId = editPrompt.id;
+    try {
+      await patchJson(`/api/admin/prompts/${promptId}`, {
+        name: editPrompt.name,
+        text: editPrompt.text,
+        notes: editPrompt.notes,
+        allocation_policy: {
+          min_position_weight_pct: editPrompt.allocation_policy.min_position_weight_pct,
+          max_position_weight_pct: editPrompt.allocation_policy.max_position_weight_pct,
+        },
+      });
+      editPrompt = null;
+      await refreshPrompts();
+      if (historyPromptId === promptId) await loadPromptVersions(promptId);
+      flash("Prompt saved as a new version.");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Save failed");
+    }
   }
 
-  function deletePrompt(prompt: PromptOut) {
+  function beginPromptEdit(prompt: AdminPrompt): void {
+    editPrompt = {
+      ...prompt,
+      allocation_policy: { ...prompt.allocation_policy },
+    };
+  }
+
+  async function loadPromptVersions(promptId: number): Promise<void> {
+    const sequence = ++promptHistorySequence;
+    promptHistoryLoading = true;
+    promptHistoryError = "";
+    try {
+      const payload = await apiJson<PromptVersionsResponse>(`/api/admin/prompts/${promptId}/versions`);
+      if (sequence === promptHistorySequence && historyPromptId === promptId) {
+        promptVersions = payload.versions;
+      }
+    } catch (e) {
+      if (sequence === promptHistorySequence) {
+        promptHistoryError = e instanceof Error ? e.message : "Could not load prompt history.";
+      }
+    } finally {
+      if (sequence === promptHistorySequence) promptHistoryLoading = false;
+    }
+  }
+
+  function togglePromptHistory(prompt: AdminPrompt): void {
+    if (historyPromptId === prompt.id) {
+      promptHistorySequence += 1;
+      historyPromptId = null;
+      promptVersions = [];
+      promptHistoryError = "";
+      promptHistoryLoading = false;
+      return;
+    }
+    historyPromptId = prompt.id;
+    promptVersions = [];
+    void loadPromptVersions(prompt.id);
+  }
+
+  async function setPromptArchived(prompt: AdminPrompt, archived: boolean): Promise<void> {
+    const action = archived ? "archive" : "unarchive";
+    promptAction = `${action}-${prompt.id}`;
+    try {
+      await postJson(`/api/admin/prompts/${prompt.id}/${action}`, {});
+      if (archived && editPrompt?.id === prompt.id) editPrompt = null;
+      if (archived && newPromptId === prompt.id) newPromptId = null;
+      await refreshPrompts();
+      flash(`Prompt ${archived ? "archived" : "unarchived"}.`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : `${archived ? "Archive" : "Unarchive"} failed`);
+    } finally {
+      promptAction = "";
+    }
+  }
+
+  function restorePromptVersion(prompt: AdminPrompt, version: PromptVersion): void {
     requestConfirmation({
-      title: "Delete prompt?",
-      description: `${prompt.name} will be permanently removed. Prompts used by portfolios cannot be deleted.`,
-      confirmLabel: "Delete prompt",
+      title: `Restore ${prompt.name} v${version.version}?`,
+      description: `Version ${version.version} will be copied into a new current version. Existing history remains immutable.`,
+      confirmLabel: "Restore version",
       action: async () => {
         try {
-          await del(`/api/prompts/${prompt.id}`);
-          flash("Prompt deleted.");
+          await postJson(`/api/admin/prompts/${prompt.id}/versions/${version.version}/restore`, {});
           await refreshPrompts();
+          if (historyPromptId === prompt.id) await loadPromptVersions(prompt.id);
+          flash(`Prompt version ${version.version} restored into a new current version.`);
           return true;
         } catch (e) {
-          flash(e instanceof Error ? e.message : "Delete failed");
+          flash(e instanceof Error ? e.message : "Restore failed");
           return false;
         }
       },
@@ -669,8 +768,43 @@
     agent_id: number;
     prompt_id: number;
     prompt_mode: PromptMode;
+    direction: Direction;
+    direction_editable: boolean;
     cost_bps: string;
   } | null>(null);
+  let portfolioEditLoadingId = $state<number | null>(null);
+
+  function promptsForPortfolio(currentPromptId: number): AdminPrompt[] {
+    return prompts.filter((prompt) => prompt.status === "active" || prompt.id === currentPromptId);
+  }
+
+  async function beginPortfolioEdit(portfolio: ArenaPortfolio): Promise<void> {
+    portfolioEditLoadingId = portfolio.id;
+    try {
+      const payload = await apiJson<AdminPortfolioDetailResponse>(`/api/portfolios/${portfolio.id}/detail`);
+      const portfolioDetail = payload.portfolio;
+      const directionEditable =
+        portfolioDetail.kind === "managed"
+          ? portfolioDetail.allocations.length === 0
+          : !portfolioDetail.founding_v2 &&
+            portfolioDetail.signals.length === 0 &&
+            portfolioDetail.signals_next_cursor === null;
+      editPortfolio = {
+        id: portfolio.id,
+        name: portfolio.name,
+        agent_id: portfolio.agent.id,
+        prompt_id: portfolio.prompt.id,
+        prompt_mode: portfolio.prompt_mode,
+        direction: portfolio.direction,
+        direction_editable: directionEditable,
+        cost_bps: String(portfolio.cost_bps),
+      };
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Could not inspect portfolio history.");
+    } finally {
+      portfolioEditLoadingId = null;
+    }
+  }
 
   async function toggleArchive(portfolio: ArenaPortfolio) {
     await patchJson(`/api/portfolios/${portfolio.id}`, {
@@ -683,13 +817,15 @@
     event.preventDefault();
     if (!editPortfolio) return;
     try {
-      await patchJson(`/api/portfolios/${editPortfolio.id}`, {
+      const body: Record<string, unknown> = {
         name: editPortfolio.name,
         agent_id: editPortfolio.agent_id,
         prompt_id: editPortfolio.prompt_id,
         prompt_mode: editPortfolio.prompt_mode,
         cost_bps: parseInt(editPortfolio.cost_bps, 10) || 0,
-      });
+      };
+      if (editPortfolio.direction_editable) body.direction = editPortfolio.direction;
+      await patchJson(`/api/portfolios/${editPortfolio.id}`, body);
       editPortfolio = null;
       await loadAll();
       flash("Portfolio saved.");
@@ -884,7 +1020,7 @@
               <option value="">Select a portfolio…</option>
               {#each portfolios as portfolio (portfolio.slug)}
                 <option value={portfolio.slug}>
-                  {portfolio.name} — {portfolio.agent.name} — {portfolio.prompt_mode}
+                  {portfolio.name} — {portfolio.direction} — {portfolio.agent.name} — {portfolio.prompt_mode}
                   {portfolio.status === "archived" ? " (archived)" : ""}
                 </option>
               {/each}
@@ -895,7 +1031,9 @@
             <div class="loading-block"><span class="spinner" aria-hidden="true"></span></div>
           {:else if detail}
             <p class="muted picked-meta">
+              <span class="badge">{detail.direction}</span>
               {detail.agent.name} · prompt {detail.prompt.name} · {detail.prompt_mode}
+              {#if detail.is_liquidated}<span class="badge neg">liquidated</span>{/if}
             </p>
             <div class="state-head">
               <h2>{detail.kind === "managed" ? "Managed state" : "Daily signal state"}</h2>
@@ -904,6 +1042,14 @@
 
             {@const managedDetail = detail.kind === "managed" ? (detail as ManagedPortfolioDetail) : null}
             {@const rebuiltDetail = detail.kind === "rebuilt" ? (detail as RebuiltPortfolioDetail) : null}
+
+            {#if detail.is_liquidated}
+              <div class="notice-box" role="status">
+                {detail.kind === "managed"
+                  ? "This managed portfolio is liquidated. Its history remains available and Reset can clear it, but new allocations are disabled until then."
+                  : "The selected rebuilt policy is liquidated. Independent signals remain enabled because they feed other policies and future cohorts."}
+              </div>
+            {/if}
 
             {#if managedDetail}
               <div class="table-scroll history">
@@ -933,10 +1079,12 @@
                             .join(", ")}
                         </td>
                         <td class="right actions">
-                          <button class="btn small" onclick={() => (editingAllocation = allocation)}
-                            >Edit</button
-                          >
-                          {#if !allocation.locked}
+                          {#if !managedDetail.is_liquidated}
+                            <button class="btn small" onclick={() => (editingAllocation = allocation)}
+                              >Edit</button
+                            >
+                          {/if}
+                          {#if !allocation.locked && !managedDetail.is_liquidated}
                             <button class="btn small danger" onclick={() => deleteAllocation(allocation)}>
                               Delete
                             </button>
@@ -951,7 +1099,7 @@
               </div>
 
               <div class="state-head">
-                <h2>Current holdings</h2>
+                <h2>Current {managedDetail.direction} holdings</h2>
                 <button class="btn small" onclick={copyHandoff} disabled={!managedDetail.allocations.length}>
                   Copy handoff
                 </button>
@@ -961,17 +1109,23 @@
                   <table>
                     <thead>
                       <tr>
-                        <th>Symbol</th><th class="right">Buy</th><th class="right">Now</th>
-                        <th class="right">Change</th><th class="right">Weight</th>
+                        <th>Symbol</th><th class="right">Entry</th><th class="right">Now</th>
+                        <th class="right">Position return</th><th class="right">Weight</th>
                         <th class="right">Target</th><th>Note</th>
                       </tr>
                     </thead>
                     <tbody>
                       {#each managedDetail.holdings as holding (holding.symbol)}
-                        {@const chg =
+                        {@const priceMove =
                           holding.entry_price && holding.current_price
                             ? (holding.current_price / holding.entry_price - 1) * 100
                             : null}
+                        {@const positionReturn =
+                          priceMove === null
+                            ? null
+                            : managedDetail.direction === "short"
+                              ? -priceMove
+                              : priceMove}
                         <tr>
                           <td class="num">{holding.symbol}</td>
                           <td class="right num"
@@ -980,7 +1134,9 @@
                           <td class="right num"
                             >{holding.current_price != null ? num(holding.current_price) : "—"}</td
                           >
-                          <td class="right num {signClass(chg)}">{chg != null ? pctPoints(chg, 2) : "—"}</td>
+                          <td class="right num {signClass(positionReturn)}">
+                            {positionReturn != null ? pctPoints(positionReturn, 2) : "—"}
+                          </td>
                           <td class="right num">{pctPoints(holding.weight_pct)}</td>
                           <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
                           <td class="muted preview">{holding.note || "—"}</td>
@@ -993,7 +1149,9 @@
                 <p class="muted prefill-note">No drifted holdings yet.</p>
               {/if}
 
-              {#if editingAllocation}
+              {#if managedDetail.is_liquidated}
+                <p class="muted prefill-note">No further allocations can be entered.</p>
+              {:else if editingAllocation}
                 <h2>
                   Edit allocation effective {editingAllocation.effective_date}
                   <button class="btn small" onclick={() => (editingAllocation = null)}>Cancel</button>
@@ -1004,6 +1162,7 @@
                     initialNote={editingAllocation.note}
                     positionsEditable={!editingAllocation.locked}
                     policy={managedDetail.prompt.allocation_policy}
+                    direction={managedDetail.direction}
                     submitLabel="Save changes"
                     onSubmit={submitEdit}
                   />
@@ -1017,6 +1176,7 @@
                   <AllocationForm
                     initialPositions={latestAllocation?.positions ?? []}
                     policy={managedDetail.prompt.allocation_policy}
+                    direction={managedDetail.direction}
                     submitLabel={managedDetail.allocations.length
                       ? "Enter rebalance"
                       : "Enter first allocation"}
@@ -1080,6 +1240,7 @@
                     initialNote={editingSignal.note}
                     policy={rebuiltDetail.prompt.allocation_policy}
                     entryKind="signal"
+                    direction={rebuiltDetail.direction}
                     submitLabel="Save signal"
                     onSubmit={submitSignalEdit}
                   />
@@ -1087,12 +1248,14 @@
               {:else}
                 <h2>New independent signal</h2>
                 <p class="muted prefill-note">
-                  Build this complete signal from scratch; prior targets are intentionally not pre-filled.
+                  Build this complete {rebuiltDetail.direction} signal from scratch; prior targets are intentionally
+                  not pre-filled.
                 </p>
                 {#key formKey}
                   <AllocationForm
                     policy={rebuiltDetail.prompt.allocation_policy}
                     entryKind="signal"
+                    direction={rebuiltDetail.direction}
                     submitLabel="Enter signal"
                     onSubmit={submitSignal}
                   />
@@ -1122,7 +1285,7 @@
             <div class="grid-2">
               <div class="field">
                 <label for="np-name">Portfolio name</label>
-                <input id="np-name" type="text" bind:value={newName} placeholder="Claude Weekly Manager" />
+                <input id="np-name" type="text" bind:value={newName} placeholder="Daily Alpha Signal" />
               </div>
               <div class="field">
                 <label for="np-cost">Cost bps <span class="muted">(blank = default)</span></label>
@@ -1145,24 +1308,35 @@
               <label for="np-prompt">Prompt</label>
               <select id="np-prompt" bind:value={newPromptId}>
                 <option value={null} disabled>Select a prompt…</option>
-                {#each prompts as prompt (prompt.id)}
+                {#each activePrompts as prompt (prompt.id)}
                   <option value={prompt.id}>{prompt.name}</option>
                 {/each}
               </select>
-              {#if prompts.length === 0}
-                <p class="muted hint">No prompts yet — create one in the Prompts tab first.</p>
+              {#if activePrompts.length === 0}
+                <p class="muted hint">No active prompts — create or unarchive one in the Prompts tab.</p>
               {/if}
             </div>
-            <div class="field">
-              <label for="np-prompt-mode">Prompt version</label>
-              <select id="np-prompt-mode" bind:value={newPromptMode}>
-                <option value="managed">Managed</option>
-                <option value="rebuilt">Rebuilt</option>
-              </select>
-              <p class="muted hint">
-                Managed receives prior portfolio state; Rebuilt is evaluated without holdings, notes, history,
-                performance, or costs.
-              </p>
+            <div class="grid-2">
+              <div class="field">
+                <label for="np-direction">Direction</label>
+                <select id="np-direction" bind:value={newDirection}>
+                  <option value="long">Long</option>
+                  <option value="short">Short</option>
+                </select>
+                <p class="muted hint">
+                  Long selects expected outperformers; Short selects expected underperformers.
+                </p>
+              </div>
+              <div class="field">
+                <label for="np-prompt-mode">Track</label>
+                <select id="np-prompt-mode" bind:value={newPromptMode}>
+                  <option value="managed">Managed</option>
+                  <option value="rebuilt">Rebuilt</option>
+                </select>
+                <p class="muted hint">
+                  Managed receives prior portfolio state; Rebuilt receives no prior portfolio context.
+                </p>
+              </div>
             </div>
 
             {#if portfolioError}
@@ -1198,17 +1372,35 @@
                 <div class="field">
                   <label for="epf-prompt-{portfolio.id}">Prompt</label>
                   <select id="epf-prompt-{portfolio.id}" bind:value={editPortfolio.prompt_id}>
-                    {#each prompts as prompt (prompt.id)}
-                      <option value={prompt.id}>{prompt.name}</option>
+                    {#each promptsForPortfolio(editPortfolio.prompt_id) as prompt (prompt.id)}
+                      <option value={prompt.id} disabled={prompt.status === "archived"}>
+                        {prompt.name}{prompt.status === "archived" ? " (archived)" : ""}
+                      </option>
                     {/each}
                   </select>
                 </div>
                 <div class="field">
-                  <label for="epf-prompt-mode-{portfolio.id}">Prompt version</label>
+                  <label for="epf-prompt-mode-{portfolio.id}">Track</label>
                   <select id="epf-prompt-mode-{portfolio.id}" bind:value={editPortfolio.prompt_mode}>
                     <option value="managed">Managed</option>
                     <option value="rebuilt">Rebuilt</option>
                   </select>
+                </div>
+                <div class="field">
+                  <label for="epf-direction-{portfolio.id}">Direction</label>
+                  <select
+                    id="epf-direction-{portfolio.id}"
+                    bind:value={editPortfolio.direction}
+                    disabled={!editPortfolio.direction_editable}
+                  >
+                    <option value="long">Long</option>
+                    <option value="short">Short</option>
+                  </select>
+                  <p class="muted hint">
+                    {editPortfolio.direction_editable
+                      ? "Editable until the first allocation or signal."
+                      : "Locked because this portfolio has allocation or signal history."}
+                  </p>
                 </div>
                 <div class="field">
                   <label for="epf-cost-{portfolio.id}">Cost bps</label>
@@ -1229,24 +1421,23 @@
                 <div>
                   <strong>{portfolio.name}</strong>
                   <span class="muted">
-                    · {portfolio.agent.name} · {portfolio.prompt_mode} · {portfolio.cost_bps} bps ·
+                    · {portfolio.direction} · {portfolio.agent.name} · {portfolio.prompt_mode} ·
+                    {portfolio.cost_bps} bps ·
                     {portfolio.status}</span
                   >
+                  {#if portfolio.is_liquidated}
+                    <span class="badge neg"
+                      >{portfolio.kind === "rebuilt" ? "policy liquidated" : "liquidated"}</span
+                    >
+                  {/if}
                 </div>
                 <div class="row-actions">
                   <button
                     class="btn small"
-                    onclick={() =>
-                      (editPortfolio = {
-                        id: portfolio.id,
-                        name: portfolio.name,
-                        agent_id: portfolio.agent.id,
-                        prompt_id: portfolio.prompt.id,
-                        prompt_mode: portfolio.prompt_mode,
-                        cost_bps: String(portfolio.cost_bps),
-                      })}
+                    onclick={() => beginPortfolioEdit(portfolio)}
+                    disabled={portfolioEditLoadingId === portfolio.id}
                   >
-                    Edit
+                    {portfolioEditLoadingId === portfolio.id ? "Loading…" : "Edit"}
                   </button>
                   <button class="btn small" onclick={() => toggleArchive(portfolio)}>
                     {portfolio.status === "active" ? "Archive" : "Unarchive"}
@@ -1614,8 +1805,24 @@
             </button>
           </form>
 
-          <h2 class="spaced">Prompts</h2>
-          {#each prompts as prompt (prompt.id)}
+          <div class="prompt-list-head spaced">
+            <div>
+              <h2>Prompts</h2>
+              <p class="muted">
+                Edits create immutable versions; archived prompts remain available to history.
+              </p>
+            </div>
+            <div class="field prompt-filter">
+              <label for="prompt-status-filter">Status</label>
+              <select id="prompt-status-filter" bind:value={promptStatusFilter}>
+                <option value="active">Active</option>
+                <option value="archived">Archived</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+          </div>
+
+          {#each filteredPrompts as prompt (prompt.id)}
             {#if editPrompt?.id === prompt.id}
               <form class="edit-form" onsubmit={savePrompt}>
                 <div class="field">
@@ -1662,15 +1869,24 @@
                 </div>
               </form>
             {:else}
-              {@const used = prompt.portfolio_count ?? 0}
-              <div class="manage-row">
+              <div class={["manage-row", "prompt-row", prompt.status === "archived" && "archived-row"]}>
                 <div>
                   <strong>{prompt.name}</strong>
-                  <span class="muted"> · {used} portfolio(s)</span>
+                  <span class={["badge", prompt.status === "archived" && "warn"]}>{prompt.status}</span>
+                  <span class="muted"> · {prompt.portfolio_count} portfolio(s)</span>
+                  <span class="muted">
+                    · current v{prompt.current_version} · {prompt.version_count} version{prompt.version_count ===
+                    1
+                      ? ""
+                      : "s"}
+                  </span>
                   <span class="muted">
                     · {prompt.allocation_policy.min_position_weight_pct}%–{prompt.allocation_policy
                       .max_position_weight_pct}% per position
                   </span>
+                  {#if prompt.archived_at}
+                    <span class="muted"> · archived {fmtDate(prompt.archived_at)}</span>
+                  {/if}
                   <p class="muted preview">
                     {prompt.text.slice(0, 140)}{prompt.text.length > 140 ? "…" : ""}
                   </p>
@@ -1678,25 +1894,123 @@
                 <div class="row-actions">
                   <button
                     class="btn small"
-                    onclick={() =>
-                      (editPrompt = {
-                        ...prompt,
-                        allocation_policy: { ...prompt.allocation_policy },
-                      })}>Edit</button
+                    onclick={() => beginPromptEdit(prompt)}
+                    disabled={prompt.status === "archived"}
+                    title={prompt.status === "archived" ? "Unarchive this prompt before editing" : ""}
+                    >Edit</button
                   >
                   <button
-                    class="btn small danger"
-                    onclick={() => deletePrompt(prompt)}
-                    disabled={used > 0}
-                    title={used > 0 ? "Used by existing portfolios" : ""}
+                    class="btn small"
+                    onclick={() => setPromptArchived(prompt, prompt.status === "active")}
+                    disabled={promptAction.endsWith(`-${prompt.id}`) ||
+                      (prompt.status === "active" && prompt.portfolio_count > 0)}
+                    title={prompt.status === "active" && prompt.portfolio_count > 0
+                      ? "A prompt used by a portfolio cannot be archived"
+                      : ""}
                   >
-                    Delete
+                    {promptAction.endsWith(`-${prompt.id}`)
+                      ? "Saving…"
+                      : prompt.status === "active"
+                        ? "Archive"
+                        : "Unarchive"}
+                  </button>
+                  <button
+                    class="btn small"
+                    aria-expanded={historyPromptId === prompt.id}
+                    onclick={() => togglePromptHistory(prompt)}
+                  >
+                    {historyPromptId === prompt.id ? "Hide history" : "History"}
                   </button>
                 </div>
               </div>
+              {#if historyPromptId === prompt.id}
+                <section class="prompt-history" aria-label={`Version history for ${prompt.name}`}>
+                  <header>
+                    <div>
+                      <h3>Version history</h3>
+                      <p class="muted">
+                        Newest first. Restoring copies a snapshot into a new current version.
+                      </p>
+                    </div>
+                    <span class="badge">v{prompt.current_version} current</span>
+                  </header>
+
+                  {#if promptHistoryError}
+                    <div class="error-box" role="alert">{promptHistoryError}</div>
+                  {:else if promptHistoryLoading}
+                    <div class="loading-block" aria-live="polite">
+                      <span class="spinner" aria-hidden="true"></span>
+                      Loading version history…
+                    </div>
+                  {:else}
+                    <div class="table-scroll">
+                      <table class="version-table">
+                        <caption>Immutable versions for {prompt.name}</caption>
+                        <thead>
+                          <tr>
+                            <th>Version</th>
+                            <th>Snapshot</th>
+                            <th>Created</th>
+                            <th>Origin</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {#each promptVersions as version (version.version)}
+                            <tr>
+                              <th scope="row" class="num">
+                                v{version.version}
+                                {#if version.version === prompt.current_version}
+                                  <span class="badge success">current</span>
+                                {/if}
+                              </th>
+                              <td class="version-snapshot">
+                                <strong>{version.name}</strong>
+                                <span class="muted">
+                                  {version.allocation_policy.min_position_weight_pct}%–{version
+                                    .allocation_policy.max_position_weight_pct}% per position
+                                </span>
+                                <p class="muted preview">
+                                  {version.text.slice(0, 120)}{version.text.length > 120 ? "…" : ""}
+                                </p>
+                              </td>
+                              <td class="num">{fmtDate(version.created_at)}</td>
+                              <td>
+                                {version.restored_from_version === null
+                                  ? version.version === 1
+                                    ? "Created"
+                                    : "Edit"
+                                  : `Restored from v${version.restored_from_version}`}
+                              </td>
+                              <td class="right">
+                                <button
+                                  class="btn small"
+                                  onclick={() => restorePromptVersion(prompt, version)}
+                                  disabled={version.version === prompt.current_version}
+                                  title={version.version === prompt.current_version
+                                    ? "This is already the current version"
+                                    : `Restore version ${version.version}`}
+                                >
+                                  Restore
+                                </button>
+                              </td>
+                            </tr>
+                          {:else}
+                            <tr><td colspan="5" class="muted">No versions recorded.</td></tr>
+                          {/each}
+                        </tbody>
+                      </table>
+                    </div>
+                  {/if}
+                </section>
+              {/if}
             {/if}
           {:else}
-            <div class="empty-state"><p>No prompts yet — create one above.</p></div>
+            <div class="empty-state">
+              <p>
+                No {promptStatusFilter === "all" ? "" : `${promptStatusFilter} `}prompts match this filter.
+              </p>
+            </div>
           {/each}
         </section>
       {/if}
@@ -2001,6 +2315,70 @@
     border-bottom: none;
   }
 
+  .prompt-list-head {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 18px;
+    padding-top: 24px;
+    margin-top: 28px;
+    border-top: 1px solid var(--border-strong);
+  }
+
+  .prompt-list-head h2 {
+    margin: 0 0 4px;
+  }
+
+  .prompt-list-head p {
+    margin: 0;
+  }
+
+  .prompt-filter {
+    width: 180px;
+    margin-bottom: 0;
+  }
+
+  .archived-row {
+    opacity: 0.78;
+  }
+
+  .prompt-history {
+    display: grid;
+    gap: 12px;
+    padding: 16px;
+    margin: 0 0 16px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-inset);
+  }
+
+  .prompt-history header {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 14px;
+  }
+
+  .prompt-history h3 {
+    margin: 0 0 4px;
+  }
+
+  .prompt-history p {
+    margin: 0;
+  }
+
+  .version-table {
+    min-width: 860px;
+  }
+
+  .version-snapshot {
+    min-width: 300px;
+  }
+
+  .version-snapshot > strong,
+  .version-snapshot > span {
+    display: block;
+  }
+
   .preview {
     font-size: 12.5px;
     margin-top: 2px;
@@ -2067,6 +2445,16 @@
       align-items: start;
       flex-direction: column;
       gap: 14px;
+    }
+
+    .prompt-list-head,
+    .prompt-history header {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .prompt-filter {
+      width: 100%;
     }
 
     .manage-row {

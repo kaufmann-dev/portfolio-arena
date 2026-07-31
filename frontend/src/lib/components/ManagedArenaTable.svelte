@@ -87,6 +87,10 @@
     if (sortKey !== key) return undefined;
     return sortDesc ? "descending" : "ascending";
   }
+
+  function detailHref(row: ManagedArenaPortfolio): string {
+    return portfolioAnalysisHref(row.slug, "managed", row.direction);
+  }
 </script>
 
 {#snippet sortHeader(key: SortKey, label: string)}
@@ -109,16 +113,18 @@
 {/snippet}
 
 {#snippet portfolioIdentity(row: ManagedArenaPortfolio)}
-  <a
-    class="portfolio-link"
-    href={portfolioAnalysisHref(row.slug, "managed")}
-    onclick={(event) => link(event, portfolioAnalysisHref(row.slug, "managed"))}
-  >
+  <a class="portfolio-link" href={detailHref(row)} onclick={(event) => link(event, detailHref(row))}>
     {row.name}
   </a>
   <span class="badges">
+    <span class="badge">{row.direction}</span>
     <EvidenceBadge state={row.evidence} compact />
     {#if row.status === "archived"}<span class="badge">archived</span>{/if}
+    {#if row.is_liquidated}
+      <span class="badge neg" title={row.liquidated_at ? `Liquidated ${row.liquidated_at}` : "Liquidated"}>
+        liquidated
+      </span>
+    {/if}
     {#if row.stale_data}<span class="badge warn">stale data</span>{/if}
     {#if row.error}<span class="badge neg" title={row.error}>error</span>{/if}
   </span>
@@ -171,9 +177,12 @@
           <tr class="benchmark">
             <td></td>
             <td class="rank-col"><span class="badge">REF</span></td>
-            <th scope="row">SPY</th>
+            <th scope="row">
+              {benchmark.name}
+              {#if benchmark.is_liquidated}<span class="badge neg">liquidated</span>{/if}
+            </th>
             <td>—</td>
-            <td>Buy and hold</td>
+            <td>{benchmark.direction === "short" ? "Daily −1× SPY" : "Buy and hold SPY"}</td>
             <td class="right num">0.00%</td>
             <td class="right num">0.00%</td>
             <td class="right num">0.00%</td>
@@ -247,8 +256,13 @@
 
     {#if benchmark}
       <article class="mobile-card benchmark-card">
-        <header><span class="rank">REF</span><strong>SPY</strong><span class="badge">reference</span></header>
-        <p>Zero-alpha benchmark · buy and hold</p>
+        <header>
+          <span class="rank">REF</span><strong>{benchmark.name}</strong><span class="badge">reference</span>
+          {#if benchmark.is_liquidated}<span class="badge neg">liquidated</span>{/if}
+        </header>
+        <p>
+          Zero-alpha benchmark · {benchmark.direction === "short" ? "daily −1× SPY" : "buy and hold SPY"}
+        </p>
       </article>
     {/if}
 

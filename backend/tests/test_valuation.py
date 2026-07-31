@@ -6,6 +6,7 @@ NAV series are base-100 at the first effective close.
 
 import pytest
 
+from app.services.serialize import synthetic_spy_row
 from app.services.valuation import (
     AllocationInput,
     PositionInput,
@@ -251,3 +252,126 @@ def test_rebase_series_windows():
     assert [point["date"] for point in rebased] == DAYS[1:4]
     assert rebased[0]["nav"] == pytest.approx(100.0)
     assert rebased[-1]["nav"] == pytest.approx(103.0 / 101.0 * 100.0)
+
+
+def test_explicit_long_direction_is_identical_to_default_path():
+    prices = {
+        "AAA": series(*((day, 10.0 + i) for i, day in enumerate(DAYS))),
+        "BBB": series(*((day, 20.0 - i / 2) for i, day in enumerate(DAYS))),
+    }
+    allocations = [
+        AllocationInput(DAYS[0], (equity("AAA", 70.0), equity("BBB", 30.0))),
+        AllocationInput(DAYS[2], (equity("AAA", 40.0), equity("BBB", 60.0))),
+    ]
+
+    default = value_portfolio(
+        allocations,
+        cost_bps=25,
+        prices=prices,
+        calendar=calendar(),
+        as_of=DAYS[-1],
+    )
+    explicit = value_portfolio(
+        allocations,
+        cost_bps=25,
+        prices=prices,
+        calendar=calendar(),
+        as_of=DAYS[-1],
+        direction="long",
+    )
+
+    assert explicit == default
+
+
+def test_managed_short_uses_opposite_pnl_and_gross_weights_drift():
+    prices = {"AAA": series((DAYS[0], 100.0), (DAYS[1], 150.0))}
+    allocations = [AllocationInput(DAYS[0], (equity("AAA", 100.0),))]
+
+    result = value_portfolio(
+        allocations,
+        cost_bps=0,
+        prices=prices,
+        calendar=calendar(),
+        as_of=DAYS[1],
+        direction="short",
+    )
+
+    assert result.series == [
+        {"date": DAYS[0], "nav": pytest.approx(100.0)},
+        {"date": DAYS[1], "nav": pytest.approx(50.0)},
+    ]
+    assert result.holdings[0].value == pytest.approx(150.0)
+    assert result.holdings[0].weight_pct == pytest.approx(300.0)
+
+
+def test_managed_short_rebalance_cost_uses_absolute_traded_notional():
+    prices = {
+        "AAA": series(*((day, 10.0) for day in DAYS)),
+        "BBB": series(*((day, 20.0) for day in DAYS)),
+    }
+    allocations = [
+        AllocationInput(DAYS[0], (equity("AAA", 100.0),)),
+        AllocationInput(DAYS[1], (equity("BBB", 100.0),)),
+    ]
+
+    result = value_portfolio(
+        allocations,
+        cost_bps=10,
+        prices=prices,
+        calendar=calendar(),
+        as_of=DAYS[1],
+        direction="short",
+    )
+
+    initial, rebalance = result.allocations
+    assert initial.cost == pytest.approx(0.1)
+    assert rebalance.turnover_pct == pytest.approx(100.0)
+    # Covering AAA and opening BBB trades 200% of pre-cost NAV.
+    assert rebalance.cost == pytest.approx(rebalance.nav_before * 2.0 * 10 / 10_000)
+
+
+def test_managed_short_liquidation_is_absorbing_and_leaves_later_allocation_pending():
+    prices = {
+        "AAA": series(*((day, value) for day, value in zip(DAYS, [100, 201, 210, 220, 230], strict=True))),
+        "BBB": series(*((day, 20.0) for day in DAYS)),
+    }
+    allocations = [
+        AllocationInput(DAYS[0], (equity("AAA", 100.0),)),
+        AllocationInput(DAYS[2], (equity("BBB", 100.0),)),
+    ]
+
+    result = value_portfolio(
+        allocations,
+        cost_bps=0,
+        prices=prices,
+        calendar=calendar(),
+        as_of=DAYS[-1],
+        direction="short",
+    )
+
+    assert result.liquidated_at == DAYS[1]
+    assert result.series[1:] == [{"date": day, "nav": 0.0} for day in DAYS[1:]]
+    assert result.holdings == []
+    assert result.allocations[1].effective_date == DAYS[2]
+    assert result.allocations[1].applied_date is None
+
+
+def test_short_spy_benchmark_compounds_inverse_daily_returns():
+    spy = series((DAYS[0], 100.0), (DAYS[1], 110.0), (DAYS[2], 99.0))
+
+    rebased = rebase_series(spy, DAYS[0], DAYS[2], direction="short")
+
+    assert rebased[-1]["nav"] == pytest.approx(100.0 * 0.9 * 1.1)
+
+
+def test_synthetic_short_spy_row_exposes_direction_and_liquidation():
+    spy = series((DAYS[0], 100.0), (DAYS[1], 210.0), (DAYS[2], 220.0))
+
+    row = synthetic_spy_row(spy, direction="short")
+
+    assert row["slug"] == "spy"
+    assert row["name"] == "Short SPY"
+    assert row["direction"] == "short"
+    assert row["is_liquidated"] is True
+    assert row["liquidated_at"] == DAYS[1]
+    assert row["sparkline"] == [100.0, 0.0, 0.0]

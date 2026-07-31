@@ -6,6 +6,7 @@
     ArenaTrack,
     CompareResponse,
     CostBasis,
+    Direction,
     ManagedArenaPortfolio,
     ManagedArenaResponse,
     RebuiltArenaPortfolio,
@@ -13,7 +14,7 @@
     RebuiltObjective,
     RebuiltView,
   } from "../api/types";
-  import { rebuiltContext, rebuiltContextParams } from "../arena";
+  import { parseDirection, rebuiltContext, rebuiltContextParams } from "../arena";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import ManagedArenaTable from "../components/ManagedArenaTable.svelte";
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
@@ -26,6 +27,18 @@
 
   type RealPortfolio = ManagedArenaPortfolio | RebuiltArenaPortfolio;
 
+  const DIRECTIONS: { value: Direction; label: string; description: string }[] = [
+    {
+      value: "long",
+      label: "Long",
+      description: "Strategies select assets expected to outperform while capital remains fully invested.",
+    },
+    {
+      value: "short",
+      label: "Short",
+      description: "Strategies select assets expected to underperform through fully invested short books.",
+    },
+  ];
   const TRACKS: { value: ArenaTrack; label: string; description: string }[] = [
     {
       value: "rebuilt",
@@ -58,6 +71,9 @@
     label: `H${index + 1} · ${index + 1} session${index ? "s" : ""}`,
   }));
 
+  let direction = $state<Direction>(
+    parseDirection(new URLSearchParams(window.location.search).get("direction")),
+  );
   let track = $state<ArenaTrack>("rebuilt");
   let rebuiltView = $state<RebuiltView>("common");
   let objective = $state<RebuiltObjective>("canonical");
@@ -102,6 +118,10 @@
   });
   const agentOptions = $derived([{ value: "all", label: "All agents" }, ...agents]);
   const promptOptions = $derived([{ value: "all", label: "All prompts" }, ...prompts]);
+  const rebuiltBenchmarkName = $derived(
+    rebuiltData?.portfolios.find((row) => row.kind === "benchmark")?.name ??
+      (direction === "short" ? "Short SPY" : "SPY"),
+  );
   const filteredRealRows = $derived(
     allRealRows.filter(
       (row) =>
@@ -132,7 +152,7 @@
     }));
     if (compareData.spy_series.length) {
       portfolioSeries.push({
-        name: "SPY",
+        name: compareData.direction === "short" ? "Short SPY" : "SPY",
         points: compareData.spy_series,
         dashed: true,
         color: "var(--spark)",
@@ -141,14 +161,26 @@
     return portfolioSeries;
   });
   const displayedMarketData = $derived(combineMarketData(currentData, compareData));
+  const activeDirectionDescription = $derived(
+    DIRECTIONS.find((item) => item.value === direction)?.description ?? "",
+  );
   const activeTrackDescription = $derived(TRACKS.find((item) => item.value === track)?.description ?? "");
 
   onMount(() => {
+    writeDirectionUrl(direction);
     void loadArena();
   });
 
   function rebuiltQuery(): URLSearchParams {
-    return rebuiltContextParams(rebuiltContext(rebuiltView, objective, costBasis, horizon));
+    const query = rebuiltContextParams(rebuiltContext(rebuiltView, objective, costBasis, horizon));
+    query.set("direction", direction);
+    return query;
+  }
+
+  function writeDirectionUrl(next: Direction): void {
+    const url = new URL(window.location.href);
+    url.searchParams.set("direction", next);
+    window.history.replaceState(window.history.state, "", url);
   }
 
   async function loadArena(): Promise<void> {
@@ -157,7 +189,7 @@
     loading = true;
     try {
       if (track === "managed") {
-        const payload = await apiJson<ManagedArenaResponse>("/api/arena/managed");
+        const payload = await apiJson<ManagedArenaResponse>(`/api/arena/managed?direction=${direction}`);
         if (sequence === requestSequence) managedData = payload;
       } else {
         const payload = await apiJson<RebuiltArenaResponse>(
@@ -177,6 +209,17 @@
   function resetFilters(): void {
     agentFilter = "all";
     promptFilter = "all";
+  }
+
+  function changeDirection(next: Direction): void {
+    if (direction === next) return;
+    direction = next;
+    writeDirectionUrl(next);
+    managedData = null;
+    rebuiltData = null;
+    resetFilters();
+    clearComparison();
+    void loadArena();
   }
 
   function changeTrack(next: ArenaTrack): void {
@@ -258,7 +301,7 @@
       return;
     }
 
-    const query = new URLSearchParams({ slugs: slugs.join(","), track });
+    const query = new URLSearchParams({ slugs: slugs.join(","), track, direction });
     if (track === "rebuilt") {
       for (const [key, value] of rebuiltQuery()) query.set(key, value);
     }
@@ -287,8 +330,8 @@
     <div>
       <h1 id="arena-title">Portfolio Arena</h1>
       <p class="lede">
-        Which AI investment strategy produces repeatable alpha over SPY? Compare independent signals and
-        stateful portfolios on evidence, not a single lucky return.
+        Which AI investment strategy produces repeatable alpha? Compare long and short independent signals and
+        stateful portfolios against their SPY reference on evidence, not a single lucky return.
       </p>
     </div>
     <div class="valuation-stamp">
@@ -298,6 +341,20 @@
       </strong>
     </div>
   </header>
+
+  <nav class="direction-selector" aria-label="Investment direction">
+    {#each DIRECTIONS as item (item.value)}
+      <button
+        type="button"
+        class={{ active: direction === item.value }}
+        aria-pressed={direction === item.value}
+        onclick={() => changeDirection(item.value)}
+      >
+        {item.label}
+      </button>
+    {/each}
+  </nav>
+  <p class="direction-description">{activeDirectionDescription}</p>
 
   <nav class="track-selector" aria-label="Arena track">
     {#each TRACKS as item (item.value)}
@@ -453,7 +510,8 @@
   {#if loading && !currentData}
     <div class="loading-state" aria-live="polite" aria-busy="true">
       <span class="loading-mark" aria-hidden="true"></span>
-      Building {track} rankings…
+      Building {direction}
+      {track} rankings…
     </div>
   {:else if track === "managed" && managedData}
     <ManagedArenaTable rows={managedRows} {selected} onToggle={toggleCompare} />
@@ -466,7 +524,12 @@
       onToggle={toggleCompare}
     />
     {#if rebuiltView === "signal"}
-      <SignalMatrix rows={signalRows} selectedHorizon={horizon} context={rebuiltData.context} />
+      <SignalMatrix
+        rows={signalRows}
+        selectedHorizon={horizon}
+        context={rebuiltData.context}
+        benchmarkName={rebuiltBenchmarkName}
+      />
     {/if}
   {/if}
 </section>
@@ -523,12 +586,14 @@
     font-weight: 550;
   }
 
+  .direction-selector,
   .track-selector {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     border: 1px solid var(--border-strong);
   }
 
+  .direction-selector button,
   .track-selector button {
     min-height: 72px;
     display: grid;
@@ -540,19 +605,33 @@
     text-align: left;
   }
 
+  .direction-selector button:last-child,
   .track-selector button:last-child {
     border-right: 0;
   }
 
+  .direction-selector button:hover,
+  .direction-selector button:focus-visible,
   .track-selector button:hover,
   .track-selector button:focus-visible {
     background: var(--bg-surface-hover);
     color: var(--text-primary);
   }
 
+  .direction-selector button.active,
   .track-selector button.active {
     color: var(--text-inverse);
     background: var(--accent);
+  }
+
+  .direction-selector button {
+    min-height: 46px;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 760;
+    letter-spacing: 0.08em;
+    text-align: center;
+    text-transform: uppercase;
   }
 
   .track-selector strong {
@@ -565,6 +644,7 @@
     text-transform: uppercase;
   }
 
+  .direction-description,
   .track-description {
     margin-top: -12px;
     color: var(--text-secondary);

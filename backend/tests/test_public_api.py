@@ -16,7 +16,7 @@ def find(rows, slug):
 
 class TestLeaderboard:
     def test_empty_arena(self, client):
-        payload = client.get("/api/arena/managed").json()
+        payload = client.get("/api/arena/managed?direction=long").json()
         assert payload["market_data_status"] == "fresh"
         assert payload["portfolios"] == [
             {
@@ -24,6 +24,7 @@ class TestLeaderboard:
                 "id": None,
                 "slug": "spy",
                 "name": "SPY",
+                "direction": "long",
                 "status": "reference",
                 "rank": None,
                 "evidence": "pending",
@@ -37,14 +38,17 @@ class TestLeaderboard:
                     "ci_lower": None,
                     "ci_upper": None,
                     "evidence": "pending",
+                    "liquidated_at": None,
                 },
                 "sparkline": [],
+                "is_liquidated": False,
+                "liquidated_at": None,
             }
         ]
 
     def test_portfolio_with_history(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        payload = client.get("/api/arena/managed").json()
+        payload = client.get("/api/arena/managed?direction=long").json()
 
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row is not None
@@ -63,7 +67,7 @@ class TestLeaderboard:
         sample_portfolio,
     ):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        payload = client.get("/api/arena/managed").json()
+        payload = client.get("/api/arena/managed?direction=long").json()
 
         row = find(payload["portfolios"], sample_portfolio["slug"])
         spy = find(payload["portfolios"], "spy")
@@ -82,7 +86,7 @@ class TestLeaderboard:
             assert session.scalar(select(func.count()).select_from(Portfolio)) == 1
 
     def test_pending_allocation_has_no_data(self, client, sample_portfolio):
-        payload = client.get("/api/arena/managed").json()
+        payload = client.get("/api/arena/managed?direction=long").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row["metrics"]["has_data"] is False
 
@@ -102,7 +106,7 @@ class TestLeaderboard:
         from app.services import massive
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/arena/managed").json()["market_data_status"] == "fresh"
+        assert client.get("/api/arena/managed?direction=long").json()["market_data_status"] == "fresh"
         with session_factory()() as session:
             session.execute(update(PriceCache).values(fetched_at=datetime.now(UTC) - timedelta(hours=2)))
             session.commit()
@@ -113,9 +117,9 @@ class TestLeaderboard:
         )
 
         requests = [
-            ("/api/arena/managed", {}),
+            ("/api/arena/managed?direction=long", {}),
             (f"/api/portfolios/{sample_portfolio['slug']}", {}),
-            (f"/api/compare?track=managed&slugs={sample_portfolio['slug']}", {}),
+            (f"/api/compare?direction=long&track=managed&slugs={sample_portfolio['slug']}", {}),
             (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
         ]
         for url, headers in requests:
@@ -142,9 +146,9 @@ class TestLeaderboard:
         )
 
         requests = [
-            ("/api/arena/managed", {}),
+            ("/api/arena/managed?direction=long", {}),
             (f"/api/portfolios/{sample_portfolio['slug']}", {}),
-            (f"/api/compare?track=managed&slugs={sample_portfolio['slug']}", {}),
+            (f"/api/compare?direction=long&track=managed&slugs={sample_portfolio['slug']}", {}),
             (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
         ]
         for url, headers in requests:
@@ -165,7 +169,7 @@ class TestLeaderboard:
         from app.services import arena
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/arena/managed").json()["market_data_status"] == "fresh"
+        assert client.get("/api/arena/managed?direction=long").json()["market_data_status"] == "fresh"
         with session_factory()() as session:
             cached = {
                 row.symbol: row.series
@@ -180,7 +184,7 @@ class TestLeaderboard:
             lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
         )
 
-        payload = client.get("/api/arena/managed").json()
+        payload = client.get("/api/arena/managed?direction=long").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
 
         assert payload["market_data_status"] == "stale"
@@ -199,7 +203,7 @@ class TestLeaderboard:
         from app.services import arena
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/arena/managed").json()["market_data_status"] == "fresh"
+        assert client.get("/api/arena/managed?direction=long").json()["market_data_status"] == "fresh"
         with session_factory()() as session:
             cached = {
                 row.symbol: row.series
@@ -212,7 +216,7 @@ class TestLeaderboard:
             lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
         )
 
-        payload = client.get("/api/arena/managed").json()
+        payload = client.get("/api/arena/managed?direction=long").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
 
         assert payload["market_data_status"] == "unavailable"
@@ -268,7 +272,7 @@ class TestPortfolioDetail:
             "Do not prefer current holdings or account for turnover or transaction costs."
         )
         response = client.patch(
-            f"/api/prompts/{sample_prompt['id']}",
+            f"/api/admin/prompts/{sample_prompt['id']}",
             json={"text": reconstruction_strategy},
             headers=admin_headers,
         )
@@ -305,7 +309,7 @@ class TestPortfolioDetail:
     ):
         strategy = "Keep this literal token in the strategy: {{portfolio_slug}}."
         response = client.patch(
-            f"/api/prompts/{sample_prompt['id']}",
+            f"/api/admin/prompts/{sample_prompt['id']}",
             json={"text": strategy},
             headers=admin_headers,
         )
@@ -320,7 +324,7 @@ class TestPortfolioDetail:
 class TestCompare:
     def test_overlay_rebased_to_common_start(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        response = client.get(f"/api/compare?track=managed&slugs={sample_portfolio['slug']}")
+        response = client.get(f"/api/compare?direction=long&track=managed&slugs={sample_portfolio['slug']}")
         payload = response.json()
         assert len(payload["series"]) == 1
         for entry in payload["series"]:
@@ -330,7 +334,7 @@ class TestCompare:
         assert payload["spy_series"][0]["date"] == payload["start"]
 
     def test_bad_params(self, client):
-        assert client.get("/api/compare?track=managed&slugs=").status_code == 422
+        assert client.get("/api/compare?direction=long&track=managed&slugs=").status_code == 422
 
 
 class TestPromptsAndAgents:
@@ -345,18 +349,21 @@ class TestPromptsAndAgents:
             for model in client.get("/api/models", headers=admin_headers).json()["models"]
         )
 
-        benchmark = find(client.get("/api/arena/managed").json()["portfolios"], "spy")
+        benchmark = find(client.get("/api/arena/managed?direction=long").json()["portfolios"], "spy")
         assert set(benchmark) == {
             "kind",
             "id",
             "slug",
             "name",
+            "direction",
             "status",
             "rank",
             "evidence",
             "rank_score",
             "metrics",
             "sparkline",
+            "is_liquidated",
+            "liquidated_at",
         }
 
     def test_prompt_detail_lists_portfolios(self, client, sample_portfolio):
@@ -377,7 +384,7 @@ class TestPromptsAndAgents:
 
     def test_prompt_editing_reflected_publicly(self, client, admin_headers, sample_prompt):
         client.patch(
-            f"/api/prompts/{sample_prompt['id']}",
+            f"/api/admin/prompts/{sample_prompt['id']}",
             json={"text": "Updated instructions."},
             headers=admin_headers,
         )
@@ -432,7 +439,7 @@ class TestAdminMisc:
 
     def test_clear_price_cache(self, client, admin_headers, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"])
-        client.get("/api/arena/managed")  # populates the cache
+        client.get("/api/arena/managed?direction=long")  # populates the cache
         response = client.delete("/api/prices/cache", headers=admin_headers)
         assert response.status_code == 200
         assert response.json()["deleted"] >= 1

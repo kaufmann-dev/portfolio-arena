@@ -6,8 +6,11 @@ locked allocations + cached total-return series (corporate-action adjustments
 change retroactively, so recomputation is *more* correct than snapshotting).
 """
 
+from __future__ import annotations
+
 import logging
 import math
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
@@ -33,6 +36,7 @@ from .trading_calendar import NY
 from .valuation import (
     FROZEN_AFTER_TRADING_DAYS,
     AllocationInput,
+    Direction,
     PositionInput,
     Series,
     ValuationError,
@@ -94,12 +98,12 @@ class RebuiltArena:
     objective: Objective
     cost_basis: CostBasis
     by_portfolio_id: dict[int, RebuiltPortfolioAnalysis] = field(default_factory=dict)
-    common_policy: dict | None = None
-    common_member_ids: set[int] = field(default_factory=set)
-    common_metrics_by_portfolio_id: dict[int, dict] = field(default_factory=dict)
-    common_series_by_portfolio_id: dict[int, Series] = field(default_factory=dict)
-    common_spy_series: Series = field(default_factory=list)
-    common_meta_series: Series = field(default_factory=list)
+    common_by_direction: dict[Direction, CommonDirectionState] = field(default_factory=dict)
+
+    def common_for(self, direction: Direction) -> CommonDirectionState:
+        if direction not in ("long", "short"):
+            raise ValueError("direction must be long or short")
+        return self.common_by_direction.get(direction, CommonDirectionState())
 
 
 @dataclass
@@ -112,7 +116,7 @@ class _CommonCandidate:
 
 
 @dataclass
-class _CommonSelection:
+class CommonDirectionState:
     policy: dict | None = None
     member_ids: set[int] = field(default_factory=set)
     member_metrics: dict[int, dict] = field(default_factory=dict)
@@ -355,8 +359,9 @@ def compute_valuations(
                 prices=series,
                 calendar=calendar,
                 as_of=as_of,
+                direction=portfolio.direction,
             )
-            metrics = compute_metrics(result, spy_series)
+            metrics = compute_metrics(result, spy_series, direction=portfolio.direction)
             valuations.by_portfolio_id[portfolio.id] = PortfolioValuation(
                 portfolio=portfolio, result=result, metrics=metrics
             )
@@ -407,9 +412,12 @@ def _signal_inputs(signals: list[Signal]) -> list[SignalInput]:
 
 def _rankable_common_members(
     analyses: dict[int, RebuiltPortfolioAnalysis],
+    direction: Direction,
 ) -> list[RebuiltPortfolioAnalysis]:
     members = []
     for analysis in analyses.values():
+        if analysis.portfolio.direction != direction:
+            continue
         if analysis.portfolio.status != "active":
             continue
         if (
@@ -420,7 +428,7 @@ def _rankable_common_members(
             )
         ):
             continue
-        if not analysis.portfolio.founding_v2:
+        if direction == "short" or not analysis.portfolio.founding_v2:
             horizon_20 = next(item for item in analysis.signal_horizons if item["horizon"] == 20)
             if not horizon_20["eligible"]:
                 continue
@@ -430,12 +438,15 @@ def _rankable_common_members(
 
 def _common_admitted_member_ids(
     analyses: dict[int, RebuiltPortfolioAnalysis],
+    direction: Direction,
 ) -> set[int]:
     admitted: set[int] = set()
     for analysis in analyses.values():
+        if analysis.portfolio.direction != direction:
+            continue
         if analysis.portfolio.status != "active":
             continue
-        if analysis.portfolio.founding_v2:
+        if direction == "long" and analysis.portfolio.founding_v2:
             admitted.add(analysis.portfolio.id)
             continue
         horizon_20 = next(
@@ -539,10 +550,23 @@ def _member_returns_on_common_dates(
     dates: list[str],
     spy_by_date: dict[str, float],
 ) -> tuple[list[float], list[float]]:
-    points = {point["date"]: point for point in member.policies[(horizon, exposure)].daily_returns}
+    policy = member.policies[(horizon, exposure)]
+    points = {point["date"]: point for point in policy.daily_returns}
     # An admitted member without an observation on a shared date contributes
-    # SPY, exactly like a missing daily signal sleeve.
-    strategy = [points[day]["return"] if day in points else spy_by_date[day] for day in dates]
+    # SPY, exactly like a missing daily signal sleeve. A liquidated member's
+    # capital path remains at zero instead of being resurrected into SPY.
+    strategy = [
+        (
+            points[day]["return"]
+            if day in points
+            else -1.0
+            if policy.liquidated_at is not None and day == policy.liquidated_at
+            else 0.0
+            if policy.liquidated_at is not None and day > policy.liquidated_at
+            else spy_by_date[day]
+        )
+        for day in dates
+    ]
     spy = [spy_by_date[day] for day in dates]
     return strategy, spy
 
@@ -586,7 +610,7 @@ def _common_candidate_data(
         point["date"]: point["spy_return"]
         for member in members
         for point in member.policies[(horizon, exposure)].daily_returns
-        if point["date"] in dates
+        if point["date"] in dates and point.get("spy_return") is not None
     }
     usable_dates = [day for day in dates if day in spy_by_date]
     if not usable_dates:
@@ -596,6 +620,7 @@ def _common_candidate_data(
     member_returns = []
     member_turnovers = []
     member_cost_drags = []
+    prebaseline_liquidation = False
     for member in members:
         policy = member.policies[(horizon, exposure)]
         strategy, spy = _member_returns_on_common_dates(
@@ -614,16 +639,33 @@ def _common_candidate_data(
         cost_drag = _window_cost_drag(policy, usable_dates)
         member_turnovers.append(turnover)
         member_cost_drags.append(cost_drag)
-        metrics = _daily_metrics(
-            strategy,
-            spy,
-            usable_dates,
-            baseline=baseline,
-            horizon=horizon,
-            family_size=family_size,
-            turnover_pct=turnover,
-            cost_drag_pct=cost_drag,
+        metric_count = (
+            bisect_right(usable_dates, policy.liquidated_at)
+            if policy.liquidated_at is not None
+            else len(usable_dates)
         )
+        if metric_count:
+            metrics = _daily_metrics(
+                strategy[:metric_count],
+                spy[:metric_count],
+                usable_dates[:metric_count],
+                baseline=baseline,
+                horizon=horizon,
+                family_size=family_size,
+                turnover_pct=turnover,
+                cost_drag_pct=cost_drag,
+            )
+        else:
+            metrics = {
+                "has_data": False,
+                "eligible": False,
+                "evidence": "pending",
+                "ci_lower": None,
+                "ci_upper": None,
+            }
+        metrics["liquidated_at"] = policy.liquidated_at
+        if policy.liquidated_at is not None and policy.liquidated_at <= baseline:
+            prebaseline_liquidation = True
         if not policy.metrics.get("eligible"):
             metrics.update(
                 {
@@ -634,7 +676,11 @@ def _common_candidate_data(
                 }
             )
         member_metrics[member.portfolio.id] = metrics
-        member_series[member.portfolio.id] = _compound_series(baseline, usable_dates, strategy)
+        member_series[member.portfolio.id] = (
+            [{"date": baseline, "nav": 0.0}] + [{"date": day, "nav": 0.0} for day in usable_dates]
+            if policy.liquidated_at is not None and policy.liquidated_at <= baseline
+            else _compound_series(baseline, usable_dates, strategy)
+        )
     strategy_returns = [
         sum(returns[index] for returns in member_returns) / len(member_returns)
         for index in range(len(usable_dates))
@@ -653,6 +699,15 @@ def _common_candidate_data(
     metrics["portfolio_count"] = len(members)
     metrics["horizon"] = horizon
     metrics["exposure_pct"] = exposure
+    if prebaseline_liquidation:
+        metrics.update(
+            {
+                "eligible": False,
+                "ci_lower": None,
+                "ci_upper": None,
+                "evidence": "pending",
+            }
+        )
     return _CommonCandidate(
         metrics=metrics,
         member_metrics=member_metrics,
@@ -696,9 +751,10 @@ def _std(values: list[float]) -> float:
 def _select_common_policy(
     analyses: dict[int, RebuiltPortfolioAnalysis],
     objective: Objective,
-) -> _CommonSelection:
-    members = _rankable_common_members(analyses)
-    selection = _CommonSelection(member_ids=_common_admitted_member_ids(analyses))
+    direction: Direction,
+) -> CommonDirectionState:
+    members = _rankable_common_members(analyses, direction)
+    selection = CommonDirectionState(member_ids=_common_admitted_member_ids(analyses, direction))
     if not members:
         return selection
     horizon_eligibility = _common_horizon_eligibility(members)
@@ -732,7 +788,8 @@ def _select_common_policy(
     candidates = [
         candidate
         for candidate in candidates
-        if selected_objective_score(candidate.metrics, objective) is not None
+        if candidate.metrics.get("eligible")
+        and selected_objective_score(candidate.metrics, objective) is not None
     ]
     if not candidates:
         return selection
@@ -845,6 +902,7 @@ def compute_rebuilt_arena(
                 portfolio.cost_bps,
                 cost_basis,
                 objective,
+                portfolio.direction,
             )
             policy_map = {(item.horizon, item.exposure_pct): item for item in policies}
             arena.by_portfolio_id[portfolio.id] = RebuiltPortfolioAnalysis(
@@ -869,14 +927,12 @@ def compute_rebuilt_arena(
             arena.market_data_status = "unavailable"
         if stale_data and arena.market_data_status == "fresh":
             arena.market_data_status = "stale"
-    common = _select_common_policy(
-        arena.by_portfolio_id,
-        objective,
-    )
-    arena.common_policy = common.policy
-    arena.common_member_ids = common.member_ids
-    arena.common_metrics_by_portfolio_id = common.member_metrics
-    arena.common_series_by_portfolio_id = common.member_series
-    arena.common_spy_series = common.spy_series
-    arena.common_meta_series = common.meta_series
+    arena.common_by_direction = {
+        direction: _select_common_policy(
+            arena.by_portfolio_id,
+            objective,
+            direction,
+        )
+        for direction in ("long", "short")
+    }
     return arena

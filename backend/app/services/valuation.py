@@ -19,6 +19,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date as date_type
 from datetime import timedelta
+from typing import Literal
 
 TRADING_DAYS_PER_YEAR = 252
 # A held symbol with no fresh print for this many trading days is presumed
@@ -26,6 +27,7 @@ TRADING_DAYS_PER_YEAR = 252
 FROZEN_AFTER_TRADING_DAYS = 5
 
 Series = list[dict]  # [{"date": "YYYY-MM-DD", "close": float}, ...]
+Direction = Literal["long", "short"]
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class ValuationResult:
     frozen_symbols: list[str] = field(default_factory=list)
     cumulative_cost: float = 0.0  # NAV points spent on costs
     cumulative_turnover_pct: float = 0.0  # sum of one-sided rebalance turnover
+    liquidated_at: str | None = None
 
 
 class ValuationError(Exception):
@@ -107,7 +110,7 @@ def build_calendar(spy_series: Series, as_of: str) -> list[str]:
     return sorted({p["date"] for p in spy_series if p["date"] <= as_of})
 
 
-def value_portfolio(
+def _value_long_portfolio(
     allocations: list[AllocationInput],
     cost_bps: int,
     prices: dict[str, Series],
@@ -277,6 +280,231 @@ def value_portfolio(
     )
 
 
+def _value_short_portfolio(
+    allocations: list[AllocationInput],
+    cost_bps: int,
+    prices: dict[str, Series],
+    calendar: list[str],
+    as_of: str,
+) -> ValuationResult:
+    """Value a 100%-collateralized portfolio of absolute short shares."""
+    calendar = [day for day in calendar if day <= as_of]
+    allocations = sorted(allocations, key=lambda allocation: allocation.effective_date)
+    lookups = {symbol: _PriceLookup(points) for symbol, points in prices.items()}
+
+    applied: list[AppliedAllocation] = []
+    schedule: dict[str, list[AllocationInput]] = {}
+    for allocation in allocations:
+        index = bisect_right(calendar, allocation.effective_date)
+        if index and calendar[index - 1] == allocation.effective_date:
+            index -= 1
+        if index >= len(calendar):
+            applied.append(
+                AppliedAllocation(
+                    effective_date=allocation.effective_date,
+                    applied_date=None,
+                    turnover_pct=None,
+                    cost=0.0,
+                    nav_before=None,
+                    nav_after=None,
+                )
+            )
+            continue
+        schedule.setdefault(calendar[index], []).append(allocation)
+    pending = list(applied)
+    applied = []
+
+    if not schedule:
+        return ValuationResult(series=[], allocations=pending, holdings=[])
+
+    first_day = min(schedule)
+    day_index = calendar.index(first_day)
+    shares: dict[str, float] = {}
+    targets: dict[str, PositionInput] = {}
+    entry_prices: dict[str, float] = {}
+    anchor_nav = 100.0
+    cumulative_cost = 0.0
+    cumulative_turnover = 0.0
+    stale_days: dict[str, list[str]] = {}
+    series: Series = []
+    liquidated_at: str | None = None
+
+    def lookup(symbol: str, day: str, holder: str) -> float:
+        entry = lookups.get(symbol)
+        result = entry.at(day) if entry else None
+        if result is None:
+            raise ValuationError(f"No price for {holder} at or before {day}.")
+        close, exact = result
+        if not exact:
+            stale_days.setdefault(holder, []).append(day)
+        return close
+
+    def equity(day: str) -> float:
+        return anchor_nav + sum(
+            quantity * (entry_prices[symbol] - lookup(symbol, day, symbol))
+            for symbol, quantity in shares.items()
+        )
+
+    def gross_weights(day: str, nav: float) -> dict[str, float]:
+        if nav <= 0:
+            return {}
+        return {
+            symbol: quantity * lookup(symbol, day, symbol) / nav * 100.0
+            for symbol, quantity in shares.items()
+        }
+
+    def apply_allocation(allocation: AllocationInput, day: str, first: bool) -> bool:
+        nonlocal anchor_nav, cumulative_cost, cumulative_turnover, shares, targets, entry_prices
+        positions = [position for position in allocation.positions if position.weight_pct > 0]
+        nav_before = 100.0 if first else equity(day)
+        if nav_before <= 0:
+            return False
+
+        if first:
+            cost = nav_before * cost_bps / 10_000.0
+            turnover_pct = None
+        else:
+            drifted = gross_weights(day, nav_before)
+            new_weights = {position.symbol: position.weight_pct for position in positions}
+            symbols = set(drifted) | set(new_weights)
+            turnover_pct = 0.5 * sum(
+                abs(new_weights.get(symbol, 0.0) - drifted.get(symbol, 0.0)) for symbol in symbols
+            )
+            cost = nav_before * 2.0 * (turnover_pct / 100.0) * cost_bps / 10_000.0
+            cumulative_turnover += turnover_pct
+
+        nav_after = nav_before - cost
+        cumulative_cost += cost
+        applied.append(
+            AppliedAllocation(
+                effective_date=allocation.effective_date,
+                applied_date=day,
+                turnover_pct=turnover_pct,
+                cost=cost,
+                nav_before=nav_before,
+                nav_after=max(0.0, nav_after),
+            )
+        )
+        if nav_after <= 0:
+            anchor_nav = 0.0
+            shares = {}
+            targets = {}
+            entry_prices = {}
+            return False
+
+        shares = {}
+        entry_prices = {}
+        for position in positions:
+            price = lookup(position.symbol, day, position.symbol)
+            notional = nav_after * position.weight_pct / 100.0
+            shares[position.symbol] = notional / price
+            entry_prices[position.symbol] = price
+        targets = {position.symbol: position for position in positions}
+        anchor_nav = nav_after
+        return True
+
+    first_seen = False
+    stop_index: int | None = None
+    for current_index, day in enumerate(calendar[day_index:], start=day_index):
+        if first_seen and equity(day) <= 0:
+            liquidated_at = day
+            series.append({"date": day, "nav": 0.0})
+            shares = {}
+            targets = {}
+            entry_prices = {}
+            anchor_nav = 0.0
+            stop_index = current_index
+            break
+
+        for allocation in schedule.get(day, ()):
+            if not apply_allocation(allocation, day, first=not first_seen):
+                liquidated_at = day
+                break
+            first_seen = True
+        if liquidated_at is not None:
+            series.append({"date": day, "nav": 0.0})
+            stop_index = current_index
+            break
+        series.append({"date": day, "nav": equity(day)})
+
+    if stop_index is not None:
+        series.extend({"date": day, "nav": 0.0} for day in calendar[stop_index + 1 :])
+        applied_effective_dates = {allocation.effective_date for allocation in applied}
+        for day in calendar[stop_index:]:
+            for allocation in schedule.get(day, ()):
+                if allocation.effective_date not in applied_effective_dates:
+                    pending.append(
+                        AppliedAllocation(
+                            effective_date=allocation.effective_date,
+                            applied_date=None,
+                            turnover_pct=None,
+                            cost=0.0,
+                            nav_before=None,
+                            nav_after=None,
+                        )
+                    )
+
+    holdings: list[Holding] = []
+    if series and liquidated_at is None:
+        last_day = series[-1]["date"]
+        last_nav = series[-1]["nav"]
+        if last_nav > 0:
+            for symbol, quantity in sorted(shares.items()):
+                current_price = lookup(symbol, last_day, symbol)
+                notional = quantity * current_price
+                holdings.append(
+                    Holding(
+                        symbol=symbol,
+                        weight_pct=notional / last_nav * 100.0,
+                        target_weight_pct=targets[symbol].weight_pct if symbol in targets else 0.0,
+                        value=notional,
+                        entry_price=entry_prices.get(symbol),
+                        current_price=current_price,
+                        note=targets[symbol].note if symbol in targets else "",
+                    )
+                )
+
+    frozen: list[str] = []
+    if series and liquidated_at is None:
+        last_day = series[-1]["date"]
+        recent = calendar[-FROZEN_AFTER_TRADING_DAYS:]
+        if recent:
+            threshold = recent[0]
+            for symbol in shares:
+                entry = lookups.get(symbol)
+                last_print = entry.last_date_at_or_before(last_day) if entry else None
+                if last_print is None or last_print < threshold:
+                    frozen.append(symbol)
+
+    deduped_stale = {symbol: sorted(set(days)) for symbol, days in stale_days.items()}
+    return ValuationResult(
+        series=series,
+        allocations=applied + pending,
+        holdings=holdings,
+        stale_days=deduped_stale,
+        frozen_symbols=sorted(frozen),
+        cumulative_cost=cumulative_cost,
+        cumulative_turnover_pct=cumulative_turnover,
+        liquidated_at=liquidated_at,
+    )
+
+
+def value_portfolio(
+    allocations: list[AllocationInput],
+    cost_bps: int,
+    prices: dict[str, Series],
+    calendar: list[str],
+    as_of: str,
+    direction: Direction = "long",
+) -> ValuationResult:
+    """Value one long or 100%-collateralized short portfolio."""
+    if direction == "long":
+        return _value_long_portfolio(allocations, cost_bps, prices, calendar, as_of)
+    if direction == "short":
+        return _value_short_portfolio(allocations, cost_bps, prices, calendar, as_of)
+    raise ValueError("direction must be long or short")
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -313,9 +541,15 @@ def _nav_at_or_before(series: Series, day: str) -> float | None:
     return best
 
 
-def compute_metrics(result: ValuationResult, spy_series: Series) -> dict:
+def compute_metrics(
+    result: ValuationResult,
+    spy_series: Series,
+    direction: Direction = "long",
+) -> dict:
     """Portfolio metrics from the base-100 series; SPY compared over the
     identical window using its total-return closes."""
+    if direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
     series = result.series
     if not series:
         return {"has_data": False}
@@ -325,27 +559,45 @@ def compute_metrics(result: ValuationResult, spy_series: Series) -> dict:
 
     itd_return = last_nav / 100.0 - 1.0
 
-    spy_lookup = _PriceLookup(spy_series)
-    spy_return = None
-    spy_start = spy_lookup.at(first_day)
-    spy_end = spy_lookup.at(last_day)
-    if spy_start and spy_end and spy_start[0] > 0:
-        spy_return = spy_end[0] / spy_start[0] - 1.0
-
     returns = _daily_returns(series)
     daily_alpha: list[float] = []
-    for previous, current in zip(series, series[1:], strict=False):
-        spy_previous = spy_lookup.at(previous["date"])
-        spy_current = spy_lookup.at(current["date"])
-        if (
-            previous["nav"] > 0
-            and spy_previous is not None
-            and spy_current is not None
-            and spy_previous[0] > 0
-        ):
-            strategy_daily = current["nav"] / previous["nav"] - 1.0
-            spy_daily = spy_current[0] / spy_previous[0] - 1.0
-            daily_alpha.append(strategy_daily - spy_daily)
+    spy_return = None
+    if direction == "long":
+        spy_lookup = _PriceLookup(spy_series)
+        spy_start = spy_lookup.at(first_day)
+        spy_end = spy_lookup.at(last_day)
+        if spy_start and spy_end and spy_start[0] > 0:
+            spy_return = spy_end[0] / spy_start[0] - 1.0
+
+        for previous, current in zip(series, series[1:], strict=False):
+            spy_previous = spy_lookup.at(previous["date"])
+            spy_current = spy_lookup.at(current["date"])
+            if (
+                previous["nav"] > 0
+                and spy_previous is not None
+                and spy_current is not None
+                and spy_previous[0] > 0
+            ):
+                strategy_daily = current["nav"] / previous["nav"] - 1.0
+                spy_daily = spy_current[0] / spy_previous[0] - 1.0
+                daily_alpha.append(strategy_daily - spy_daily)
+    else:
+        matched_spy = rebase_series(spy_series, first_day, last_day, direction="short")
+        matched_by_date = {point["date"]: point["nav"] for point in matched_spy}
+        if matched_spy and matched_spy[-1]["date"] == last_day:
+            spy_return = matched_spy[-1]["nav"] / 100.0 - 1.0
+        for previous, current in zip(series, series[1:], strict=False):
+            spy_previous = matched_by_date.get(previous["date"])
+            spy_current = matched_by_date.get(current["date"])
+            if (
+                previous["nav"] > 0
+                and spy_previous is not None
+                and spy_previous > 0
+                and spy_current is not None
+            ):
+                strategy_daily = current["nav"] / previous["nav"] - 1.0
+                spy_daily = spy_current / spy_previous - 1.0
+                daily_alpha.append(strategy_daily - spy_daily)
     volatility = _std(returns) * math.sqrt(TRADING_DAYS_PER_YEAR) if returns else None
     sharpe = None
     if returns:
@@ -401,16 +653,42 @@ def compute_metrics(result: ValuationResult, spy_series: Series) -> dict:
         "max_drawdown": max_drawdown,
         "cost_drag_pct": result.cumulative_cost,
         "turnover_pct": result.cumulative_turnover_pct,
+        "liquidated_at": result.liquidated_at,
         **trailing,
     }
 
 
-def rebase_series(points: Series, start: str, end: str) -> Series:
+def rebase_series(
+    points: Series,
+    start: str,
+    end: str,
+    direction: Direction = "long",
+) -> Series:
     """Base-100 a raw close series over [start, end] (for SPY overlays)."""
+    if direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
     window = [p for p in points if start <= p["date"] <= end]
     if not window:
         return []
     base = window[0]["close"]
     if not base:
         return []
-    return [{"date": p["date"], "nav": p["close"] / base * 100.0} for p in window]
+    if direction == "long":
+        return [{"date": p["date"], "nav": p["close"] / base * 100.0} for p in window]
+
+    nav = 100.0
+    result: Series = [{"date": window[0]["date"], "nav": nav}]
+    for index, (previous, current) in enumerate(
+        zip(window, window[1:], strict=False),
+        start=1,
+    ):
+        if not previous["close"]:
+            return []
+        factor = 2.0 - current["close"] / previous["close"]
+        if factor <= 0:
+            result.append({"date": current["date"], "nav": 0.0})
+            result.extend({"date": point["date"], "nav": 0.0} for point in window[index + 1 :])
+            break
+        nav *= factor
+        result.append({"date": current["date"], "nav": nav})
+    return result

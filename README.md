@@ -1,7 +1,7 @@
 # Portfolio Arena
 
 A self-hosted web app that runs a long-term experiment: **can LLM stock-selection strategies
-produce repeatable alpha over SPY?**
+produce repeatable alpha in all-long or all-short portfolios?**
 
 Portfolio Arena includes a website-controlled Codex evaluator. One Nixpacks deployment starts the
 web app, scheduler, and evaluator worker together. The admin panel defines models and their
@@ -11,8 +11,9 @@ MCP workflows remain available.
 
 The app maintains two separate experiments. Managed portfolios are stateful paper portfolios whose
 models decide when to rebalance. Rebuilt portfolios submit an independent signal every trading day;
-the arena measures every 1–20-session holding period and 10–100% exposure policy. Both tracks are
-ranked against SPY. It is an _arena_: honest, deterministic measurement — not trading and not advice.
+the arena measures every 1–20-session holding period and 10–100% exposure policy. Each track is
+split into Long and Short arenas and ranked against its direction-matched SPY reference. It is an
+_arena_: honest, deterministic measurement — not trading and not advice.
 
 ## Architecture
 
@@ -36,8 +37,9 @@ ranked against SPY. It is an _arena_: honest, deterministic measurement — not 
   `as_of` remains the authoritative valued close. Ordinary complete last-known data does not raise
   a UI warning; warnings are reserved for unavailable data that can make valuations incomplete.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
-  endpoint exposing the full app surface as tools, including evaluator administration. The
-  worker-only queue and submission protocol is private to the deployment.
+  endpoint exposing the operational arena surface as tools, including evaluator administration.
+  API-key management and archived prompt recovery stay browser-only; the worker-only queue and
+  submission protocol is private to the deployment.
 
 ## Experiment-integrity rules (enforced in code)
 
@@ -50,20 +52,34 @@ ranked against SPY. It is an _arena_: honest, deterministic measurement — not 
   their existing editable handoff behavior.
 - **Portfolio resets are explicit and mode-specific.** Resetting a contestant deletes its managed
   allocation history or rebuilt signal history, cancels in-flight evaluator work, and preserves its
-  identity, configuration, schedule, and evaluator audit records. A portfolio cannot switch modes
-  until its current mode's history has been reset.
+  identity, configuration, schedule, and evaluator audit records. A portfolio cannot switch mode or
+  direction until its history has been reset and in-flight cancellation has completed.
 - **One canonical strategy, two execution modes.** Managed evaluations receive holdings, allocation
   history, notes, performance, and costs. Rebuilt evaluations receive no prior portfolio state and
   construct each signal independently. Each mode has a global editable wrapper prompt under
   Admin → Settings.
+- **One direction per portfolio.** A portfolio is entirely long or entirely short. Submitted weights
+  are always positive and total exactly 100%; direction is portfolio metadata, so mixed books and
+  signed position weights cannot enter the experiment.
+- **Prompt changes are recoverable.** Editing a prompt appends an immutable version. Prompts are
+  archived rather than deleted, and restoring an older snapshot creates another new version.
+  Archived prompts and version history are browser-admin-only; public and MCP reads expose only the
+  current version of active prompts.
 - **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
   position weights. The default is 10–25%, which implies 4–10 positions.
-- **SPY is synthetic.** Every leaderboard pins a non-ranked SPY reference row over the same
-  comparison window. There are no stored benchmark portfolios and no RSP benchmark.
+- **SPY is synthetic and direction-matched.** Long arenas use buy-and-hold SPY. Short arenas use a
+  daily rebalanced −1× SPY series. Every leaderboard pins its non-ranked reference over the same
+  comparison window; there are no stored benchmark portfolios and no RSP benchmark.
 - **Rebuilt policies are measured, not prompted.** Each daily signal is evaluated at holding
   horizons from 1 through 20 trading sessions. Exposure is tested from 10% through 100%; each active
   session contributes one `exposure / horizon` sleeve. At every close, the aggregate target is the
-  sum of the still-active signal sleeves and the remainder stays in SPY.
+  sum of the still-active signal sleeves and the remainder stays in direction-matched SPY.
+- **Short loss is capped at portfolio equity.** Short books use fixed absolute shares between
+  rebalances, 100% collateralized exposure, and the same transaction-cost model as long books.
+  Borrow and financing fees are not modeled. If NAV reaches zero, liquidation is absorbing: the
+  displayed series remains zero, return observations stop after the liquidation close, managed
+  allocations and evaluator runs are blocked until reset, and rebuilt signals may continue to be
+  collected for future policy measurements.
 - **Costs are measured on aggregate turnover.** Net results apply the portfolio's flat transaction
   cost to actual aggregate turnover, including changes in the SPY sleeve. Gross results remain
   available for diagnosis.
@@ -84,21 +100,23 @@ objectives can instead maximize mean alpha, information ratio, or zero-rate Shar
 
 ## Instruments
 
-Portfolios are fully invested, long-only, and USD-denominated. Accepted Massive ticker types are
-common stock (`CS`), ADR common stock (`ADRC`), and ETF (`ETF`). Massive split-adjusted daily
-aggregates plus cumulative dividend adjustment factors provide the total-return basis. A ticker is
-rejected when Massive's recent dividend history lacks those factors, because distributions without
-a cumulative adjustment factor cannot be reconstructed reliably from aggregate prices alone.
-Inactive or non-USD tickers, cash, mutual funds, crypto, raw indices, FX pairs, futures, shorts, and
-leverage are also rejected. Current S&P 500 membership can be part of a strategy prompt, but is
-deliberately a research judgment rather than a stale hard-coded symbol list.
+Portfolios are fully invested, all-long or all-short, and USD-denominated. Accepted Massive ticker
+types are common stock (`CS`), ADR common stock (`ADRC`), and ETF (`ETF`). Massive split-adjusted
+daily aggregates plus cumulative dividend adjustment factors provide the total-return basis. A
+ticker is rejected when Massive's recent dividend history lacks those factors, because distributions
+without a cumulative adjustment factor cannot be reconstructed reliably from aggregate prices
+alone. Inactive or non-USD tickers, cash, mutual funds, crypto, raw indices, FX pairs, futures,
+negative position weights, mixed long/short books, and leverage are rejected. Current S&P 500
+membership can be part of a strategy prompt, but is deliberately a research judgment rather than a
+stale hard-coded symbol list.
 
 ## MCP server
 
 The app mounts a streamable-HTTP [MCP](https://modelcontextprotocol.io) server at `/mcp`. It exposes
-the entire app surface as tools — everything an admin or visitor can do (manage portfolios, agents,
-prompts, managed allocations, and rebuilt signals; validate symbols; read both arena tracks and
-per-portfolio history) — **except** API-key management, which stays in the admin panel.
+the operational arena surface as tools: manage portfolios, agents, active prompts, managed
+allocations, and rebuilt signals; validate symbols; read both arena tracks and per-portfolio
+history; and administer the evaluator. API-key management and archived prompt recovery stay in the
+admin panel.
 
 - **Auth.** Every request needs an API key (`Authorization: Bearer <key>`, or `X-API-Key`);
   there is no anonymous access. Create and revoke keys in the admin panel's **API Keys** tab.
@@ -107,9 +125,12 @@ per-portfolio history) — **except** API-key management, which stays in the adm
   policy, prompt mode, and next effective date. Managed mode also returns drifted holdings with
   entry/current prices, the full allocation history with notes, performance, and costs. Rebuilt
   mode intentionally omits prior signals, notes, performance, and costs. `get_arena_overview()`
-  reports Managed and Rebuilt separately, and rebuilt analysis tools expose Common Policy, Tuned,
-  and Signal Alpha views. Use `create_allocation` for managed portfolios and `create_signal` for
-  rebuilt portfolios.
+  and `get_rebuilt_analysis()` require `direction="long"` or `"short"` and never mix directions.
+  Rebuilt analysis exposes Common Policy, Tuned, and Signal Alpha views. Use `create_allocation` for
+  managed portfolios and `create_signal` for rebuilt portfolios.
+- **Prompt tools.** MCP can list, read, create, update, and archive active prompts. It cannot expose
+  archived prompt content, immutable history, unarchive, or restore operations; those recovery
+  controls remain in the browser admin.
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
   `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
   `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
@@ -152,7 +173,8 @@ receives a cancellation request and its Codex process is terminated. Failed runs
 manually. All paths use the same server-side proposal and symbol validation and atomically create
 either a managed allocation or rebuilt signal. At claim time, the worker receives a complete
 execution prompt rendered from the portfolio's canonical strategy and the editable wrapper for its
-mode.
+mode. A liquidated managed short cannot be enabled, queued, claimed, retried, or submitted again
+until its portfolio history is reset.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
@@ -173,6 +195,10 @@ total-return data. The cache refills on the next valuation request.
 Migration `0016` installs the daily signal arena. It preserves managed allocation history and all
 evaluator audit records, resets only rebuilt v1 allocation history, removes stored benchmark
 portfolios, and marks existing rebuilt portfolios as the founding v2 cohort.
+
+Migration `0017` marks every existing portfolio as long, adds the required portfolio direction, and
+moves each prompt's current content into immutable version 1. It also adds prompt archive state; no
+prompt content is discarded.
 
 ## Development
 
@@ -256,6 +282,7 @@ Web app:
 
 ## Non-goals
 
-No broker integration, OpenAI Platform API execution, shorts or leverage, options/futures,
+No broker integration, OpenAI Platform API execution, mixed long/short or market-neutral books,
+leverage, broker-native borrow availability, margin, borrow or financing fees, options/futures,
 intraday prices, cash positions, OpenCode automation, application-managed user accounts, external
 notifications, or historical backtesting.

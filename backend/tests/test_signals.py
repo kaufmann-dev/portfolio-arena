@@ -19,6 +19,7 @@ def _create_rebuilt(client, admin_headers, sample_agent, sample_prompt) -> dict:
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "rebuilt",
+            "direction": "long",
         },
     )
     assert response.status_code == 201, response.text
@@ -252,7 +253,21 @@ def test_evaluation_work_requires_reset_before_mode_change(
     assert reset.status_code == 200, reset.text
     if claim_run:
         assert reset.json()["cancellation_requested_runs"] == 1
-        expected_status = "cancel_requested"
+        still_blocked = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            headers=admin_headers,
+            json={"prompt_mode": "managed"},
+        )
+        assert still_blocked.status_code == 409
+        with session_factory()() as session:
+            evaluator.fail_run(
+                session,
+                run_id=run_id,
+                error="Cancelled after the portfolio reset.",
+                cancelled=True,
+                now=now,
+            )
+        expected_status = "cancelled"
     else:
         assert reset.json()["cancelled_queued_runs"] == 1
         expected_status = "cancelled"

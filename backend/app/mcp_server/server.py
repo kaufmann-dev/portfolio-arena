@@ -29,24 +29,27 @@ INTERNAL_READ_TOOLS = frozenset(
 )
 
 INSTRUCTIONS = """\
-Portfolio Arena measures managed allocations and independent daily rebuilt
-signals against a synthetic SPY reference. Results are recomputed from inputs
-and cached prices; NAVs are never snapshotted.
+Portfolio Arena measures all-long or all-short managed allocations and
+independent daily rebuilt signals against a direction-matched synthetic SPY
+reference. Results are recomputed from inputs and cached prices; NAVs are never
+snapshotted.
 
 1. `get_portfolio(slug_or_id)` — read its canonical prompt, prompt mode, and
 allowed evaluation context. Managed portfolios include holdings, notes, history,
 and performance. Rebuilt portfolios intentionally expose none of their prior
 signals, notes, holdings, costs, or performance.
-2. Follow the returned prompt allocation policy. Weights must sum to exactly
-   100 across USD-denominated equities and ETFs. Validate unfamiliar tickers
-   with `validate_symbol` / `search_symbols`.
+2. Follow the returned portfolio direction and allocation policy. Weights are
+   always positive and must sum to exactly 100 across USD-denominated equities
+   and ETFs; the portfolio direction makes the entire book long or short.
+   Validate unfamiliar tickers with `validate_symbol` / `search_symbols`.
 3. Managed: call `create_allocation(...)` exactly once. Rebuilt: call
    `create_signal(...)` exactly once. Entry time and the first future effective
    close are server-set. Rebuilt signals are complete independent portfolios;
    never infer or preserve a previous signal.
 
-`get_arena_overview()` returns separate managed and rebuilt summaries.
-`get_rebuilt_analysis(...)` exposes the rebuilt Common, Tuned, and Signal views.
+`get_arena_overview(direction)` returns separate managed and rebuilt summaries
+for one direction. `get_rebuilt_analysis(direction, ...)` exposes the rebuilt
+Common, Tuned, and Signal views.
 """
 
 mcp = FastMCP(

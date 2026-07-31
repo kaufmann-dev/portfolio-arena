@@ -8,9 +8,10 @@ translate that into their transport's error shape (HTTP status / tool error).
 """
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ..models import (
     Agent,
@@ -23,6 +24,7 @@ from ..models import (
     PortfolioEvaluatorConfig,
     Position,
     Prompt,
+    PromptVersion,
     Setting,
     Signal,
     SignalPosition,
@@ -83,6 +85,11 @@ def unique_slug(session: Session, model, wanted: str) -> str:
 def _validate_prompt_mode(prompt_mode: str) -> None:
     if prompt_mode not in PROMPT_MODES:
         raise AdminOpError(422, "Prompt mode must be 'managed' or 'rebuilt'.")
+
+
+def _validate_direction(direction: str) -> None:
+    if direction not in {"long", "short"}:
+        raise AdminOpError(422, "Direction must be 'long' or 'short'.")
 
 
 # --- Models and agents ------------------------------------------------------
@@ -330,6 +337,182 @@ def prompt_out(prompt: Prompt) -> dict:
     }
 
 
+def _prompt_version_out(version: PromptVersion) -> dict:
+    return {
+        "version": version.version,
+        "name": version.name,
+        "text": version.text,
+        "notes": version.notes,
+        "allocation_policy": allocation_policy_out(version),
+        "created_at": version.created_at.isoformat(),
+        "restored_from_version": (
+            version.restored_from.version if version.restored_from is not None else None
+        ),
+    }
+
+
+def _admin_prompt_out(
+    prompt: Prompt,
+    *,
+    version_count: int,
+    portfolio_count: int,
+) -> dict:
+    current = prompt.current_version
+    if current is None:
+        raise RuntimeError(f"Prompt {prompt.id} has no current version")
+    return {
+        "id": prompt.id,
+        "slug": prompt.slug,
+        "status": prompt.status,
+        "archived_at": prompt.archived_at.isoformat() if prompt.archived_at is not None else None,
+        "created_at": prompt.created_at.isoformat(),
+        "updated_at": prompt.updated_at.isoformat(),
+        "current_version": current.version,
+        "version_count": version_count,
+        "portfolio_count": portfolio_count,
+        "name": current.name,
+        "text": current.text,
+        "notes": current.notes,
+        "allocation_policy": allocation_policy_out(current),
+    }
+
+
+def _prompt_counts(session: Session, prompt_id: int) -> tuple[int, int]:
+    version_count = session.scalar(
+        select(func.count()).select_from(PromptVersion).where(PromptVersion.prompt_id == prompt_id)
+    )
+    portfolio_count = session.scalar(
+        select(func.count()).select_from(Portfolio).where(Portfolio.prompt_id == prompt_id)
+    )
+    return version_count or 0, portfolio_count or 0
+
+
+def _admin_prompt_with_counts(session: Session, prompt: Prompt) -> dict:
+    version_count, portfolio_count = _prompt_counts(session, prompt.id)
+    return _admin_prompt_out(
+        prompt,
+        version_count=version_count,
+        portfolio_count=portfolio_count,
+    )
+
+
+def list_prompts(session: Session, *, status: str | None = None) -> dict:
+    if status is not None and status not in {"all", "active", "archived"}:
+        raise AdminOpError(422, "Prompt status must be 'all', 'active', or 'archived'.")
+    query = select(Prompt).order_by(Prompt.slug)
+    if status in {"active", "archived"}:
+        query = query.where(Prompt.status == status)
+    prompts = session.scalars(query).all()
+    prompt_ids = [prompt.id for prompt in prompts]
+    if not prompt_ids:
+        return {"prompts": []}
+    version_counts = dict(
+        session.execute(
+            select(PromptVersion.prompt_id, func.count())
+            .where(PromptVersion.prompt_id.in_(prompt_ids))
+            .group_by(PromptVersion.prompt_id)
+        ).all()
+    )
+    portfolio_counts = dict(
+        session.execute(
+            select(Portfolio.prompt_id, func.count())
+            .where(Portfolio.prompt_id.in_(prompt_ids))
+            .group_by(Portfolio.prompt_id)
+        ).all()
+    )
+    return {
+        "prompts": [
+            _admin_prompt_out(
+                prompt,
+                version_count=version_counts.get(prompt.id, 0),
+                portfolio_count=portfolio_counts.get(prompt.id, 0),
+            )
+            for prompt in prompts
+        ]
+    }
+
+
+def list_prompt_versions(session: Session, prompt_id: int) -> dict:
+    exists = session.scalar(select(Prompt.id).where(Prompt.id == prompt_id))
+    if exists is None:
+        raise AdminOpError(404, "Prompt not found")
+    versions = session.scalars(
+        select(PromptVersion)
+        .where(PromptVersion.prompt_id == prompt_id)
+        .options(joinedload(PromptVersion.restored_from))
+        .order_by(PromptVersion.version.desc())
+    ).all()
+    return {
+        "prompt_id": prompt_id,
+        "versions": [_prompt_version_out(version) for version in versions],
+    }
+
+
+def _locked_prompt(session: Session, prompt_id: int) -> Prompt:
+    prompt = session.scalars(select(Prompt).where(Prompt.id == prompt_id).with_for_update(of=Prompt)).first()
+    if prompt is None:
+        raise AdminOpError(404, "Prompt not found")
+    return prompt
+
+
+def _active_prompt_for_portfolio(session: Session, prompt_id: int) -> Prompt:
+    prompt = session.scalars(select(Prompt).where(Prompt.id == prompt_id).with_for_update(of=Prompt)).first()
+    if prompt is None or prompt.status != "active":
+        raise AdminOpError(422, "Prompt not found")
+    return prompt
+
+
+def _ensure_prompt_has_no_running_evaluation(session: Session, prompt_id: int) -> None:
+    run_count = session.scalar(
+        select(func.count())
+        .select_from(EvaluationRun)
+        .join(Portfolio, Portfolio.id == EvaluationRun.portfolio_id)
+        .where(
+            Portfolio.prompt_id == prompt_id,
+            EvaluationRun.status.in_(("running", "cancel_requested")),
+        )
+    )
+    if run_count:
+        raise AdminOpError(
+            409,
+            "This prompt cannot be changed while a referencing portfolio evaluation is running.",
+        )
+
+
+def _append_prompt_version(
+    session: Session,
+    prompt: Prompt,
+    *,
+    name: str,
+    text: str,
+    notes: str,
+    allocation_policy: dict,
+    restored_from_version_id: int | None = None,
+) -> PromptVersion:
+    current = prompt.current_version
+    if current is None:
+        raise RuntimeError(f"Prompt {prompt.id} has no current version")
+    version = PromptVersion(
+        prompt_id=prompt.id,
+        version=current.version + 1,
+        name=name,
+        text=text,
+        notes=notes,
+        min_position_weight_pct=allocation_policy["min_position_weight_pct"],
+        max_position_weight_pct=allocation_policy["max_position_weight_pct"],
+        restored_from_version_id=restored_from_version_id,
+    )
+    session.add(version)
+    session.flush()
+    prompt.current_version_id = version.id
+    prompt.current_version = version
+    return version
+
+
+def _same_weight(left: float, right: float) -> bool:
+    return Decimal(str(left)) == Decimal(str(right))
+
+
 def create_prompt(
     session: Session,
     *,
@@ -339,17 +522,37 @@ def create_prompt(
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
+    if not name.strip():
+        raise AdminOpError(422, "Prompt name is required")
+    if not text.strip():
+        raise AdminOpError(422, "Prompt text is required")
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
+        status="active",
+        archived_at=None,
+        current_version_id=None,
+    )
+    session.add(prompt)
+    session.flush()
+    version = PromptVersion(
+        prompt_id=prompt.id,
+        version=1,
         name=name,
         text=text,
         notes=notes,
         min_position_weight_pct=allocation_policy["min_position_weight_pct"],
         max_position_weight_pct=allocation_policy["max_position_weight_pct"],
     )
-    session.add(prompt)
+    session.add(version)
+    session.flush()
+    prompt.current_version_id = version.id
+    prompt.current_version = version
     session.commit()
-    return prompt_out(prompt)
+    return _admin_prompt_out(
+        prompt,
+        version_count=1,
+        portfolio_count=0,
+    )
 
 
 def update_prompt(
@@ -361,34 +564,115 @@ def update_prompt(
     notes: str | None = None,
     allocation_policy: dict | None = None,
 ) -> dict:
-    prompt = session.get(Prompt, prompt_id)
-    if prompt is None:
-        raise AdminOpError(404, "Prompt not found")
-    if name is not None:
-        prompt.name = name
-    if text is not None:
-        prompt.text = text
-    if notes is not None:
-        prompt.notes = notes
-    if allocation_policy is not None:
-        prompt.min_position_weight_pct = allocation_policy["min_position_weight_pct"]
-        prompt.max_position_weight_pct = allocation_policy["max_position_weight_pct"]
+    prompt = _locked_prompt(session, prompt_id)
+    if prompt.status != "active":
+        raise AdminOpError(409, "Archived prompts cannot be updated.")
+    _ensure_prompt_has_no_running_evaluation(session, prompt_id)
+    current = prompt.current_version
+    if current is None:
+        raise RuntimeError(f"Prompt {prompt.id} has no current version")
+
+    next_name = name if name is not None else current.name
+    next_text = text if text is not None else current.text
+    if not next_name.strip():
+        raise AdminOpError(422, "Prompt name is required")
+    if not next_text.strip():
+        raise AdminOpError(422, "Prompt text is required")
+    next_notes = notes if notes is not None else current.notes
+    next_policy = (
+        allocation_policy
+        if allocation_policy is not None
+        else {
+            "min_position_weight_pct": current.min_position_weight_pct,
+            "max_position_weight_pct": current.max_position_weight_pct,
+        }
+    )
+    changed = (
+        next_name != current.name
+        or next_text != current.text
+        or next_notes != current.notes
+        or not _same_weight(
+            next_policy["min_position_weight_pct"],
+            current.min_position_weight_pct,
+        )
+        or not _same_weight(
+            next_policy["max_position_weight_pct"],
+            current.max_position_weight_pct,
+        )
+    )
+    if not changed:
+        version_count, portfolio_count = _prompt_counts(session, prompt.id)
+        session.commit()
+        return _admin_prompt_out(
+            prompt,
+            version_count=version_count,
+            portfolio_count=portfolio_count,
+        )
+
+    _append_prompt_version(
+        session,
+        prompt,
+        name=next_name,
+        text=next_text,
+        notes=next_notes,
+        allocation_policy=next_policy,
+    )
     session.commit()
-    return prompt_out(prompt)
+    return _admin_prompt_with_counts(session, prompt)
 
 
-def delete_prompt(session: Session, prompt_id: int) -> dict:
-    prompt = session.get(Prompt, prompt_id)
-    if prompt is None:
-        raise AdminOpError(404, "Prompt not found")
+def archive_prompt(session: Session, prompt_id: int) -> dict:
+    prompt = _locked_prompt(session, prompt_id)
     count = session.scalar(
         select(func.count()).select_from(Portfolio).where(Portfolio.prompt_id == prompt_id)
     )
     if count:
-        raise AdminOpError(409, "This prompt is used by existing portfolios — it can't be deleted.")
-    session.delete(prompt)
+        raise AdminOpError(409, "This prompt is used by an existing portfolio and cannot be archived.")
+    if prompt.status == "active":
+        prompt.status = "archived"
+        prompt.archived_at = datetime.now(UTC)
     session.commit()
-    return {"ok": True}
+    return _admin_prompt_with_counts(session, prompt)
+
+
+def unarchive_prompt(session: Session, prompt_id: int) -> dict:
+    prompt = _locked_prompt(session, prompt_id)
+    if prompt.status == "archived":
+        prompt.status = "active"
+        prompt.archived_at = None
+    session.commit()
+    return _admin_prompt_with_counts(session, prompt)
+
+
+def restore_prompt_version(
+    session: Session,
+    prompt_id: int,
+    version: int,
+) -> dict:
+    prompt = _locked_prompt(session, prompt_id)
+    _ensure_prompt_has_no_running_evaluation(session, prompt_id)
+    source = session.scalars(
+        select(PromptVersion).where(
+            PromptVersion.prompt_id == prompt_id,
+            PromptVersion.version == version,
+        )
+    ).first()
+    if source is None:
+        raise AdminOpError(404, "Prompt version not found")
+    _append_prompt_version(
+        session,
+        prompt,
+        name=source.name,
+        text=source.text,
+        notes=source.notes,
+        allocation_policy={
+            "min_position_weight_pct": source.min_position_weight_pct,
+            "max_position_weight_pct": source.max_position_weight_pct,
+        },
+        restored_from_version_id=source.id,
+    )
+    session.commit()
+    return _admin_prompt_with_counts(session, prompt)
 
 
 # --- Portfolios -------------------------------------------------------------
@@ -441,16 +725,16 @@ def create_portfolio(
     agent_id: int,
     prompt_id: int,
     prompt_mode: str,
+    direction: str,
     slug: str | None = None,
     cost_bps: int | None = None,
 ) -> dict:
     _validate_prompt_mode(prompt_mode)
+    _validate_direction(direction)
     agent = session.get(Agent, agent_id)
     if agent is None:
         raise AdminOpError(422, "Agent not found")
-    prompt = session.get(Prompt, prompt_id)
-    if prompt is None:
-        raise AdminOpError(422, "Prompt not found")
+    prompt = _active_prompt_for_portfolio(session, prompt_id)
     clean_name = name.strip()
     requested_slug = slugify(slug or clean_name)
     if clean_name.casefold() == "spy" or requested_slug == "spy":
@@ -462,6 +746,7 @@ def create_portfolio(
         agent_id=agent.id,
         prompt_id=prompt.id,
         prompt_mode=prompt_mode,
+        direction=direction,
         cost_bps=_default_cost_bps(session) if cost_bps is None else cost_bps,
     )
     session.add(portfolio)
@@ -471,6 +756,7 @@ def create_portfolio(
         "slug": portfolio.slug,
         "name": portfolio.name,
         "prompt_mode": portfolio.prompt_mode,
+        "direction": portfolio.direction,
         "cost_bps": portfolio.cost_bps,
     }
 
@@ -484,12 +770,14 @@ def update_portfolio(
     agent_id: int | None = None,
     prompt_id: int | None = None,
     prompt_mode: str | None = None,
+    direction: str | None = None,
     cost_bps: int | None = None,
 ) -> dict:
-    changing_prompt_mode = prompt_mode is not None
-    if changing_prompt_mode:
+    changing_structure = prompt_mode is not None or direction is not None or prompt_id is not None
+    if changing_structure:
         session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
-    portfolio = writable_portfolio(session, portfolio_id, lock=changing_prompt_mode)
+    portfolio = writable_portfolio(session, portfolio_id, lock=changing_structure)
+    changing_prompt = prompt_id is not None and prompt_id != portfolio.prompt_id
     if name is not None:
         if name.strip().casefold() == "spy":
             raise AdminOpError(409, "SPY is reserved for the synthetic benchmark reference.")
@@ -508,46 +796,65 @@ def update_portfolio(
                 "Cancelled because the portfolio was reassigned to an Agent without integrated automation.",
             )
     if prompt_id is not None:
-        if session.get(Prompt, prompt_id) is None:
-            raise AdminOpError(422, "Prompt not found")
+        _active_prompt_for_portfolio(session, prompt_id)
         portfolio.prompt_id = prompt_id
     if prompt_mode is not None:
         _validate_prompt_mode(prompt_mode)
-        if prompt_mode != portfolio.prompt_mode:
-            allocation_count = int(
-                session.scalar(
-                    select(func.count())
-                    .select_from(Allocation)
-                    .where(Allocation.portfolio_id == portfolio.id)
-                )
-                or 0
+    if direction is not None:
+        _validate_direction(direction)
+    changing_mode = prompt_mode is not None and prompt_mode != portfolio.prompt_mode
+    changing_direction = direction is not None and direction != portfolio.direction
+    if changing_prompt:
+        running_count = session.scalar(
+            select(func.count())
+            .select_from(EvaluationRun)
+            .where(
+                EvaluationRun.portfolio_id == portfolio.id,
+                EvaluationRun.status.in_({"running", "cancel_requested"}),
             )
-            signal_count = int(
-                session.scalar(
-                    select(func.count()).select_from(Signal).where(Signal.portfolio_id == portfolio.id)
-                )
-                or 0
+        )
+        if running_count:
+            raise AdminOpError(
+                409,
+                "Wait for the active evaluation to finish before changing its prompt.",
             )
-            active_run_count = int(
-                session.scalar(
-                    select(func.count())
-                    .select_from(EvaluationRun)
-                    .where(
-                        EvaluationRun.portfolio_id == portfolio.id,
-                        EvaluationRun.status.in_({"queued", "running"}),
-                    )
-                )
-                or 0
+    if changing_mode or changing_direction:
+        allocation_count = int(
+            session.scalar(
+                select(func.count()).select_from(Allocation).where(Allocation.portfolio_id == portfolio.id)
             )
-            if allocation_count or signal_count or portfolio.founding_v2 or active_run_count:
-                raise AdminOpError(
-                    409,
-                    "Reset the portfolio's history before changing its prompt mode.",
+            or 0
+        )
+        signal_count = int(
+            session.scalar(
+                select(func.count()).select_from(Signal).where(Signal.portfolio_id == portfolio.id)
+            )
+            or 0
+        )
+        active_run_count = int(
+            session.scalar(
+                select(func.count())
+                .select_from(EvaluationRun)
+                .where(
+                    EvaluationRun.portfolio_id == portfolio.id,
+                    EvaluationRun.status.in_({"queued", "running", "cancel_requested"}),
                 )
-            portfolio.prompt_mode = prompt_mode
-            portfolio.founding_v2 = False
-            if prompt_mode == "rebuilt" and portfolio.evaluator_config is not None:
-                portfolio.evaluator_config.weekdays = [0, 1, 2, 3, 4]
+            )
+            or 0
+        )
+        if allocation_count or signal_count or portfolio.founding_v2 or active_run_count:
+            raise AdminOpError(
+                409,
+                "Reset the portfolio's history before changing its prompt mode or direction.",
+            )
+    if changing_mode:
+        portfolio.prompt_mode = prompt_mode
+        portfolio.founding_v2 = False
+        if prompt_mode == "rebuilt" and portfolio.evaluator_config is not None:
+            portfolio.evaluator_config.weekdays = [0, 1, 2, 3, 4]
+    if changing_direction:
+        portfolio.direction = direction
+        portfolio.founding_v2 = False
     if cost_bps is not None:
         portfolio.cost_bps = cost_bps
     session.commit()
@@ -559,6 +866,7 @@ def update_portfolio(
         "agent_id": portfolio.agent_id,
         "prompt_id": portfolio.prompt_id,
         "prompt_mode": portfolio.prompt_mode,
+        "direction": portfolio.direction,
         "cost_bps": portfolio.cost_bps,
     }
 
@@ -637,7 +945,12 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
         raise AdminOpError(404, "Portfolio not found")
     wrapper_prompt = wrapper_prompt_for_portfolio(session, match)
     if match.prompt_mode == "rebuilt":
-        arena = compute_rebuilt_arena(session, portfolios)
+        same_direction = [
+            portfolio
+            for portfolio in portfolios
+            if portfolio.prompt_mode == "rebuilt" and portfolio.direction == match.direction
+        ]
+        arena = compute_rebuilt_arena(session, same_direction)
         analysis = arena.by_portfolio_id.get(match.id)
         if analysis is None:
             raise AdminOpError(404, "Portfolio not found")
@@ -654,7 +967,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
             ),
         }
 
-    valuations = compute_valuations(session, portfolios)
+    valuations = compute_valuations(session, [match])
     valuation = valuations.by_portfolio_id.get(match.id)
     if valuation is None:
         raise AdminOpError(404, "Portfolio not found")
@@ -675,7 +988,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
 
 def _normalize_positions(prompt: Prompt, positions: list[dict]) -> list[dict]:
     """Normalize symbols and enforce the position-set rules (sum to 100, no dups,
-    long-only) plus per-symbol resolution against Massive."""
+    positive whole-book weights) plus per-symbol resolution against Massive."""
     normalized = [
         {
             "symbol": normalize_symbol(p["symbol"]),
@@ -694,6 +1007,18 @@ def _normalize_positions(prompt: Prompt, positions: list[dict]) -> list[dict]:
     except ValueError as exc:
         raise AdminOpError(422, str(exc)) from None
     return normalized
+
+
+def _ensure_managed_not_liquidated(session: Session, portfolio: Portfolio) -> None:
+    if portfolio.prompt_mode != "managed" or portfolio.direction != "short" or not portfolio.allocations:
+        return
+    valuations = compute_valuations(session, [portfolio])
+    valuation = valuations.by_portfolio_id.get(portfolio.id)
+    if valuation is not None and valuation.result is not None and valuation.result.liquidated_at:
+        raise AdminOpError(
+            409,
+            "This short portfolio is liquidated. Reset its history before entering another allocation.",
+        )
 
 
 def _apply_positions(allocation: Allocation, positions: list[dict]) -> None:
@@ -739,6 +1064,7 @@ def create_allocation(session: Session, portfolio_id: int, positions: list[dict]
         raise AdminOpError(409, "Rebuilt portfolios accept daily signals, not allocations.")
     if portfolio.status != "active":
         raise AdminOpError(409, "Unarchive the portfolio before adding allocations")
+    _ensure_managed_not_liquidated(session, portfolio)
 
     normalized = _normalize_positions(portfolio.prompt, positions)
     now = datetime.now(UTC)
@@ -782,6 +1108,7 @@ def update_allocation(
                 403,
                 "Positions are frozen: the effective close has passed. Enter a new rebalance instead.",
             )
+        _ensure_managed_not_liquidated(session, allocation.portfolio)
         normalized = _normalize_positions(allocation.portfolio.prompt, positions)
         allocation.positions.clear()
         session.flush()  # delete old rows before inserting (unique on allocation+symbol)

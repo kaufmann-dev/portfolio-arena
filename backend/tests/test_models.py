@@ -196,6 +196,7 @@ def test_codex_portfolios_are_eligible_but_start_disabled(
             "agent_id": unsupported_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "managed",
+            "direction": "long",
         },
         headers=admin_headers,
     )

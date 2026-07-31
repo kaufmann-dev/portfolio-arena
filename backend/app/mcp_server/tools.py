@@ -1,6 +1,8 @@
-"""MCP tools — the full app surface an admin/visitor has, minus API-key
-management. Reads use the shared serializers; writes call ``services.admin_ops``
-so every integrity rule is enforced exactly as it is for the REST admin panel.
+"""MCP tools for the operational arena surface.
+
+API-key management and archived prompt recovery remain browser-admin-only.
+Reads use the shared serializers; writes call ``services.admin_ops`` so every
+integrity rule is enforced exactly as it is for the REST admin panel.
 
 Each tool opens its own session (FastMCP runs sync tools in a worker thread).
 ``AdminOpError`` / ``SymbolValidationError`` are surfaced as tool errors.
@@ -55,6 +57,12 @@ def _positions(positions: list[PositionIn]) -> list[dict]:
     return [{"symbol": p.symbol, "weight_pct": p.weight_pct, "note": p.note} for p in positions]
 
 
+def _direction(value: str) -> str:
+    if value not in {"long", "short"}:
+        raise ValueError("direction must be long or short")
+    return value
+
+
 def _resolve_portfolio(session: Session, slug_or_id: str) -> Portfolio:
     text = str(slug_or_id).strip()
     portfolio = None
@@ -91,6 +99,7 @@ def get_portfolio(slug_or_id: str) -> dict:
                     "agent": agent_out(portfolio.agent),
                     "prompt": admin_ops.prompt_out(portfolio.prompt),
                     "prompt_mode": "rebuilt",
+                    "direction": portfolio.direction,
                     "status": portfolio.status,
                     "next_entry": {
                         "entered_at": now.isoformat(),
@@ -123,13 +132,18 @@ def get_portfolio(slug_or_id: str) -> dict:
 
 
 @mcp.tool()
-def get_arena_overview() -> dict:
-    """Separate managed and default rebuilt (Common/Canonical/Net) summaries."""
+def get_arena_overview(direction: str) -> dict:
+    """Managed and default rebuilt (Common/Canonical/Net) summaries for one
+    all-long or all-short direction."""
+    selected_direction = _direction(direction)
     with _session() as session:
         portfolios = load_portfolios(session)
-        valuations = compute_valuations(session, portfolios)
+        selected = [portfolio for portfolio in portfolios if portfolio.direction == selected_direction]
+        valuations = compute_valuations(session, selected)
         managed_rows = []
-        for portfolio in portfolios:
+        for portfolio in selected:
+            if portfolio.prompt_mode != "managed":
+                continue
             valuation = valuations.by_portfolio_id.get(portfolio.id)
             if valuation is None:
                 continue
@@ -140,23 +154,29 @@ def get_arena_overview() -> dict:
 
         rebuilt = compute_rebuilt_arena(
             session,
-            portfolios,
+            selected,
             objective="canonical",
             cost_basis="net",
         )
         rebuilt_rows = [
             serialize_rebuilt_summary(analysis, rebuilt, view="common")
             for analysis in rebuilt.by_portfolio_id.values()
+            if analysis.portfolio.direction == selected_direction
         ]
         for row in rebuilt_rows:
             row.pop("sparkline", None)
         rank_rows(rebuilt_rows)
+        common = rebuilt.common_for(selected_direction)
         return {
+            "direction": selected_direction,
             "managed": {
                 "as_of": valuations.as_of,
                 "market_data_status": valuations.market_data_status,
                 "portfolios": [
-                    synthetic_spy_row(valuations.spy_series),
+                    synthetic_spy_row(
+                        valuations.spy_series,
+                        direction=selected_direction,
+                    ),
                     *managed_rows,
                 ],
             },
@@ -169,12 +189,19 @@ def get_arena_overview() -> dict:
                     "cost_basis": "net",
                     "horizon": None,
                 },
-                "common_policy": rebuilt.common_policy,
+                "common_policy": common.policy,
                 "portfolios": [
                     (
-                        synthetic_spy_row(rebuilt.common_spy_series, precomputed_nav=True)
-                        if rebuilt.common_spy_series
-                        else synthetic_spy_row(rebuilt.spy_series)
+                        synthetic_spy_row(
+                            common.spy_series,
+                            precomputed_nav=True,
+                            direction=selected_direction,
+                        )
+                        if common.spy_series
+                        else synthetic_spy_row(
+                            rebuilt.spy_series,
+                            direction=selected_direction,
+                        )
                     ),
                     *rebuilt_rows,
                 ],
@@ -184,6 +211,7 @@ def get_arena_overview() -> dict:
 
 @mcp.tool()
 def get_rebuilt_analysis(
+    direction: str,
     view: str = "common",
     objective: str = "canonical",
     cost_basis: str = "net",
@@ -194,6 +222,7 @@ def get_rebuilt_analysis(
     Signal view requires a 1-20 horizon, canonical objective, and gross basis.
     Common/Tuned do not accept a horizon.
     """
+    selected_direction = _direction(direction)
     allowed_views = {"common", "tuned", "signal"}
     allowed_objectives = {
         "canonical",
@@ -217,9 +246,10 @@ def get_rebuilt_analysis(
 
     with _session() as session:
         portfolios = load_portfolios(session)
+        selected = [portfolio for portfolio in portfolios if portfolio.direction == selected_direction]
         arena = compute_rebuilt_arena(
             session,
-            portfolios,
+            selected,
             objective=objective,
             cost_basis=cost_basis,
         )
@@ -231,16 +261,23 @@ def get_rebuilt_analysis(
                 horizon=horizon,
             )
             for analysis in arena.by_portfolio_id.values()
+            if analysis.portfolio.direction == selected_direction
         ]
         for row in rows:
             row.pop("sparkline", None)
         rank_rows(rows)
+        common = arena.common_for(selected_direction)
         spy_row = (
-            synthetic_spy_row(arena.common_spy_series, precomputed_nav=True)
-            if view == "common" and arena.common_spy_series
-            else synthetic_spy_row(arena.spy_series)
+            synthetic_spy_row(
+                common.spy_series,
+                precomputed_nav=True,
+                direction=selected_direction,
+            )
+            if view == "common" and common.spy_series
+            else synthetic_spy_row(arena.spy_series, direction=selected_direction)
         )
         return {
+            "direction": selected_direction,
             "as_of": arena.as_of,
             "market_data_status": arena.market_data_status,
             "context": {
@@ -249,7 +286,7 @@ def get_rebuilt_analysis(
                 "cost_basis": cost_basis,
                 "horizon": horizon,
             },
-            "common_policy": arena.common_policy,
+            "common_policy": common.policy,
             "portfolios": [
                 spy_row,
                 *rows,
@@ -297,7 +334,7 @@ def list_prompts() -> dict:
     counts. Use `get_prompt` for a prompt's full text."""
     with _session() as session:
         counts = _portfolio_counts(session, Portfolio.prompt_id)
-        prompts = session.scalars(select(Prompt).order_by(Prompt.slug)).all()
+        prompts = session.scalars(select(Prompt).where(Prompt.status == "active").order_by(Prompt.slug)).all()
         return {
             "prompts": [
                 {
@@ -319,9 +356,19 @@ def get_prompt(slug_or_id: str) -> dict:
         text = str(slug_or_id).strip()
         prompt = None
         if text.isdigit():
-            prompt = session.get(Prompt, int(text))
+            prompt = session.scalars(
+                select(Prompt).where(
+                    Prompt.id == int(text),
+                    Prompt.status == "active",
+                )
+            ).first()
         if prompt is None:
-            prompt = session.scalars(select(Prompt).where(Prompt.slug == text)).first()
+            prompt = session.scalars(
+                select(Prompt).where(
+                    Prompt.slug == text,
+                    Prompt.status == "active",
+                )
+            ).first()
         if prompt is None:
             raise ValueError(f"Prompt '{slug_or_id}' not found")
         return admin_ops.prompt_out(prompt)
@@ -460,7 +507,7 @@ def delete_agent(agent_id: int) -> dict:
 def create_prompt(name: str, text: str, allocation_policy: AllocationPolicyIn, notes: str = "") -> dict:
     """Create strategy text with a server-enforced position-sizing policy."""
     with _session() as session:
-        return _guard(
+        created = _guard(
             admin_ops.create_prompt,
             session,
             name=name,
@@ -468,6 +515,10 @@ def create_prompt(name: str, text: str, allocation_policy: AllocationPolicyIn, n
             notes=notes,
             allocation_policy=allocation_policy.model_dump(),
         )
+        prompt = session.get(Prompt, created["id"])
+        if prompt is None:
+            raise ValueError("Prompt creation did not return a prompt")
+        return admin_ops.prompt_out(prompt)
 
 
 @mcp.tool()
@@ -480,7 +531,7 @@ def update_prompt(
 ) -> dict:
     """Edit strategy text, notes, or its position-sizing policy."""
     with _session() as session:
-        return _guard(
+        updated = _guard(
             admin_ops.update_prompt,
             session,
             prompt_id,
@@ -489,13 +540,27 @@ def update_prompt(
             notes=notes,
             allocation_policy=allocation_policy.model_dump() if allocation_policy else None,
         )
+        prompt = session.get(Prompt, updated["id"])
+        if prompt is None or prompt.status != "active":
+            raise ValueError("Prompt not found")
+        return admin_ops.prompt_out(prompt)
 
 
 @mcp.tool()
-def delete_prompt(prompt_id: int) -> dict:
-    """Delete a prompt. Fails if any portfolio still uses it."""
+def archive_prompt(prompt_id: int) -> dict:
+    """Archive an active prompt. Fails while any portfolio still uses it.
+    Archived content and version history are browser-admin-only."""
     with _session() as session:
-        return _guard(admin_ops.delete_prompt, session, prompt_id)
+        prompt = session.scalars(
+            select(Prompt).where(
+                Prompt.id == prompt_id,
+                Prompt.status == "active",
+            )
+        ).first()
+        if prompt is None:
+            raise ValueError("Prompt not found")
+        _guard(admin_ops.archive_prompt, session, prompt_id)
+        return {"ok": True, "prompt_id": prompt_id}
 
 
 # --- Writes: portfolios -----------------------------------------------------
@@ -507,10 +572,12 @@ def create_portfolio(
     agent_id: int,
     prompt_id: int,
     prompt_mode: str,
+    direction: str,
     cost_bps: int | None = None,
 ) -> dict:
     """Create a portfolio bound to an agent, canonical prompt, and prompt mode
-    (`managed` or `rebuilt`). `cost_bps` defaults to the configured default."""
+    (`managed` or `rebuilt`) and whole-book direction (`long` or `short`).
+    `cost_bps` defaults to the configured default."""
     with _session() as session:
         return _guard(
             admin_ops.create_portfolio,
@@ -519,6 +586,7 @@ def create_portfolio(
             agent_id=agent_id,
             prompt_id=prompt_id,
             prompt_mode=prompt_mode,
+            direction=_direction(direction),
             cost_bps=cost_bps,
         )
 
@@ -531,11 +599,12 @@ def update_portfolio(
     agent_id: int | None = None,
     prompt_id: int | None = None,
     prompt_mode: str | None = None,
+    direction: str | None = None,
     cost_bps: int | None = None,
 ) -> dict:
     """Edit a portfolio: rename, archive/unarchive (`status` = "active" |
     "archived"), reassign agent/prompt, select `managed` or `rebuilt` prompt
-    mode, or change cost_bps. Omitted fields are left unchanged."""
+    mode, direction, or cost_bps. Omitted fields are left unchanged."""
     with _session() as session:
         return _guard(
             admin_ops.update_portfolio,
@@ -546,6 +615,7 @@ def update_portfolio(
             agent_id=agent_id,
             prompt_id=prompt_id,
             prompt_mode=prompt_mode,
+            direction=_direction(direction) if direction is not None else None,
             cost_bps=cost_bps,
         )
 

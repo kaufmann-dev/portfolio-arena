@@ -138,7 +138,15 @@ def delete_agent(agent_id: int, session: Session = Depends(get_session)):
 # --- Prompts ----------------------------------------------------------------
 
 
-@router.post("/prompts", status_code=201)
+@router.get("/admin/prompts")
+def list_prompts(
+    status: str | None = None,
+    session: Session = Depends(get_session),
+):
+    return _run(admin_ops.list_prompts, session, status=status)
+
+
+@router.post("/admin/prompts", status_code=201)
 def create_prompt(body: PromptCreate, session: Session = Depends(get_session)):
     return _run(
         admin_ops.create_prompt,
@@ -151,7 +159,7 @@ def create_prompt(body: PromptCreate, session: Session = Depends(get_session)):
     )
 
 
-@router.patch("/prompts/{prompt_id}")
+@router.patch("/admin/prompts/{prompt_id}")
 def patch_prompt(prompt_id: int, body: PromptPatch, session: Session = Depends(get_session)):
     return _run(
         admin_ops.update_prompt,
@@ -164,9 +172,36 @@ def patch_prompt(prompt_id: int, body: PromptPatch, session: Session = Depends(g
     )
 
 
-@router.delete("/prompts/{prompt_id}")
-def delete_prompt(prompt_id: int, session: Session = Depends(get_session)):
-    return _run(admin_ops.delete_prompt, session, prompt_id)
+@router.post("/admin/prompts/{prompt_id}/archive")
+def archive_prompt(prompt_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.archive_prompt, session, prompt_id)
+
+
+@router.post("/admin/prompts/{prompt_id}/unarchive")
+def unarchive_prompt(prompt_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.unarchive_prompt, session, prompt_id)
+
+
+@router.get("/admin/prompts/{prompt_id}/versions")
+def list_prompt_versions(prompt_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.list_prompt_versions, session, prompt_id)
+
+
+@router.post(
+    "/admin/prompts/{prompt_id}/versions/{version}/restore",
+    status_code=201,
+)
+def restore_prompt_version(
+    prompt_id: int,
+    version: int,
+    session: Session = Depends(get_session),
+):
+    return _run(
+        admin_ops.restore_prompt_version,
+        session,
+        prompt_id,
+        version,
+    )
 
 
 # --- Symbol validation (entry-form support) ----------------------------------
@@ -211,6 +246,7 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
         agent_id=body.agent_id,
         prompt_id=body.prompt_id,
         prompt_mode=body.prompt_mode,
+        direction=body.direction,
         slug=body.slug,
         cost_bps=body.cost_bps,
     )
@@ -227,6 +263,7 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
         agent_id=body.agent_id,
         prompt_id=body.prompt_id,
         prompt_mode=body.prompt_mode,
+        direction=body.direction,
         cost_bps=body.cost_bps,
     )
 

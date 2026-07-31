@@ -2,7 +2,10 @@
 
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+
 from app.services import admin_ops, evaluator
+from app.services.admin_ops import AdminOpError
 from app.services.trading_calendar import close_at, effective_date_for
 
 from .util import backdate_allocation
@@ -77,6 +80,62 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
     assert submitted["run"]["trigger_kind"] == "manual"
     assert submitted["result"]["kind"] == "allocation"
     assert allocation.effective_date == effective_date_for(now + timedelta(minutes=5))
+
+
+def test_running_managed_short_cannot_submit_after_liquidation(
+    sample_portfolio,
+    monkeypatch,
+):
+    from app.db import session_factory
+    from app.models import Allocation, Portfolio
+
+    with session_factory()() as session:
+        portfolio = session.get(Portfolio, sample_portfolio["id"])
+        portfolio.direction = "short"
+        session.commit()
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
+    with session_factory()() as session:
+        _enable(session, sample_portfolio)
+        queued = evaluator.enqueue_manual_runs(
+            session,
+            portfolio_ids=[sample_portfolio["id"]],
+            now=now,
+        )
+        run_id = queued["items"][0]["run"]["id"]
+        evaluator.claim_runs(
+            session,
+            worker_id="worker-1",
+            harness="codex",
+            harness_version="codex-cli 0.144.5",
+            limit=1,
+            now=now,
+        )
+        monkeypatch.setattr(
+            evaluator,
+            "_liquidated_managed_ids",
+            lambda _session, _portfolios: {sample_portfolio["id"]},
+        )
+
+        with pytest.raises(AdminOpError, match="Reset this liquidated short portfolio"):
+            evaluator.submit_run(
+                session,
+                run_id=run_id,
+                positions=[
+                    {"symbol": "AAPL", "weight_pct": 55, "note": "consumer resilience"},
+                    {"symbol": "MSFT", "weight_pct": 45, "note": "cloud growth"},
+                ],
+                note="Too late",
+                report="The portfolio liquidated while research was running.",
+                now=now + timedelta(minutes=5),
+            )
+
+        run = evaluator.list_runs(session)["items"][0]
+        allocation_count = session.query(Allocation).count()
+
+    assert run["status"] == "skipped"
+    assert run["error"] == "Short portfolio liquidated before evaluation submission."
+    assert allocation_count == 1
 
 
 def test_scheduled_run_is_created_only_during_configured_window(sample_portfolio):

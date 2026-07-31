@@ -17,7 +17,7 @@ from .model_catalog import agent_out
 from .prompt_policy import allocation_policy_out, manual_execution_prompt
 from .rebuilt import PolicyResult, selected_objective_score
 from .trading_calendar import is_locked
-from .valuation import AppliedAllocation, rebase_series
+from .valuation import AppliedAllocation, Direction, rebase_series
 
 
 def agent_ref(portfolio: Portfolio) -> dict:
@@ -100,6 +100,8 @@ def _flags(valuation: PortfolioValuation) -> dict:
     return {
         "stale_data": bool(result and result.stale_days),
         "frozen_symbols": result.frozen_symbols if result else [],
+        "is_liquidated": bool(result and result.liquidated_at),
+        "liquidated_at": result.liquidated_at if result else None,
         "error": valuation.error,
     }
 
@@ -116,6 +118,7 @@ def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations
         "agent": agent_ref(portfolio),
         "prompt": prompt_ref(portfolio),
         "prompt_mode": portfolio.prompt_mode,
+        "direction": portfolio.direction,
         "status": portfolio.status,
         "rank": None,
         "cost_bps": portfolio.cost_bps,
@@ -145,7 +148,14 @@ def serialize_detail(
     applied_by_date = {applied.effective_date: applied for applied in (result.allocations if result else [])}
     series = result.series if result else []
     spy_overlay = (
-        rebase_series(valuations.spy_series, series[0]["date"], series[-1]["date"]) if series else []
+        rebase_series(
+            valuations.spy_series,
+            series[0]["date"],
+            series[-1]["date"],
+            direction=portfolio.direction,
+        )
+        if series
+        else []
     )
     return {
         **serialize_summary(valuation, valuations),
@@ -187,7 +197,10 @@ def synthetic_spy_row(
     start: str | None = None,
     *,
     precomputed_nav: bool = False,
+    direction: Direction = "long",
 ) -> dict:
+    if direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
     points = [point for point in spy_series if start is None or point["date"] >= start]
     sparkline = []
     metrics = {
@@ -199,33 +212,52 @@ def synthetic_spy_row(
         "ci_lower": 0.0 if len(points) > 1 else None,
         "ci_upper": 0.0 if len(points) > 1 else None,
         "evidence": "inconclusive" if len(points) > 1 else "pending",
+        "liquidated_at": None,
     }
     if points:
-        value_key = "nav" if precomputed_nav else "close"
-        base = float(points[0][value_key])
-        navs = [float(point[value_key]) / base * 100.0 for point in points]
-        sparkline = downsample(
-            [{"date": point["date"], "nav": nav} for point, nav in zip(points, navs, strict=True)]
+        if precomputed_nav:
+            base = float(points[0]["nav"])
+            nav_points = (
+                [{"date": point["date"], "nav": float(point["nav"]) / base * 100.0} for point in points]
+                if base > 0
+                else [{"date": point["date"], "nav": 0.0} for point in points]
+            )
+        else:
+            nav_points = rebase_series(
+                points,
+                points[0]["date"],
+                points[-1]["date"],
+                direction=direction,
+            )
+        navs = [float(point["nav"]) for point in nav_points]
+        sparkline = downsample(nav_points)
+        liquidated_at = next(
+            (point["date"] for point in nav_points if point["nav"] <= 0),
+            None,
         )
         metrics.update(
             {
-                "start_date": points[0]["date"],
-                "end_date": points[-1]["date"],
+                "start_date": nav_points[0]["date"],
+                "end_date": nav_points[-1]["date"],
                 "itd_return": navs[-1] / 100.0 - 1.0,
                 "spy_return": navs[-1] / 100.0 - 1.0,
+                "liquidated_at": liquidated_at,
             }
         )
     return {
         "kind": "benchmark",
         "id": None,
         "slug": "spy",
-        "name": "SPY",
+        "name": "Short SPY" if direction == "short" else "SPY",
+        "direction": direction,
         "status": "reference",
         "rank": None,
         "evidence": metrics["evidence"],
         "rank_score": None,
         "metrics": metrics,
         "sparkline": sparkline,
+        "is_liquidated": bool(metrics["liquidated_at"]),
+        "liquidated_at": metrics["liquidated_at"],
     }
 
 
@@ -276,9 +308,10 @@ def serialize_rebuilt_summary(
     portfolio = analysis.portfolio
     policy: PolicyResult | None
     direct: dict | None = None
-    common_admitted = portfolio.id in arena.common_member_ids
+    common = arena.common_for(portfolio.direction)
+    common_admitted = portfolio.id in common.member_ids
     displayed_series: list[dict] = []
-    common_pair = arena.common_policy if view == "common" else None
+    common_pair = common.policy if view == "common" else None
     if view == "common":
         policy = (
             analysis.policies.get((common_pair["horizon"], common_pair["exposure_pct"]))
@@ -286,7 +319,7 @@ def serialize_rebuilt_summary(
             else None
         )
         if policy is not None:
-            displayed_series = arena.common_series_by_portfolio_id.get(portfolio.id, [])
+            displayed_series = common.member_series.get(portfolio.id, [])
     elif view == "tuned":
         policy = analysis.selected
         displayed_series = policy.series if policy else []
@@ -301,9 +334,7 @@ def serialize_rebuilt_summary(
         raise ValueError(f"Unknown rebuilt view: {view}")
 
     if view == "common":
-        metrics = (
-            arena.common_metrics_by_portfolio_id.get(portfolio.id) if policy is not None else None
-        ) or {
+        metrics = (common.member_metrics.get(portfolio.id) if policy is not None else None) or {
             "has_data": False,
             "eligible": False,
             "evidence": "pending",
@@ -351,6 +382,7 @@ def serialize_rebuilt_summary(
         "agent": agent_ref(portfolio),
         "prompt": prompt_ref(portfolio),
         "prompt_mode": "rebuilt",
+        "direction": portfolio.direction,
         "status": portfolio.status,
         "cost_bps": portfolio.cost_bps,
         "founding_v2": portfolio.founding_v2,
@@ -360,6 +392,8 @@ def serialize_rebuilt_summary(
         "rank_score": rank_score,
         "metrics": metrics,
         "selected_policy": _selected_policy_payload(policy, arena.objective, metrics),
+        "is_liquidated": bool(policy and policy.liquidated_at),
+        "liquidated_at": policy.liquidated_at if policy else None,
         "completion": completion,
         "signal_horizons": [_public_horizon(item) for item in analysis.signal_horizons],
         "sparkline": downsample(displayed_series),
@@ -383,8 +417,9 @@ def serialize_rebuilt_detail(
     policy = analysis.policies.get((selected["horizon"], selected["exposure_pct"])) if selected else None
     recent_signals = sorted(analysis.portfolio.signals, key=lambda signal: signal.id, reverse=True)[:20]
     if view == "common":
-        series = arena.common_series_by_portfolio_id.get(analysis.portfolio.id, []) if policy else []
-        spy_series = arena.common_spy_series if policy else []
+        common = arena.common_for(analysis.portfolio.direction)
+        series = common.member_series.get(analysis.portfolio.id, []) if policy else []
+        spy_series = common.spy_series if policy else []
     else:
         series = policy.series if policy else []
         spy_series = policy.spy_series if policy else []

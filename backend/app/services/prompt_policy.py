@@ -20,10 +20,10 @@ Evaluate the Portfolio Arena portfolio `{{portfolio_slug}}` and produce its next
 Call the Portfolio Arena `get_portfolio` tool first. Treat its prompt mode, strategy, allocation
 policy, current holdings, notes, allocation history, performance, and effective date as authoritative.
 
-Act as a US equity portfolio manager aiming to outperform SPY. Search across the full eligible US
-market rather than defaulting to index constituents, household names, or recent winners. Do not mirror
-SPY. Select a stock or ETF only when it has a distinct, falsifiable, security-specific investment
-thesis supported by current evidence.
+Act as a US equity portfolio manager aiming to outperform the portfolio's direction-matched SPY
+reference. Search across the full eligible US market rather than defaulting to index constituents,
+household names, or recent winners. Do not mirror SPY. Select a stock or ETF only when it has a
+distinct, falsifiable, security-specific investment thesis supported by current evidence.
 
 If the returned allocation history is empty, construct the portfolio's initial allocation. Otherwise,
 manage and rebalance the existing portfolio; do not rebuild it from scratch. Treat each evaluation as
@@ -54,10 +54,10 @@ Call the Portfolio Arena `get_portfolio` tool first. Treat its prompt mode, stra
 and effective date as authoritative. The response intentionally excludes current holdings, signal
 history, prior notes, performance, turnover, and transaction costs.
 
-Act as a US equity portfolio manager aiming to outperform SPY. Search across the full eligible US
-market rather than defaulting to index constituents, household names, or recent winners. Do not mirror
-SPY. Select a stock or ETF only when it has a distinct, falsifiable, security-specific investment
-thesis supported by current evidence.
+Act as a US equity portfolio manager aiming to outperform the portfolio's direction-matched SPY
+reference. Search across the full eligible US market rather than defaulting to index constituents,
+household names, or recent winners. Do not mirror SPY. Select a stock or ETF only when it has a
+distinct, falsifiable, security-specific investment thesis supported by current evidence.
 
 At every evaluation, construct the complete signal portfolio independently from scratch. Evaluate
 every candidate without regard to previous signals. Select each security only if it independently
@@ -275,11 +275,32 @@ def validate_wrapper_prompt(template: str) -> str:
     return template
 
 
-def allocation_policy_text(prompt: Prompt) -> str:
+def allocation_policy_text(prompt: Prompt, direction: str) -> str:
     policy = allocation_policy_out(prompt)
+    if direction not in {"long", "short"}:
+        raise ValueError("Portfolio direction must be long or short")
+    direction_rules = (
+        [
+            "- This is an all-long portfolio. Every submitted position is a long position.",
+            "- Invest exactly 100% of NAV across USD-denominated equities and ETFs.",
+            "- Do not use cash, shorts, or leverage.",
+        ]
+        if direction == "long"
+        else [
+            (
+                "- This is an all-short portfolio. Select securities whose prices are expected to "
+                "underperform SPY so the short book can outperform the Short SPY reference."
+            ),
+            (
+                "- Submit positive weights totaling exactly 100%; the server interprets every "
+                "position as gross short exposure."
+            ),
+            "- Do not use cash, long positions, or gross exposure above 100%.",
+        ]
+    )
     return "\n".join(
         [
-            "- Invest exactly 100% across USD-denominated equities and ETFs.",
+            *direction_rules,
             (
                 f"- Use between {policy['derived_min_positions']} and "
                 f"{policy['derived_max_positions']} positions."
@@ -288,7 +309,7 @@ def allocation_policy_text(prompt: Prompt) -> str:
                 f"- Every position must be between {policy['min_position_weight_pct']:g}% and "
                 f"{policy['max_position_weight_pct']:g}% of NAV."
             ),
-            "- Do not use cash, mutual funds, options, futures, indices, FX, shorts, or leverage.",
+            "- Do not use mutual funds, options, futures, indices, or FX.",
             "- Validate every final symbol before submitting.",
         ]
     )
@@ -306,7 +327,7 @@ def render_execution_prompt(
     values = {
         "portfolio_slug": portfolio.slug,
         "strategy_text": prompt.text.strip(),
-        "allocation_policy": allocation_policy_text(prompt),
+        "allocation_policy": allocation_policy_text(prompt, portfolio.direction),
         "submission_instructions": submission_instructions.strip(),
     }
     validated = validate_wrapper_prompt(wrapper_prompt)

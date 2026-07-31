@@ -36,10 +36,11 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   `backend/app/production.py`. Keep queue claims and atomic submissions private; public MCP tools
   control evaluator settings and actions but never execute worker leases.
 - MCP server: `backend/app/mcp_server/` (FastMCP, mounted at `/mcp` in `main.py`). It exposes
-  the full app surface as tools — everything an admin/visitor can do **except** API-key
-  management — authenticated by an API key (`Authorization: Bearer <key>` or `X-API-Key`, no
-  anonymous access). Tools always serialize with `admin=True` since the endpoint is key-gated.
-  Keys are stored as SHA-256 hashes in the `api_keys` table (`security.py` helpers).
+  the operational app surface as API-key-authenticated tools (`Authorization: Bearer <key>` or
+  `X-API-Key`, no anonymous access). API-key management and archived prompt content, version
+  history, unarchive, and restore remain browser-admin-only. MCP may archive an active unused
+  prompt. Other tools serialize with `admin=True` since the endpoint is key-gated. Keys are stored
+  as SHA-256 hashes in the `api_keys` table (`security.py` helpers).
 
 ## Database and Migrations
 

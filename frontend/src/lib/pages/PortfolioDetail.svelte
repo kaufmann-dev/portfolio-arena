@@ -11,6 +11,7 @@
   import PolicyMatrix from "../components/PolicyMatrix.svelte";
   import SignalHistory from "../components/SignalHistory.svelte";
   import SignalMatrix from "../components/SignalMatrix.svelte";
+  import { parseDirection } from "../arena";
   import { ageLabel, fmtDate, fmtDateTime, num, pct, pctPoints, signClass } from "../format";
   import { link } from "../stores/router.svelte";
 
@@ -24,9 +25,13 @@
   function requestUrl(portfolioSlug: string): string {
     const source = new URLSearchParams(window.location.search);
     const track = source.get("track");
-    if (track !== "managed" && track !== "rebuilt") return `/api/portfolios/${portfolioSlug}`;
+    const direction = parseDirection(source.get("direction"));
+    const query = new URLSearchParams({ direction });
+    if (track !== "managed" && track !== "rebuilt") {
+      return `/api/portfolios/${portfolioSlug}?${query.toString()}`;
+    }
 
-    const query = new URLSearchParams({ track });
+    query.set("track", track);
     if (track === "rebuilt") {
       for (const key of ["view", "objective", "cost_basis", "horizon"]) {
         const value = source.get(key);
@@ -40,7 +45,12 @@
     if (!portfolio.series.length) return [];
     return [
       { name: portfolio.name, points: portfolio.series },
-      { name: "SPY", points: portfolio.spy_series, dashed: true, color: "var(--spark)" },
+      {
+        name: portfolio.direction === "short" ? "Short SPY" : "SPY",
+        points: portfolio.spy_series,
+        dashed: true,
+        color: "var(--spark)",
+      },
     ];
   }
 
@@ -142,13 +152,15 @@
     {@const managedPortfolio = data.track === "managed" ? (data.portfolio as ManagedPortfolioDetail) : null}
     {@const rebuiltPortfolio = data.track === "rebuilt" ? (data.portfolio as RebuiltPortfolioDetail) : null}
     {@const rebuiltContext = data.track === "rebuilt" ? data.context : null}
+    {@const benchmarkName = portfolio.direction === "short" ? "Short SPY" : "SPY"}
+    {@const arenaHref = `/?direction=${portfolio.direction}`}
     {@const series = chartSeries(portfolio)}
     {@const markers = markersFor(data)}
     <article class="portfolio-detail">
       <header class="detail-head">
         <div>
           <nav class="crumbs" aria-label="Breadcrumb">
-            <a href="/" onclick={(event) => link(event, "/")}>Portfolio Arena</a>
+            <a href={arenaHref} onclick={(event) => link(event, arenaHref)}>Portfolio Arena</a>
             <span aria-hidden="true">/</span>
             <span>{data.track === "rebuilt" ? "Rebuilt" : "Managed"}</span>
           </nav>
@@ -167,7 +179,7 @@
             >
               {portfolio.prompt.name}
             </a>
-            · {data.track}
+            · {portfolio.direction} · {data.track}
             {#if data.as_of}· as of <span class="num">{data.as_of}</span>{/if}
           </p>
           {#if portfolio.execution_prompt}
@@ -184,6 +196,7 @@
           {/if}
         </div>
         <div class="head-badges">
+          <span class="badge">{portfolio.direction}</span>
           <span class="badge">{data.track}</span>
           <EvidenceBadge state={portfolio.evidence} />
           {#if portfolio.status === "archived"}<span class="badge">archived</span>{/if}
@@ -196,6 +209,9 @@
           {#if portfolio.frozen_symbols.length}
             <span class="badge neg">{portfolio.frozen_symbols.length} frozen</span>
           {/if}
+          {#if portfolio.is_liquidated}
+            <span class="badge neg">{data.track === "rebuilt" ? "policy liquidated" : "liquidated"}</span>
+          {/if}
         </div>
       </header>
 
@@ -203,6 +219,19 @@
 
       {#if portfolio.error}
         <div class="error-box" role="alert">Analysis failed: {portfolio.error}</div>
+      {/if}
+
+      {#if portfolio.is_liquidated}
+        <div class="card warning-card" role="status">
+          <strong
+            >{data.track === "rebuilt" ? "Selected policy" : "Portfolio"} liquidated{portfolio.liquidated_at
+              ? ` ${fmtDate(portfolio.liquidated_at)}`
+              : ""}.</strong
+          >
+          {data.track === "rebuilt"
+            ? "Independent signals continue to feed other policies and future cohorts."
+            : "Its completed history remains visible, but it no longer accepts new allocations."}
+        </div>
       {/if}
 
       {#if portfolio.frozen_symbols.length}
@@ -289,11 +318,11 @@
         <section class="card chart-card">
           <header class="section-head">
             <div>
-              <h2>NAV vs SPY</h2>
+              <h2>NAV vs {benchmarkName}</h2>
               <p>Base 100, total return{rebuiltContext ? ` · ${rebuiltContext.cost_basis}` : ""}.</p>
             </div>
           </header>
-          <LineChart {series} {markers} ariaLabel="{portfolio.name} NAV versus SPY" />
+          <LineChart {series} {markers} ariaLabel="{portfolio.name} NAV versus {benchmarkName}" />
           <p class="chart-note">
             Dotted vertical lines mark {data.track === "managed" ? "allocation" : "signal"} effective sessions.
           </p>
@@ -313,7 +342,11 @@
           <header class="section-head">
             <div>
               <h2 id="managed-holdings-title">Current holdings</h2>
-              <p>Drifted weights against the latest managed target.</p>
+              <p>
+                Drifted weights against the latest managed {managedPortfolio.direction === "short"
+                  ? "short"
+                  : "long"} target.
+              </p>
             </div>
           </header>
           <div class="table-scroll">
@@ -348,7 +381,10 @@
           <header class="section-head">
             <div>
               <h2 id="aggregate-holdings-title">Aggregate holdings</h2>
-              <p>Overlapping active cohorts plus the unallocated SPY sleeve.</p>
+              <p>
+                Overlapping active {rebuiltPortfolio.direction} cohorts plus the unallocated
+                {benchmarkName} sleeve.
+              </p>
             </div>
           </header>
           <div class="table-scroll compact-table">
@@ -412,6 +448,7 @@
 
         <SignalHistory
           slug={rebuiltPortfolio.slug}
+          direction={rebuiltPortfolio.direction}
           initialSignals={rebuiltPortfolio.signals}
           initialNextCursor={rebuiltPortfolio.signals_next_cursor}
         />
@@ -419,6 +456,7 @@
           rows={[rebuiltPortfolio]}
           selectedHorizon={rebuiltContext.horizon ?? rebuiltPortfolio.selected_policy?.horizon ?? 1}
           context={rebuiltContext}
+          {benchmarkName}
         />
         <PolicyMatrix cells={rebuiltPortfolio.policy_matrix} selected={rebuiltPortfolio.selected_policy} />
       {/if}

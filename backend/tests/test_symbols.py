@@ -70,7 +70,7 @@ class TestPositionRules:
             )
 
     def test_negative_weight_rejected(self):
-        with pytest.raises(SymbolValidationError, match="long-only"):
+        with pytest.raises(SymbolValidationError, match="direction is set separately"):
             validate_positions(
                 [
                     {"symbol": "AAPL", "weight_pct": 150.0},
