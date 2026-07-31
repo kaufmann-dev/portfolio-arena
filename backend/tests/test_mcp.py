@@ -101,6 +101,9 @@ class TestMcpTools:
             "list_evaluation_runs",
         } <= names
         assert "delete_prompt" not in names
+        assert "list_prompt_versions" not in names
+        assert "restore_prompt_version" not in names
+        assert "unarchive_prompt" not in names
         # Key management is never exposed as a tool.
         assert not any("key" in name.lower() for name in names)
 
@@ -220,14 +223,17 @@ class TestMcpTools:
         assert overview["managed"]["as_of"] is None
         assert portfolio["as_of"] is None
 
-    def test_get_portfolio_is_curated(self, client, mcp_headers, sample_portfolio):
+    def test_get_portfolio_is_curated(self, client, mcp_headers, sample_portfolio, sample_prompt):
         from .util import backdate_allocation
 
         backdate_allocation(sample_portfolio["allocation"]["id"])
         data = _call_tool(client, mcp_headers, "get_portfolio", {"slug_or_id": sample_portfolio["slug"]})
         portfolio = data["portfolio"]
         assert data["market_data_status"] == "fresh"
-        assert portfolio["prompt"]["text"]  # full prompt text, for the rebalancing agent
+        assert portfolio["prompt"]["mode"] == "both"
+        assert portfolio["prompt"]["text"] == sample_prompt["managed_text"]
+        assert "managed_text" not in portfolio["prompt"]
+        assert "rebuilt_text" not in portfolio["prompt"]
         assert portfolio["prompt_mode"] == "managed"
         assert portfolio["allocations"]  # history with notes
         assert "next_entry" in portfolio
@@ -271,7 +277,10 @@ class TestMcpTools:
         data = _call_tool(client, mcp_headers, "get_portfolio", {"slug_or_id": rebuilt["slug"]})
         portfolio = data["portfolio"]
         assert portfolio["prompt_mode"] == "rebuilt"
-        assert portfolio["prompt"]["text"]
+        assert portfolio["prompt"]["mode"] == "both"
+        assert portfolio["prompt"]["text"] == sample_prompt["rebuilt_text"]
+        assert "managed_text" not in portfolio["prompt"]
+        assert "rebuilt_text" not in portfolio["prompt"]
         assert portfolio["prompt"]["allocation_policy"]
         assert "next_entry" in portfolio
         for hidden in (
@@ -328,7 +337,8 @@ class TestMcpTools:
             "create_prompt",
             {
                 "name": "MCP Prompt",
-                "text": "Beat SPY.",
+                "mode": "managed",
+                "managed_text": "Beat SPY.",
                 "allocation_policy": {
                     "min_position_weight_pct": 1,
                     "max_position_weight_pct": 100,
@@ -372,6 +382,55 @@ class TestMcpTools:
         assert reset["deleted_allocations"] == 1
         detail = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers).json()
         assert detail["portfolio"]["allocations"] == []
+
+    def test_generic_prompt_exposes_both_fields_but_archive_hides_it(self, client, mcp_headers):
+        created = _call_tool(
+            client,
+            mcp_headers,
+            "create_prompt",
+            {
+                "name": "MCP Both Prompt",
+                "mode": "both",
+                "managed_text": "Managed MCP strategy.",
+                "rebuilt_text": "Rebuilt MCP strategy.",
+                "allocation_policy": {
+                    "min_position_weight_pct": 10,
+                    "max_position_weight_pct": 25,
+                },
+            },
+        )
+
+        generic = _call_tool(
+            client,
+            mcp_headers,
+            "get_prompt",
+            {"slug_or_id": str(created["id"])},
+        )
+        assert generic["mode"] == "both"
+        assert generic["managed_text"] == "Managed MCP strategy."
+        assert generic["rebuilt_text"] == "Rebuilt MCP strategy."
+        assert "text" not in generic
+
+        _call_tool(
+            client,
+            mcp_headers,
+            "archive_prompt",
+            {"prompt_id": created["id"]},
+        )
+        listing = _call_tool(client, mcp_headers, "list_prompts")
+        assert all(prompt["id"] != created["id"] for prompt in listing["prompts"])
+
+        response = _rpc(
+            client,
+            mcp_headers,
+            "tools/call",
+            {
+                "name": "get_prompt",
+                "arguments": {"slug_or_id": str(created["id"])},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["result"]["isError"] is True
 
     def test_tool_error_surfaces_message(self, client, mcp_headers):
         response = _rpc(

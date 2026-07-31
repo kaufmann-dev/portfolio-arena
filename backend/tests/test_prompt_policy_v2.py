@@ -11,16 +11,23 @@ from app.services.prompt_policy import (
 )
 
 
+class _ModePrompt:
+    mode = "both"
+    managed_text = "Use the managed-only strategy evidence."
+    rebuilt_text = "Use the rebuilt-only strategy evidence."
+    min_position_weight_pct = 10
+    max_position_weight_pct = 25
+
+    def text_for_mode(self, mode: str) -> str:
+        return self.managed_text if mode == "managed" else self.rebuilt_text
+
+
 def _portfolio(prompt_mode: str, direction: str = "long"):
     return SimpleNamespace(
         slug=f"{prompt_mode}-strategy",
         prompt_mode=prompt_mode,
         direction=direction,
-        prompt=SimpleNamespace(
-            text="Use current, security-specific evidence.",
-            min_position_weight_pct=10,
-            max_position_weight_pct=25,
-        ),
+        prompt=_ModePrompt(),
     )
 
 
@@ -34,6 +41,10 @@ def test_managed_execution_instructions_remain_allocation_specific():
     assert "create_signal" not in manual
     assert "for a valid allocation" in automated
     assert "valid signal allocation" not in automated
+    assert portfolio.prompt.managed_text in manual
+    assert portfolio.prompt.rebuilt_text not in manual
+    assert portfolio.prompt.managed_text in automated
+    assert portfolio.prompt.rebuilt_text not in automated
 
 
 def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
@@ -46,6 +57,10 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
     assert "previous signals" in manual
     assert "valid signal allocation" in automated
     assert "create_allocation" not in manual
+    assert portfolio.prompt.rebuilt_text in manual
+    assert portfolio.prompt.managed_text not in manual
+    assert portfolio.prompt.rebuilt_text in automated
+    assert portfolio.prompt.managed_text not in automated
 
 
 def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_polarity():

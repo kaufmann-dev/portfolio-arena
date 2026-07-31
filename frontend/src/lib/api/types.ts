@@ -19,11 +19,13 @@ export interface PromptRef {
   id: number;
   slug: string;
   name: string;
+  mode: PromptAvailability;
   configurable: boolean;
   allocation_policy: AllocationPolicy;
 }
 
 export type PromptMode = "managed" | "rebuilt";
+export type PromptAvailability = PromptMode | "both";
 export type Direction = "long" | "short";
 export type MarketDataStatus = "fresh" | "stale" | "unavailable";
 export type ArenaTrack = PromptMode;
@@ -351,7 +353,9 @@ export interface PromptOut {
   id: number;
   slug: string;
   name: string;
-  text: string;
+  mode: PromptAvailability;
+  managed_text: string | null;
+  rebuilt_text: string | null;
   notes: string;
   allocation_policy: AllocationPolicy;
   updated_at?: string;
@@ -371,7 +375,9 @@ export interface AdminPrompt extends PromptOut {
 export interface PromptVersion {
   version: number;
   name: string;
-  text: string;
+  mode: PromptAvailability;
+  managed_text: string | null;
+  rebuilt_text: string | null;
   notes: string;
   allocation_policy: AllocationPolicy;
   created_at: string;

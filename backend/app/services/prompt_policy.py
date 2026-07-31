@@ -6,6 +6,7 @@ import re
 from ..models import Portfolio, Prompt
 
 PROMPT_MODES = {"managed", "rebuilt"}
+PROMPT_VERSION_MODES = {"managed", "rebuilt", "both"}
 WRAPPER_PLACEHOLDERS = {
     "portfolio_slug",
     "strategy_text",
@@ -13,6 +14,34 @@ WRAPPER_PLACEHOLDERS = {
     "submission_instructions",
 }
 _WRAPPER_PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
+
+
+def prompt_supports_mode(prompt_mode: str, version_mode: str) -> bool:
+    if prompt_mode not in PROMPT_MODES:
+        raise ValueError("Prompt mode must be 'managed' or 'rebuilt'.")
+    if version_mode not in PROMPT_VERSION_MODES:
+        raise ValueError("Prompt version mode must be 'managed', 'rebuilt', or 'both'.")
+    return version_mode == "both" or version_mode == prompt_mode
+
+
+def validate_prompt_texts(
+    mode: str,
+    managed_text: str | None,
+    rebuilt_text: str | None,
+) -> None:
+    """Validate the exact text/null shape for one immutable prompt version."""
+    if mode not in PROMPT_VERSION_MODES:
+        raise ValueError("Prompt mode must be 'managed', 'rebuilt', or 'both'.")
+    for prompt_mode, text in (
+        ("managed", managed_text),
+        ("rebuilt", rebuilt_text),
+    ):
+        supported = mode == "both" or mode == prompt_mode
+        if supported and (text is None or not text.strip()):
+            raise ValueError(f"{prompt_mode.title()} prompt text is required for mode '{mode}'.")
+        if not supported and text is not None:
+            raise ValueError(f"{prompt_mode.title()} prompt text must be null for mode '{mode}'.")
+
 
 DEFAULT_MANAGED_WRAPPER_PROMPT = """\
 Evaluate the Portfolio Arena portfolio `{{portfolio_slug}}` and produce its next allocation.
@@ -326,7 +355,7 @@ def render_execution_prompt(
         raise ValueError("Portfolio does not have an execution prompt")
     values = {
         "portfolio_slug": portfolio.slug,
-        "strategy_text": prompt.text.strip(),
+        "strategy_text": prompt.text_for_mode(portfolio.prompt_mode).strip(),
         "allocation_policy": allocation_policy_text(prompt, portfolio.direction),
         "submission_instructions": submission_instructions.strip(),
     }

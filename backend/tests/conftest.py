@@ -319,7 +319,9 @@ def sample_prompt(client, admin_headers) -> dict:
         "/api/admin/prompts",
         json={
             "name": "weekly-manager-v1",
-            "text": "Manage a portfolio to beat SPY.",
+            "mode": "both",
+            "managed_text": "Manage a portfolio to beat SPY.",
+            "rebuilt_text": "Select a fresh portfolio to beat SPY.",
             "allocation_policy": {
                 "min_position_weight_pct": 1,
                 "max_position_weight_pct": 100,

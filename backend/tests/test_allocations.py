@@ -157,7 +157,8 @@ class TestCreation:
             "/api/admin/prompts",
             json={
                 "name": "Concentrated",
-                "text": "Own a focused portfolio.",
+                "mode": "managed",
+                "managed_text": "Own a focused portfolio.",
                 "allocation_policy": {
                     "min_position_weight_pct": 40,
                     "max_position_weight_pct": 60,

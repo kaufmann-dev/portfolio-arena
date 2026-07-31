@@ -76,6 +76,12 @@
           </section>
         </div>
 
+        <p>
+          Strategy prompts explicitly support <strong>Managed</strong>, <strong>Rebuilt</strong>, or
+          <strong>Both</strong> tracks. A Both prompt stores separate Managed and Rebuilt strategy text; each evaluation
+          receives only the text for its portfolio's selected track.
+        </p>
+
         <h2>Three rebuilt views</h2>
         <ol>
           <li>
@@ -214,9 +220,9 @@
             for a chosen direction, objective, cost basis, and valid horizon.
           </li>
           <li>
-            <code>get_portfolio(slug_or_id)</code> — canonical strategy, allocation policy, mode, and effective
-            date, including the whole-book direction. Rebuilt responses intentionally exclude all prior signal state
-            and performance.
+            <code>get_portfolio(slug_or_id)</code> — selected track strategy text, prompt support mode, allocation
+            policy, and effective date, including the whole-book direction. Rebuilt responses intentionally exclude
+            all prior signal state and performance.
           </li>
           <li>
             <code>create_allocation(portfolio_id, positions, note?)</code> — managed portfolios only.
@@ -234,9 +240,9 @@
         <h2>Catalog and operations</h2>
         <p>
           Additional tools manage portfolios, agents, models, active prompts, evaluator settings and runs,
-          validate symbols, inspect current prompt text, and page through evaluator audit history. Archived
-          prompt content and immutable version recovery remain browser-admin-only. Mode or direction changes
-          require an empty history; reset the portfolio before switching.
+          validate symbols, inspect the applicable Managed or Rebuilt prompt text, and page through evaluator
+          audit history. Archived prompt content and immutable version recovery remain browser-admin-only.
+          Mode or direction changes require an empty history; reset the portfolio before switching.
         </p>
 
         <h2>Connecting</h2>

@@ -23,6 +23,7 @@
     ModelHarnessCapability,
     MarketDataStatus,
     PortfolioResetResult,
+    PromptAvailability,
     PromptMode,
     PromptVersion,
     PromptVersionsResponse,
@@ -94,6 +95,31 @@
   let notice = $state("");
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   const activePrompts = $derived(prompts.filter((prompt) => prompt.status === "active"));
+
+  function promptSupportsTrack(mode: PromptAvailability, track: PromptMode): boolean {
+    return mode === "both" || mode === track;
+  }
+
+  function promptModeLabel(mode: PromptAvailability): string {
+    if (mode === "both") return "Managed + Rebuilt";
+    return mode === "managed" ? "Managed" : "Rebuilt";
+  }
+
+  function promptTextsValid(
+    mode: PromptAvailability | "",
+    managedText: string | null,
+    rebuiltText: string | null,
+  ): boolean {
+    if (!mode) return false;
+    if (promptSupportsTrack(mode, "managed") && !managedText?.trim()) return false;
+    if (promptSupportsTrack(mode, "rebuilt") && !rebuiltText?.trim()) return false;
+    return true;
+  }
+
+  function promptPreview(text: string, length: number): string {
+    const compact = text.trim();
+    return `${compact.slice(0, length)}${compact.length > length ? "…" : ""}`;
+  }
 
   function flash(message: string) {
     notice = message;
@@ -369,12 +395,29 @@
   let newDirection = $state<Direction>("long");
   let newCostBps = $state<string>("");
   let portfolioError = $state("");
+  const newPortfolioPrompts = $derived(
+    activePrompts.filter((prompt) => promptSupportsTrack(prompt.mode, newPromptMode)),
+  );
+
+  function setNewPortfolioMode(event: Event): void {
+    const next = (event.currentTarget as HTMLSelectElement).value as PromptMode;
+    if (next !== "managed" && next !== "rebuilt") return;
+    newPromptMode = next;
+    const selectedPrompt = prompts.find((prompt) => prompt.id === newPromptId);
+    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, next)) newPromptId = null;
+  }
 
   async function createPortfolio(event: SubmitEvent) {
     event.preventDefault();
     portfolioError = "";
     if (!newName.trim() || newAgentId === null || newPromptId === null) {
       portfolioError = "Portfolio name, agent, and prompt are required.";
+      return;
+    }
+    const selectedPrompt = activePrompts.find((prompt) => prompt.id === newPromptId);
+    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, newPromptMode)) {
+      newPromptId = null;
+      portfolioError = `Select an active prompt that supports the ${newPromptMode} track.`;
       return;
     }
     const body: Record<string, unknown> = {
@@ -624,7 +667,9 @@
   let promptStatusFilter = $state<PromptStatusFilter>("active");
   let editPrompt = $state<AdminPrompt | null>(null);
   let newPromptName = $state("");
-  let newPromptText = $state("");
+  let newPromptAvailability = $state<PromptAvailability | "">("");
+  let newPromptManagedText = $state("");
+  let newPromptRebuiltText = $state("");
   let newPromptNotes = $state("");
   let newPromptMinWeight = $state(10);
   let newPromptMaxWeight = $state(25);
@@ -640,11 +685,19 @@
 
   async function createPrompt(event: SubmitEvent) {
     event.preventDefault();
-    if (!newPromptName.trim() || !newPromptText.trim()) return;
+    if (
+      !newPromptName.trim() ||
+      !promptTextsValid(newPromptAvailability, newPromptManagedText, newPromptRebuiltText)
+    ) {
+      return;
+    }
+    const mode = newPromptAvailability as PromptAvailability;
     try {
       await postJson("/api/admin/prompts", {
         name: newPromptName.trim(),
-        text: newPromptText,
+        mode,
+        managed_text: promptSupportsTrack(mode, "managed") ? newPromptManagedText : null,
+        rebuilt_text: promptSupportsTrack(mode, "rebuilt") ? newPromptRebuiltText : null,
         notes: newPromptNotes.trim(),
         allocation_policy: {
           min_position_weight_pct: newPromptMinWeight,
@@ -652,7 +705,9 @@
         },
       });
       newPromptName = "";
-      newPromptText = "";
+      newPromptAvailability = "";
+      newPromptManagedText = "";
+      newPromptRebuiltText = "";
       newPromptNotes = "";
       newPromptMinWeight = 10;
       newPromptMaxWeight = 25;
@@ -665,12 +720,20 @@
 
   async function savePrompt(event: SubmitEvent) {
     event.preventDefault();
-    if (!editPrompt) return;
+    if (
+      !editPrompt ||
+      !editPrompt.name.trim() ||
+      !promptTextsValid(editPrompt.mode, editPrompt.managed_text, editPrompt.rebuilt_text)
+    ) {
+      return;
+    }
     const promptId = editPrompt.id;
     try {
       await patchJson(`/api/admin/prompts/${promptId}`, {
         name: editPrompt.name,
-        text: editPrompt.text,
+        mode: editPrompt.mode,
+        managed_text: promptSupportsTrack(editPrompt.mode, "managed") ? editPrompt.managed_text : null,
+        rebuilt_text: promptSupportsTrack(editPrompt.mode, "rebuilt") ? editPrompt.rebuilt_text : null,
         notes: editPrompt.notes,
         allocation_policy: {
           min_position_weight_pct: editPrompt.allocation_policy.min_position_weight_pct,
@@ -691,6 +754,25 @@
       ...prompt,
       allocation_policy: { ...prompt.allocation_policy },
     };
+  }
+
+  function setEditPromptMode(event: Event): void {
+    if (!editPrompt) return;
+    const next = (event.currentTarget as HTMLSelectElement).value as PromptAvailability;
+    if (next !== "managed" && next !== "rebuilt" && next !== "both") return;
+    editPrompt.mode = next;
+    if (promptSupportsTrack(next, "managed") && editPrompt.managed_text === null) {
+      editPrompt.managed_text = "";
+    }
+    if (promptSupportsTrack(next, "rebuilt") && editPrompt.rebuilt_text === null) {
+      editPrompt.rebuilt_text = "";
+    }
+  }
+
+  function setEditPromptText(track: PromptMode, value: string): void {
+    if (!editPrompt) return;
+    if (track === "managed") editPrompt.managed_text = value;
+    else editPrompt.rebuilt_text = value;
   }
 
   async function loadPromptVersions(promptId: number): Promise<void> {
@@ -766,7 +848,7 @@
     id: number;
     name: string;
     agent_id: number;
-    prompt_id: number;
+    prompt_id: number | null;
     prompt_mode: PromptMode;
     direction: Direction;
     direction_editable: boolean;
@@ -774,8 +856,24 @@
   } | null>(null);
   let portfolioEditLoadingId = $state<number | null>(null);
 
-  function promptsForPortfolio(currentPromptId: number): AdminPrompt[] {
-    return prompts.filter((prompt) => prompt.status === "active" || prompt.id === currentPromptId);
+  function promptsForPortfolio(currentPromptId: number | null, track: PromptMode): AdminPrompt[] {
+    return prompts.filter(
+      (prompt) =>
+        promptSupportsTrack(prompt.mode, track) &&
+        (prompt.status === "active" || prompt.id === currentPromptId),
+    );
+  }
+
+  function setEditPortfolioMode(event: Event): void {
+    if (!editPortfolio) return;
+    const next = (event.currentTarget as HTMLSelectElement).value as PromptMode;
+    if (next !== "managed" && next !== "rebuilt") return;
+    editPortfolio.prompt_mode = next;
+    const currentPromptId = editPortfolio.prompt_id;
+    const selectedPrompt = prompts.find((prompt) => prompt.id === currentPromptId);
+    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, next)) {
+      editPortfolio.prompt_id = null;
+    }
   }
 
   async function beginPortfolioEdit(portfolio: ArenaPortfolio): Promise<void> {
@@ -815,7 +913,16 @@
 
   async function savePortfolio(event: SubmitEvent) {
     event.preventDefault();
-    if (!editPortfolio) return;
+    if (!editPortfolio || editPortfolio.prompt_id === null) {
+      flash("Select a prompt compatible with this portfolio track.");
+      return;
+    }
+    const selectedPrompt = prompts.find((prompt) => prompt.id === editPortfolio?.prompt_id);
+    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, editPortfolio.prompt_mode)) {
+      editPortfolio.prompt_id = null;
+      flash("Select a prompt compatible with this portfolio track.");
+      return;
+    }
     try {
       const body: Record<string, unknown> = {
         name: editPortfolio.name,
@@ -1304,18 +1411,6 @@
                 <p class="muted hint">No agents yet — create one in the Agents tab first.</p>
               {/if}
             </div>
-            <div class="field">
-              <label for="np-prompt">Prompt</label>
-              <select id="np-prompt" bind:value={newPromptId}>
-                <option value={null} disabled>Select a prompt…</option>
-                {#each activePrompts as prompt (prompt.id)}
-                  <option value={prompt.id}>{prompt.name}</option>
-                {/each}
-              </select>
-              {#if activePrompts.length === 0}
-                <p class="muted hint">No active prompts — create or unarchive one in the Prompts tab.</p>
-              {/if}
-            </div>
             <div class="grid-2">
               <div class="field">
                 <label for="np-direction">Direction</label>
@@ -1329,7 +1424,7 @@
               </div>
               <div class="field">
                 <label for="np-prompt-mode">Track</label>
-                <select id="np-prompt-mode" bind:value={newPromptMode}>
+                <select id="np-prompt-mode" value={newPromptMode} onchange={setNewPortfolioMode}>
                   <option value="managed">Managed</option>
                   <option value="rebuilt">Rebuilt</option>
                 </select>
@@ -1337,6 +1432,20 @@
                   Managed receives prior portfolio state; Rebuilt receives no prior portfolio context.
                 </p>
               </div>
+            </div>
+            <div class="field">
+              <label for="np-prompt">Compatible prompt</label>
+              <select id="np-prompt" bind:value={newPromptId}>
+                <option value={null} disabled>Select a prompt…</option>
+                {#each newPortfolioPrompts as prompt (prompt.id)}
+                  <option value={prompt.id}>{prompt.name} · {promptModeLabel(prompt.mode)}</option>
+                {/each}
+              </select>
+              {#if newPortfolioPrompts.length === 0}
+                <p class="muted hint">
+                  No active prompts support the {newPromptMode} track — create or unarchive one in the Prompts tab.
+                </p>
+              {/if}
             </div>
 
             {#if portfolioError}
@@ -1370,20 +1479,27 @@
                   </select>
                 </div>
                 <div class="field">
-                  <label for="epf-prompt-{portfolio.id}">Prompt</label>
-                  <select id="epf-prompt-{portfolio.id}" bind:value={editPortfolio.prompt_id}>
-                    {#each promptsForPortfolio(editPortfolio.prompt_id) as prompt (prompt.id)}
-                      <option value={prompt.id} disabled={prompt.status === "archived"}>
-                        {prompt.name}{prompt.status === "archived" ? " (archived)" : ""}
-                      </option>
-                    {/each}
+                  <label for="epf-prompt-mode-{portfolio.id}">Track</label>
+                  <select
+                    id="epf-prompt-mode-{portfolio.id}"
+                    value={editPortfolio.prompt_mode}
+                    onchange={setEditPortfolioMode}
+                  >
+                    <option value="managed">Managed</option>
+                    <option value="rebuilt">Rebuilt</option>
                   </select>
                 </div>
                 <div class="field">
-                  <label for="epf-prompt-mode-{portfolio.id}">Track</label>
-                  <select id="epf-prompt-mode-{portfolio.id}" bind:value={editPortfolio.prompt_mode}>
-                    <option value="managed">Managed</option>
-                    <option value="rebuilt">Rebuilt</option>
+                  <label for="epf-prompt-{portfolio.id}">Compatible prompt</label>
+                  <select id="epf-prompt-{portfolio.id}" bind:value={editPortfolio.prompt_id}>
+                    <option value={null} disabled>Select a prompt…</option>
+                    {#each promptsForPortfolio(editPortfolio.prompt_id, editPortfolio.prompt_mode) as prompt (prompt.id)}
+                      <option value={prompt.id} disabled={prompt.status === "archived"}>
+                        {prompt.name} · {promptModeLabel(prompt.mode)}{prompt.status === "archived"
+                          ? " (archived)"
+                          : ""}
+                      </option>
+                    {/each}
                   </select>
                 </div>
                 <div class="field">
@@ -1412,7 +1528,9 @@
                   />
                 </div>
                 <div class="edit-actions">
-                  <button class="btn primary" type="submit">Save</button>
+                  <button class="btn primary" type="submit" disabled={editPortfolio.prompt_id === null}
+                    >Save</button
+                  >
                   <button class="btn" type="button" onclick={() => (editPortfolio = null)}>Cancel</button>
                 </div>
               </form>
@@ -1758,9 +1876,32 @@
               <input id="np-prompt-name" type="text" bind:value={newPromptName} />
             </div>
             <div class="field">
-              <label for="np-prompt-text">Text</label>
-              <textarea id="np-prompt-text" bind:value={newPromptText} rows="6"></textarea>
+              <label for="np-prompt-availability">Support mode</label>
+              <select id="np-prompt-availability" bind:value={newPromptAvailability} required>
+                <option value="" disabled>Select support mode…</option>
+                <option value="managed">Managed only</option>
+                <option value="rebuilt">Rebuilt only</option>
+                <option value="both">Managed + Rebuilt</option>
+              </select>
+              <p class="muted hint">
+                Both stores distinct strategy text for each track; evaluators receive only the applicable
+                text.
+              </p>
             </div>
+            {#if newPromptAvailability && promptSupportsTrack(newPromptAvailability, "managed")}
+              <div class="field">
+                <label for="np-prompt-managed-text">Managed strategy text</label>
+                <textarea id="np-prompt-managed-text" bind:value={newPromptManagedText} rows="7" required
+                ></textarea>
+              </div>
+            {/if}
+            {#if newPromptAvailability && promptSupportsTrack(newPromptAvailability, "rebuilt")}
+              <div class="field">
+                <label for="np-prompt-rebuilt-text">Rebuilt strategy text</label>
+                <textarea id="np-prompt-rebuilt-text" bind:value={newPromptRebuiltText} rows="7" required
+                ></textarea>
+              </div>
+            {/if}
             <div class="field">
               <label for="np-prompt-notes">Notes <span class="muted">(optional)</span></label>
               <input id="np-prompt-notes" type="text" bind:value={newPromptNotes} />
@@ -1799,7 +1940,8 @@
             <button
               class="btn primary"
               type="submit"
-              disabled={!newPromptName.trim() || !newPromptText.trim()}
+              disabled={!newPromptName.trim() ||
+                !promptTextsValid(newPromptAvailability, newPromptManagedText, newPromptRebuiltText)}
             >
               Create prompt
             </button>
@@ -1830,9 +1972,35 @@
                   <input id="ep-name-{prompt.id}" type="text" bind:value={editPrompt.name} />
                 </div>
                 <div class="field">
-                  <label for="ep-text-{prompt.id}">Text</label>
-                  <textarea id="ep-text-{prompt.id}" bind:value={editPrompt.text} rows="8"></textarea>
+                  <label for="ep-mode-{prompt.id}">Support mode</label>
+                  <select id="ep-mode-{prompt.id}" value={editPrompt.mode} onchange={setEditPromptMode}>
+                    <option value="managed">Managed only</option>
+                    <option value="rebuilt">Rebuilt only</option>
+                    <option value="both">Managed + Rebuilt</option>
+                  </select>
                 </div>
+                {#if promptSupportsTrack(editPrompt.mode, "managed")}
+                  <div class="field">
+                    <label for="ep-managed-text-{prompt.id}">Managed strategy text</label>
+                    <textarea
+                      id="ep-managed-text-{prompt.id}"
+                      value={editPrompt.managed_text ?? ""}
+                      oninput={(event) => setEditPromptText("managed", event.currentTarget.value)}
+                      rows="8"
+                      required></textarea>
+                  </div>
+                {/if}
+                {#if promptSupportsTrack(editPrompt.mode, "rebuilt")}
+                  <div class="field">
+                    <label for="ep-rebuilt-text-{prompt.id}">Rebuilt strategy text</label>
+                    <textarea
+                      id="ep-rebuilt-text-{prompt.id}"
+                      value={editPrompt.rebuilt_text ?? ""}
+                      oninput={(event) => setEditPromptText("rebuilt", event.currentTarget.value)}
+                      rows="8"
+                      required></textarea>
+                  </div>
+                {/if}
                 <div class="field">
                   <label for="ep-notes-{prompt.id}">Notes</label>
                   <input id="ep-notes-{prompt.id}" type="text" bind:value={editPrompt.notes} />
@@ -1864,7 +2032,13 @@
                   </div>
                 </div>
                 <div class="edit-actions">
-                  <button class="btn primary" type="submit">Save</button>
+                  <button
+                    class="btn primary"
+                    type="submit"
+                    disabled={!editPrompt.name.trim() ||
+                      !promptTextsValid(editPrompt.mode, editPrompt.managed_text, editPrompt.rebuilt_text)}
+                    >Save</button
+                  >
                   <button class="btn" type="button" onclick={() => (editPrompt = null)}>Cancel</button>
                 </div>
               </form>
@@ -1873,6 +2047,7 @@
                 <div>
                   <strong>{prompt.name}</strong>
                   <span class={["badge", prompt.status === "archived" && "warn"]}>{prompt.status}</span>
+                  <span class="badge">{promptModeLabel(prompt.mode)}</span>
                   <span class="muted"> · {prompt.portfolio_count} portfolio(s)</span>
                   <span class="muted">
                     · current v{prompt.current_version} · {prompt.version_count} version{prompt.version_count ===
@@ -1887,9 +2062,20 @@
                   {#if prompt.archived_at}
                     <span class="muted"> · archived {fmtDate(prompt.archived_at)}</span>
                   {/if}
-                  <p class="muted preview">
-                    {prompt.text.slice(0, 140)}{prompt.text.length > 140 ? "…" : ""}
-                  </p>
+                  <div class="prompt-previews">
+                    {#if prompt.managed_text}
+                      <p class="muted preview">
+                        <strong>Managed:</strong>
+                        {promptPreview(prompt.managed_text, 140)}
+                      </p>
+                    {/if}
+                    {#if prompt.rebuilt_text}
+                      <p class="muted preview">
+                        <strong>Rebuilt:</strong>
+                        {promptPreview(prompt.rebuilt_text, 140)}
+                      </p>
+                    {/if}
+                  </div>
                 </div>
                 <div class="row-actions">
                   <button
@@ -1966,13 +2152,25 @@
                               </th>
                               <td class="version-snapshot">
                                 <strong>{version.name}</strong>
+                                <span><span class="badge">{promptModeLabel(version.mode)}</span></span>
                                 <span class="muted">
                                   {version.allocation_policy.min_position_weight_pct}%–{version
                                     .allocation_policy.max_position_weight_pct}% per position
                                 </span>
-                                <p class="muted preview">
-                                  {version.text.slice(0, 120)}{version.text.length > 120 ? "…" : ""}
-                                </p>
+                                <div class="prompt-previews">
+                                  {#if version.managed_text}
+                                    <p class="muted preview">
+                                      <strong>Managed:</strong>
+                                      {promptPreview(version.managed_text, 120)}
+                                    </p>
+                                  {/if}
+                                  {#if version.rebuilt_text}
+                                    <p class="muted preview">
+                                      <strong>Rebuilt:</strong>
+                                      {promptPreview(version.rebuilt_text, 120)}
+                                    </p>
+                                  {/if}
+                                </div>
                               </td>
                               <td class="num">{fmtDate(version.created_at)}</td>
                               <td>
@@ -2377,6 +2575,16 @@
   .version-snapshot > strong,
   .version-snapshot > span {
     display: block;
+  }
+
+  .prompt-previews {
+    display: grid;
+    gap: 4px;
+    margin-top: 7px;
+  }
+
+  .prompt-previews .preview {
+    margin: 0;
   }
 
   .preview {

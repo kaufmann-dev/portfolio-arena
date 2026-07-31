@@ -52,7 +52,9 @@ from .prompt_policy import (
     DEFAULT_REBUILT_WRAPPER_PROMPT,
     PROMPT_MODES,
     allocation_policy_out,
+    prompt_supports_mode,
     validate_position_weights,
+    validate_prompt_texts,
     validate_wrapper_prompt,
 )
 from .serialize import (
@@ -331,7 +333,9 @@ def prompt_out(prompt: Prompt) -> dict:
         "id": prompt.id,
         "slug": prompt.slug,
         "name": prompt.name,
-        "text": prompt.text,
+        "mode": prompt.mode,
+        "managed_text": prompt.managed_text,
+        "rebuilt_text": prompt.rebuilt_text,
         "notes": prompt.notes,
         "allocation_policy": allocation_policy_out(prompt),
     }
@@ -341,7 +345,9 @@ def _prompt_version_out(version: PromptVersion) -> dict:
     return {
         "version": version.version,
         "name": version.name,
-        "text": version.text,
+        "mode": version.mode,
+        "managed_text": version.managed_text,
+        "rebuilt_text": version.rebuilt_text,
         "notes": version.notes,
         "allocation_policy": allocation_policy_out(version),
         "created_at": version.created_at.isoformat(),
@@ -371,7 +377,9 @@ def _admin_prompt_out(
         "version_count": version_count,
         "portfolio_count": portfolio_count,
         "name": current.name,
-        "text": current.text,
+        "mode": current.mode,
+        "managed_text": current.managed_text,
+        "rebuilt_text": current.rebuilt_text,
         "notes": current.notes,
         "allocation_policy": allocation_policy_out(current),
     }
@@ -462,6 +470,50 @@ def _active_prompt_for_portfolio(session: Session, prompt_id: int) -> Prompt:
     return prompt
 
 
+def _validate_prompt_text_contract(
+    mode: str,
+    managed_text: str | None,
+    rebuilt_text: str | None,
+) -> None:
+    try:
+        validate_prompt_texts(mode, managed_text, rebuilt_text)
+    except ValueError as exc:
+        raise AdminOpError(422, str(exc)) from None
+
+
+def _ensure_prompt_supports_portfolio_mode(prompt: Prompt, prompt_mode: str) -> None:
+    if not prompt_supports_mode(prompt_mode, prompt.mode):
+        raise AdminOpError(422, f"Prompt does not support {prompt_mode} portfolios.")
+
+
+def _ensure_prompt_mode_preserves_references(
+    session: Session,
+    prompt_id: int,
+    version_mode: str,
+) -> None:
+    removed_modes = [
+        prompt_mode
+        for prompt_mode in sorted(PROMPT_MODES)
+        if not prompt_supports_mode(prompt_mode, version_mode)
+    ]
+    if not removed_modes:
+        return
+    references = session.execute(
+        select(Portfolio.prompt_mode, func.count())
+        .where(
+            Portfolio.prompt_id == prompt_id,
+            Portfolio.prompt_mode.in_(removed_modes),
+        )
+        .group_by(Portfolio.prompt_mode)
+    ).all()
+    if references:
+        detail = ", ".join(f"{count} {mode}" for mode, count in references)
+        raise AdminOpError(
+            409,
+            f"Prompt mode cannot remove text used by existing active or archived portfolios ({detail}).",
+        )
+
+
 def _ensure_prompt_has_no_running_evaluation(session: Session, prompt_id: int) -> None:
     run_count = session.scalar(
         select(func.count())
@@ -484,7 +536,9 @@ def _append_prompt_version(
     prompt: Prompt,
     *,
     name: str,
-    text: str,
+    mode: str,
+    managed_text: str | None,
+    rebuilt_text: str | None,
     notes: str,
     allocation_policy: dict,
     restored_from_version_id: int | None = None,
@@ -496,7 +550,9 @@ def _append_prompt_version(
         prompt_id=prompt.id,
         version=current.version + 1,
         name=name,
-        text=text,
+        mode=mode,
+        managed_text=managed_text,
+        rebuilt_text=rebuilt_text,
         notes=notes,
         min_position_weight_pct=allocation_policy["min_position_weight_pct"],
         max_position_weight_pct=allocation_policy["max_position_weight_pct"],
@@ -517,15 +573,16 @@ def create_prompt(
     session: Session,
     *,
     name: str,
-    text: str,
+    mode: str,
+    managed_text: str | None,
+    rebuilt_text: str | None,
     allocation_policy: dict,
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
     if not name.strip():
         raise AdminOpError(422, "Prompt name is required")
-    if not text.strip():
-        raise AdminOpError(422, "Prompt text is required")
+    _validate_prompt_text_contract(mode, managed_text, rebuilt_text)
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
         status="active",
@@ -538,7 +595,9 @@ def create_prompt(
         prompt_id=prompt.id,
         version=1,
         name=name,
-        text=text,
+        mode=mode,
+        managed_text=managed_text,
+        rebuilt_text=rebuilt_text,
         notes=notes,
         min_position_weight_pct=allocation_policy["min_position_weight_pct"],
         max_position_weight_pct=allocation_policy["max_position_weight_pct"],
@@ -560,7 +619,9 @@ def update_prompt(
     prompt_id: int,
     *,
     name: str | None = None,
-    text: str | None = None,
+    mode: str | None = None,
+    managed_text: str | None = None,
+    rebuilt_text: str | None = None,
     notes: str | None = None,
     allocation_policy: dict | None = None,
 ) -> dict:
@@ -573,11 +634,28 @@ def update_prompt(
         raise RuntimeError(f"Prompt {prompt.id} has no current version")
 
     next_name = name if name is not None else current.name
-    next_text = text if text is not None else current.text
     if not next_name.strip():
         raise AdminOpError(422, "Prompt name is required")
-    if not next_text.strip():
-        raise AdminOpError(422, "Prompt text is required")
+    next_mode = mode if mode is not None else current.mode
+    if next_mode == "managed":
+        if rebuilt_text is not None:
+            raise AdminOpError(422, "Rebuilt prompt text must be null for mode 'managed'.")
+        next_managed_text = managed_text if managed_text is not None else current.managed_text
+        next_rebuilt_text = None
+    elif next_mode == "rebuilt":
+        if managed_text is not None:
+            raise AdminOpError(422, "Managed prompt text must be null for mode 'rebuilt'.")
+        next_managed_text = None
+        next_rebuilt_text = rebuilt_text if rebuilt_text is not None else current.rebuilt_text
+    else:
+        next_managed_text = managed_text if managed_text is not None else current.managed_text
+        next_rebuilt_text = rebuilt_text if rebuilt_text is not None else current.rebuilt_text
+    _validate_prompt_text_contract(
+        next_mode,
+        next_managed_text,
+        next_rebuilt_text,
+    )
+    _ensure_prompt_mode_preserves_references(session, prompt.id, next_mode)
     next_notes = notes if notes is not None else current.notes
     next_policy = (
         allocation_policy
@@ -589,7 +667,9 @@ def update_prompt(
     )
     changed = (
         next_name != current.name
-        or next_text != current.text
+        or next_mode != current.mode
+        or next_managed_text != current.managed_text
+        or next_rebuilt_text != current.rebuilt_text
         or next_notes != current.notes
         or not _same_weight(
             next_policy["min_position_weight_pct"],
@@ -613,7 +693,9 @@ def update_prompt(
         session,
         prompt,
         name=next_name,
-        text=next_text,
+        mode=next_mode,
+        managed_text=next_managed_text,
+        rebuilt_text=next_rebuilt_text,
         notes=next_notes,
         allocation_policy=next_policy,
     )
@@ -659,11 +741,19 @@ def restore_prompt_version(
     ).first()
     if source is None:
         raise AdminOpError(404, "Prompt version not found")
+    _validate_prompt_text_contract(
+        source.mode,
+        source.managed_text,
+        source.rebuilt_text,
+    )
+    _ensure_prompt_mode_preserves_references(session, prompt.id, source.mode)
     _append_prompt_version(
         session,
         prompt,
         name=source.name,
-        text=source.text,
+        mode=source.mode,
+        managed_text=source.managed_text,
+        rebuilt_text=source.rebuilt_text,
         notes=source.notes,
         allocation_policy={
             "min_position_weight_pct": source.min_position_weight_pct,
@@ -735,6 +825,7 @@ def create_portfolio(
     if agent is None:
         raise AdminOpError(422, "Agent not found")
     prompt = _active_prompt_for_portfolio(session, prompt_id)
+    _ensure_prompt_supports_portfolio_mode(prompt, prompt_mode)
     clean_name = name.strip()
     requested_slug = slugify(slug or clean_name)
     if clean_name.casefold() == "spy" or requested_slug == "spy":
@@ -777,6 +868,17 @@ def update_portfolio(
     if changing_structure:
         session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
     portfolio = writable_portfolio(session, portfolio_id, lock=changing_structure)
+    if prompt_mode is not None:
+        _validate_prompt_mode(prompt_mode)
+    if direction is not None:
+        _validate_direction(direction)
+    final_prompt_mode = prompt_mode if prompt_mode is not None else portfolio.prompt_mode
+    if prompt_id is not None or prompt_mode is not None:
+        final_prompt_id = prompt_id if prompt_id is not None else portfolio.prompt_id
+        final_prompt = _active_prompt_for_portfolio(session, final_prompt_id)
+    else:
+        final_prompt = portfolio.prompt
+    _ensure_prompt_supports_portfolio_mode(final_prompt, final_prompt_mode)
     changing_prompt = prompt_id is not None and prompt_id != portfolio.prompt_id
     if name is not None:
         if name.strip().casefold() == "spy":
@@ -796,12 +898,7 @@ def update_portfolio(
                 "Cancelled because the portfolio was reassigned to an Agent without integrated automation.",
             )
     if prompt_id is not None:
-        _active_prompt_for_portfolio(session, prompt_id)
         portfolio.prompt_id = prompt_id
-    if prompt_mode is not None:
-        _validate_prompt_mode(prompt_mode)
-    if direction is not None:
-        _validate_direction(direction)
     changing_mode = prompt_mode is not None and prompt_mode != portfolio.prompt_mode
     changing_direction = direction is not None and direction != portfolio.direction
     if changing_prompt:

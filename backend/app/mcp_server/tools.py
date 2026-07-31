@@ -83,8 +83,8 @@ def get_portfolio(slug_or_id: str) -> dict:
     """Everything needed to evaluate ONE portfolio. Managed mode includes
     drifted holdings, notes, allocation history, performance, and costs. Rebuilt
     mode intentionally excludes all prior portfolio state. Both modes include
-    the canonical strategy, allocation policy, prompt mode, and next effective
-    date. Accepts a slug or a numeric id."""
+    only the applicable mode-specific strategy text, allocation policy, prompt
+    mode, and next effective date. Accepts a slug or a numeric id."""
     with _session() as session:
         portfolio = _resolve_portfolio(session, slug_or_id)
         if portfolio.prompt_mode == "rebuilt":
@@ -97,7 +97,7 @@ def get_portfolio(slug_or_id: str) -> dict:
                     "slug": portfolio.slug,
                     "name": portfolio.name,
                     "agent": agent_out(portfolio.agent),
-                    "prompt": admin_ops.prompt_out(portfolio.prompt),
+                    "prompt": _portfolio_prompt_out(portfolio.prompt, portfolio.prompt_mode),
                     "prompt_mode": "rebuilt",
                     "direction": portfolio.direction,
                     "status": portfolio.status,
@@ -118,7 +118,7 @@ def get_portfolio(slug_or_id: str) -> dict:
         prompt_id = prompt_payload.get("id") if prompt_payload else None
         prompt = session.get(Prompt, prompt_id) if prompt_id is not None else None
         if prompt is not None:
-            payload["prompt"] = admin_ops.prompt_out(prompt)
+            payload["prompt"] = _portfolio_prompt_out(prompt, portfolio.prompt_mode)
         now = datetime.now(UTC)
         payload["next_entry"] = {
             "entered_at": now.isoformat(),
@@ -302,6 +302,15 @@ def _portfolio_counts(session: Session, column) -> dict[int, int]:
     return {key: count for key, count in rows}
 
 
+def _portfolio_prompt_out(prompt: Prompt, prompt_mode: str) -> dict:
+    """Expose only the strategy text applicable to one portfolio context."""
+    payload = admin_ops.prompt_out(prompt)
+    payload.pop("managed_text", None)
+    payload.pop("rebuilt_text", None)
+    payload["text"] = prompt.text_for_mode(prompt_mode)
+    return payload
+
+
 @mcp.tool()
 def list_agents() -> dict:
     """List generated model + harness + reasoning agent profiles."""
@@ -330,8 +339,8 @@ def list_models() -> dict:
 
 @mcp.tool()
 def list_prompts() -> dict:
-    """List prompts (names and notes, without full text) with portfolio usage
-    counts. Use `get_prompt` for a prompt's full text."""
+    """List active prompts (names, modes, and notes, without full text) with
+    portfolio usage counts. Use `get_prompt` for current mode-specific text."""
     with _session() as session:
         counts = _portfolio_counts(session, Portfolio.prompt_id)
         prompts = session.scalars(select(Prompt).where(Prompt.status == "active").order_by(Prompt.slug)).all()
@@ -341,6 +350,7 @@ def list_prompts() -> dict:
                     "id": prompt.id,
                     "slug": prompt.slug,
                     "name": prompt.name,
+                    "mode": prompt.mode,
                     "notes": prompt.notes,
                     "portfolio_count": counts.get(prompt.id, 0),
                 }
@@ -351,7 +361,7 @@ def list_prompts() -> dict:
 
 @mcp.tool()
 def get_prompt(slug_or_id: str) -> dict:
-    """Fetch a prompt's full text (plus name and notes). Accepts a slug or id."""
+    """Fetch an active prompt's current mode-specific text. Accepts a slug or id."""
     with _session() as session:
         text = str(slug_or_id).strip()
         prompt = None
@@ -504,14 +514,23 @@ def delete_agent(agent_id: int) -> dict:
 
 
 @mcp.tool()
-def create_prompt(name: str, text: str, allocation_policy: AllocationPolicyIn, notes: str = "") -> dict:
-    """Create strategy text with a server-enforced position-sizing policy."""
+def create_prompt(
+    name: str,
+    mode: str,
+    allocation_policy: AllocationPolicyIn,
+    managed_text: str | None = None,
+    rebuilt_text: str | None = None,
+    notes: str = "",
+) -> dict:
+    """Create mode-specific strategy text with one position-sizing policy."""
     with _session() as session:
         created = _guard(
             admin_ops.create_prompt,
             session,
             name=name,
-            text=text,
+            mode=mode,
+            managed_text=managed_text,
+            rebuilt_text=rebuilt_text,
             notes=notes,
             allocation_policy=allocation_policy.model_dump(),
         )
@@ -525,18 +544,22 @@ def create_prompt(name: str, text: str, allocation_policy: AllocationPolicyIn, n
 def update_prompt(
     prompt_id: int,
     name: str | None = None,
-    text: str | None = None,
+    mode: str | None = None,
+    managed_text: str | None = None,
+    rebuilt_text: str | None = None,
     notes: str | None = None,
     allocation_policy: AllocationPolicyIn | None = None,
 ) -> dict:
-    """Edit strategy text, notes, or its position-sizing policy."""
+    """Edit mode-specific strategy text, notes, or its position-sizing policy."""
     with _session() as session:
         updated = _guard(
             admin_ops.update_prompt,
             session,
             prompt_id,
             name=name,
-            text=text,
+            mode=mode,
+            managed_text=managed_text,
+            rebuilt_text=rebuilt_text,
             notes=notes,
             allocation_policy=allocation_policy.model_dump() if allocation_policy else None,
         )
