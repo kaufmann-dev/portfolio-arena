@@ -81,12 +81,16 @@ class TestMcpTools:
         assert {
             "get_portfolio",
             "get_arena_overview",
+            "get_rebuilt_analysis",
             "list_harnesses",
             "list_models",
             "create_model",
             "update_model",
             "delete_model",
             "create_allocation",
+            "create_signal",
+            "update_signal",
+            "delete_signal",
             "reset_portfolio",
             "get_evaluator_dashboard",
             "configure_portfolio_evaluator",
@@ -111,10 +115,13 @@ class TestMcpTools:
 
         backdate_allocation(sample_portfolio["allocation"]["id"])
         data = _call_tool(client, mcp_headers, "get_arena_overview")
-        assert data["portfolios"]
-        assert data["market_data_status"] == "fresh"
+        assert data["managed"]["portfolios"]
+        assert data["managed"]["market_data_status"] == "fresh"
+        assert data["rebuilt"]["portfolios"][0]["kind"] == "benchmark"
         # Curated: the token-heavy sparkline is stripped.
-        assert all("sparkline" not in row for row in data["portfolios"])
+        assert all(
+            "sparkline" not in row for row in data["managed"]["portfolios"] if row["kind"] != "benchmark"
+        )
 
     def test_valuation_tools_report_stale_cache_fallback(
         self,
@@ -134,7 +141,9 @@ class TestMcpTools:
         from .util import backdate_allocation
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert _call_tool(client, mcp_headers, "get_arena_overview")["market_data_status"] == "fresh"
+        assert (
+            _call_tool(client, mcp_headers, "get_arena_overview")["managed"]["market_data_status"] == "fresh"
+        )
         with session_factory()() as session:
             session.execute(update(PriceCache).values(fetched_at=datetime.now(UTC) - timedelta(hours=2)))
             session.commit()
@@ -152,9 +161,9 @@ class TestMcpTools:
             {"slug_or_id": sample_portfolio["slug"]},
         )
 
-        assert overview["market_data_status"] == "stale"
+        assert overview["managed"]["market_data_status"] == "stale"
         assert portfolio["market_data_status"] == "stale"
-        assert overview["as_of"] is not None
+        assert overview["managed"]["as_of"] is not None
         assert portfolio["as_of"] is not None
 
     def test_valuation_tools_report_unavailable_prices(
@@ -183,9 +192,9 @@ class TestMcpTools:
             {"slug_or_id": sample_portfolio["slug"]},
         )
 
-        assert overview["market_data_status"] == "unavailable"
+        assert overview["managed"]["market_data_status"] == "unavailable"
         assert portfolio["market_data_status"] == "unavailable"
-        assert overview["as_of"] is None
+        assert overview["managed"]["as_of"] is None
         assert portfolio["as_of"] is None
 
     def test_get_portfolio_is_curated(self, client, mcp_headers, sample_portfolio):
@@ -207,16 +216,35 @@ class TestMcpTools:
         client,
         mcp_headers,
         admin_headers,
-        sample_portfolio,
+        sample_agent,
+        sample_prompt,
     ):
-        response = client.patch(
-            f"/api/portfolios/{sample_portfolio['id']}",
-            json={"prompt_mode": "rebuilt"},
+        response = client.post(
+            "/api/portfolios",
+            json={
+                "name": "MCP Rebuilt",
+                "agent_id": sample_agent["id"],
+                "prompt_id": sample_prompt["id"],
+                "prompt_mode": "rebuilt",
+            },
             headers=admin_headers,
         )
-        assert response.status_code == 200, response.text
+        assert response.status_code == 201, response.text
+        rebuilt = response.json()
 
-        data = _call_tool(client, mcp_headers, "get_portfolio", {"slug_or_id": sample_portfolio["slug"]})
+        signal = _call_tool(
+            client,
+            mcp_headers,
+            "create_signal",
+            {
+                "portfolio_id": rebuilt["id"],
+                "positions": [{"symbol": "AAPL", "weight_pct": 100}],
+                "note": "independent signal",
+            },
+        )
+        assert signal["provenance"] == "mcp"
+
+        data = _call_tool(client, mcp_headers, "get_portfolio", {"slug_or_id": rebuilt["slug"]})
         portfolio = data["portfolio"]
         assert portfolio["prompt_mode"] == "rebuilt"
         assert portfolio["prompt"]["text"]
@@ -234,34 +262,23 @@ class TestMcpTools:
             "error",
             "holdings",
             "allocations",
+            "signals",
         ):
             assert hidden not in portfolio
 
-    def test_benchmark_portfolio_uses_hardcoded_strategy(
-        self,
-        client,
-        mcp_headers,
-        sample_portfolio,
-    ):
-        data = _call_tool(
+        analysis = _call_tool(
             client,
             mcp_headers,
-            "get_portfolio",
-            {"slug_or_id": "spy-buy-and-hold"},
+            "get_rebuilt_analysis",
+            {
+                "view": "signal",
+                "objective": "canonical",
+                "cost_basis": "gross",
+                "horizon": 1,
+            },
         )
-
-        assert data["portfolio"]["agent"]["id"] is None
-        assert data["portfolio"]["agent"]["model"] is None
-        assert data["portfolio"]["prompt"]["id"] is None
-        assert data["portfolio"]["prompt"]["configurable"] is False
-        assert data["portfolio"]["prompt"]["text"] == "Hold the benchmark ETF forever."
-
-        assert all(
-            agent["slug"] != "benchmark" for agent in _call_tool(client, mcp_headers, "list_agents")["agents"]
-        )
-        assert all(
-            model["slug"] != "benchmark" for model in _call_tool(client, mcp_headers, "list_models")["models"]
-        )
+        assert analysis["context"]["horizon"] == 1
+        assert analysis["portfolios"][0]["kind"] == "benchmark"
 
     def test_write_roundtrip(self, client, mcp_headers, admin_headers):
         model = _call_tool(

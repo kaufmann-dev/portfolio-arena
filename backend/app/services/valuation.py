@@ -333,6 +333,19 @@ def compute_metrics(result: ValuationResult, spy_series: Series) -> dict:
         spy_return = spy_end[0] / spy_start[0] - 1.0
 
     returns = _daily_returns(series)
+    daily_alpha: list[float] = []
+    for previous, current in zip(series, series[1:], strict=False):
+        spy_previous = spy_lookup.at(previous["date"])
+        spy_current = spy_lookup.at(current["date"])
+        if (
+            previous["nav"] > 0
+            and spy_previous is not None
+            and spy_current is not None
+            and spy_previous[0] > 0
+        ):
+            strategy_daily = current["nav"] / previous["nav"] - 1.0
+            spy_daily = spy_current[0] / spy_previous[0] - 1.0
+            daily_alpha.append(strategy_daily - spy_daily)
     volatility = _std(returns) * math.sqrt(TRADING_DAYS_PER_YEAR) if returns else None
     sharpe = None
     if returns:
@@ -340,6 +353,23 @@ def compute_metrics(result: ValuationResult, spy_series: Series) -> dict:
         if std > 0:
             mean = sum(returns) / len(returns)
             sharpe = mean / std * math.sqrt(TRADING_DAYS_PER_YEAR)
+    information_ratio = None
+    if daily_alpha:
+        alpha_std = _std(daily_alpha)
+        if alpha_std > 0:
+            information_ratio = (
+                sum(daily_alpha) / len(daily_alpha) / alpha_std * math.sqrt(TRADING_DAYS_PER_YEAR)
+            )
+
+    # Local import avoids a module cycle: rebuilt analytics reuses the base
+    # valuation input dataclasses, while managed metrics share its HAC routine.
+    from .rebuilt import automatic_hac_lag, hac_mean_statistics
+
+    alpha_statistics = hac_mean_statistics(
+        daily_alpha,
+        lag=automatic_hac_lag(len(daily_alpha)),
+        family_size=1,
+    )
 
     peak = -math.inf
     max_drawdown = 0.0
@@ -363,9 +393,11 @@ def compute_metrics(result: ValuationResult, spy_series: Series) -> dict:
         "end_date": last_day,
         "itd_return": itd_return,
         "spy_return": spy_return,
-        "vs_spy": itd_return - spy_return if spy_return is not None else None,
+        "cumulative_excess": itd_return - spy_return if spy_return is not None else None,
         "ann_volatility": volatility,
         "sharpe": sharpe,
+        "information_ratio": information_ratio,
+        **alpha_statistics,
         "max_drawdown": max_drawdown,
         "cost_drag_pct": result.cumulative_cost,
         "turnover_pct": result.cumulative_turnover_pct,

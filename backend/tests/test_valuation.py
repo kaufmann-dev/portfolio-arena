@@ -224,7 +224,7 @@ def test_metrics_vs_spy_identical_window():
     # Window starts at DAYS[1] (SPY=101), ends DAYS[4] (SPY=104)
     assert metrics["itd_return"] == pytest.approx(0.0)
     assert metrics["spy_return"] == pytest.approx(104.0 / 101.0 - 1.0)
-    assert metrics["vs_spy"] == pytest.approx(-(104.0 / 101.0 - 1.0))
+    assert metrics["cumulative_excess"] == pytest.approx(-(104.0 / 101.0 - 1.0))
 
 
 def test_metrics_max_drawdown_and_shape():

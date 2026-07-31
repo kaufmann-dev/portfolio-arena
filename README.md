@@ -1,16 +1,18 @@
 # Portfolio Arena
 
-A self-hosted web app that runs a long-term experiment: **can LLMs pick portfolios that beat SPY?**
+A self-hosted web app that runs a long-term experiment: **can LLM stock-selection strategies
+produce repeatable alpha over SPY?**
 
 Portfolio Arena includes a website-controlled Codex evaluator. One Nixpacks deployment starts the
 web app, scheduler, and evaluator worker together. The admin panel defines models and their
 harness-specific capabilities, combines them into reusable Agents, and controls weekdays,
-concurrency, immediate runs, cancellation, retries, and history. Manual allocation and authenticated
+concurrency, immediate runs, cancellation, retries, and history. Manual submissions and authenticated
 MCP workflows remain available.
 
-The app simulates the allocations as paper portfolios from Massive market data and tracks them live
-against SPY on a public leaderboard. It is an _arena_: honest, deterministic measurement — not
-trading and not advice.
+The app maintains two separate experiments. Managed portfolios are stateful paper portfolios whose
+models decide when to rebalance. Rebuilt portfolios submit an independent signal every trading day;
+the arena measures every 1–20-session holding period and 10–100% exposure policy. Both tracks are
+ranked against SPY. It is an _arena_: honest, deterministic measurement — not trading and not advice.
 
 ## Architecture
 
@@ -25,9 +27,9 @@ trading and not advice.
   opaque server-side sessions. Public leaderboard and detail views remain anonymous.
 - **Prices** — Massive daily stock aggregates, fetched in parallel with httpx and converted to a
   split-and-dividend total-return basis. Series are cached in Postgres with a ~1h TTL.
-- **No stored NAVs.** Every NAV series is recomputed on request from the
-  entered allocations + cached price series. Corporate-action adjustments change retroactively,
-  so recomputation is _more_ correct than snapshotting.
+- **No stored NAVs.** Managed NAVs are recomputed from allocations; rebuilt NAVs are recomputed from
+  immutable daily signals and overlapping cohorts. Corporate-action adjustments change
+  retroactively, so recomputation is _more_ correct than snapshotting.
 - **Last-known-data fallback.** An expired cache row remains available until a Massive refresh
   succeeds. The cache refreshes after its TTL and when a newly closed session should be available
   after Massive's 15-minute delay. Responses label market data `fresh`, `stale`, or `unavailable`;
@@ -40,33 +42,45 @@ trading and not advice.
 ## Experiment-integrity rules (enforced in code)
 
 - **Manual entries do not backdate; scheduled automation is an explicit exception.** A manual
-  allocation entered at time T takes effect at the first market close strictly after T (early
-  closes honored). Scheduled evaluator runs always target their scheduled session, even when they
-  submit after that close, so they may use post-close information while receiving the scheduled
-  close.
-- **Positions lock at the effective close.** Until then there is a typo-correction window
-  (edit/delete allowed); afterwards positions and effective date are frozen — only the note stays
-  editable. A scheduled allocation submitted after its effective close is locked immediately.
-- **Portfolio resets are explicit and destructive.** Resetting a contestant deletes its complete
-  allocation and performance history, cancels in-flight evaluator work, and preserves its identity,
-  configuration, schedule, and evaluator audit records so the next allocation starts from scratch.
-- **One canonical strategy, two execution modes.** A contestant has one configurable strategy
-  prompt plus a `managed` or `rebuilt` mode. Managed evaluations receive holdings, allocation
-  history, notes, performance, and costs; rebuilt evaluations receive no prior portfolio state.
-  Each mode has a global editable wrapper prompt under Admin → Settings. SPY/RSP benchmarks use a
-  hardcoded identity and buy-and-hold strategy rather than Agent, Model, or Prompt records.
+  allocation or signal entered at time T takes effect at the first market close strictly after T
+  (early closes honored). Scheduled evaluator runs always target their scheduled session, even when
+  they submit after that close.
+- **Submitted targets lock at the effective close.** Pending allocations and signals have a
+  typo-correction window. A completed signal is entirely immutable; managed allocation notes retain
+  their existing editable handoff behavior.
+- **Portfolio resets are explicit and mode-specific.** Resetting a contestant deletes its managed
+  allocation history or rebuilt signal history, cancels in-flight evaluator work, and preserves its
+  identity, configuration, schedule, and evaluator audit records. A portfolio cannot switch modes
+  until its current mode's history has been reset.
+- **One canonical strategy, two execution modes.** Managed evaluations receive holdings, allocation
+  history, notes, performance, and costs. Rebuilt evaluations receive no prior portfolio state and
+  construct each signal independently. Each mode has a global editable wrapper prompt under
+  Admin → Settings.
 - **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
   position weights. The default is 10–25%, which implies 4–10 positions.
-- **Benchmarks use the identical engine.** `SPY Buy & Hold` and `RSP Buy & Hold` are system
-  portfolios whose single 100% allocation is auto-aligned to the earliest surviving real
-  portfolio inception and cleared when no real allocation history remains, valued by the same
-  code path at zero cost.
-- **Costs on turnover.** Every trade pays a flat fee (default 10 bps of traded notional, frozen
-  per portfolio at creation). Initial deployment pays one side; rebalances pay both sides.
-- **Notes.** Each allocation has an optional free-text note (e.g. the model's regime call).
-- **Honesty labels.** Portfolio age is elapsed New York calendar days from inception, independent
-  of the last valued close. Portfolios younger than 6 months are badged "too early to judge";
-  incomplete, carried-forward, or frozen (possibly delisted) price data is flagged, never guessed.
+- **SPY is synthetic.** Every leaderboard pins a non-ranked SPY reference row over the same
+  comparison window. There are no stored benchmark portfolios and no RSP benchmark.
+- **Rebuilt policies are measured, not prompted.** Each daily signal is evaluated at holding
+  horizons from 1 through 20 trading sessions. Exposure is tested from 10% through 100%; each active
+  session contributes one `exposure / horizon` sleeve. At every close, the aggregate target is the
+  sum of the still-active signal sleeves and the remainder stays in SPY.
+- **Costs are measured on aggregate turnover.** Net results apply the portfolio's flat transaction
+  cost to actual aggregate turnover, including changes in the SPY sleeve. Gross results remain
+  available for diagnosis.
+- **Notes.** Each managed allocation or rebuilt signal has optional portfolio- and position-level
+  handoff notes.
+- **Search-adjusted evidence.** Rankings use a HAC/Newey–West estimate and a Bonferroni-adjusted 95%
+  confidence interval across the predeclared search family: 20 comparisons for Signal Alpha and the
+  canonical objective, or 200 for an optimized holding-period × exposure search. Evidence is labeled
+  `pending`, `inconclusive`, `positive`, or `negative`; incomplete, carried-forward, or frozen price
+  data is flagged, never guessed.
+
+The Rebuilt arena has three views. **Common Policy** chooses one holding horizon and exposure from an
+equal-weight meta portfolio, then applies that policy to every eligible strategy. **Tuned** selects
+each strategy's own best policy. **Signal Alpha** compares completed independent signals directly at
+a selected holding horizon and exposes the full 1–20-session matrix. The default objective fixes
+exposure at 100% and chooses the horizon with the highest adjusted lower confidence bound; diagnostic
+objectives can instead maximize mean alpha, information ratio, or zero-rate Sharpe.
 
 ## Instruments
 
@@ -81,9 +95,9 @@ deliberately a research judgment rather than a stale hard-coded symbol list.
 
 ## MCP server
 
-The app mounts a streamable-HTTP [MCP](https://modelcontextprotocol.io) server at `/mcp`. It
-exposes the entire app surface as tools — everything an admin or visitor can do (manage
-portfolios, agents, prompts, allocations; validate symbols; read the leaderboard and
+The app mounts a streamable-HTTP [MCP](https://modelcontextprotocol.io) server at `/mcp`. It exposes
+the entire app surface as tools — everything an admin or visitor can do (manage portfolios, agents,
+prompts, managed allocations, and rebuilt signals; validate symbols; read both arena tracks and
 per-portfolio history) — **except** API-key management, which stays in the admin panel.
 
 - **Auth.** Every request needs an API key (`Authorization: Bearer <key>`, or `X-API-Key`);
@@ -92,8 +106,10 @@ per-portfolio history) — **except** API-key management, which stays in the adm
 - **Flagship read tools.** `get_portfolio(slug_or_id)` always returns the strategy, structured
   policy, prompt mode, and next effective date. Managed mode also returns drifted holdings with
   entry/current prices, the full allocation history with notes, performance, and costs. Rebuilt
-  mode intentionally omits that prior state. `get_arena_overview()` compares every portfolio's
-  performance at once.
+  mode intentionally omits prior signals, notes, performance, and costs. `get_arena_overview()`
+  reports Managed and Rebuilt separately, and rebuilt analysis tools expose Common Policy, Tuned,
+  and Signal Alpha views. Use `create_allocation` for managed portfolios and `create_signal` for
+  rebuilt portfolios.
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
   `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
   `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
@@ -120,10 +136,10 @@ admin-only access; provider policy defines who is admitted.
 The evaluator is part of Portfolio Arena. Models declare their execution ID and available reasoning
 efforts per supported harness. Agents select one of those valid profiles; their display names are
 generated from it. A portfolio whose Agent uses Codex automatically appears in the admin
-**Automation** tab, initially disabled. An enabled portfolio can run on any selected Monday through
-Friday, or remain manual-only with no selected weekdays. If a selected day is an NYSE holiday, that
-evaluation shifts to the next trading day and is deduplicated if multiple selected days converge on
-the same session. Scheduled close times honor early closes and daylight-saving changes.
+**Automation** tab, initially disabled. Rebuilt automation runs every Monday through Friday; managed
+automation can run on any selected weekdays or remain manual-only. If a selected day is an NYSE
+holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected days
+converge on the same session. Scheduled close times honor early closes and daylight-saving changes.
 
 The website can queue an enabled portfolio at any time. Each run captures its Agent and model IDs,
 harness, harness-specific execution model ID, optional reasoning effort, timeout, and attempt limit
@@ -133,9 +149,10 @@ delay their actual start. Runs queued before close remain eligible afterward, an
 scheduled submissions use the scheduled session even if they finish after its close. Pausing stops
 new claims while active work finishes. Queued work can be cancelled immediately; running work
 receives a cancellation request and its Codex process is terminated. Failed runs can be retried
-manually. All paths use the same server-side proposal and symbol validation and atomic allocation
-write. At claim time, the worker receives a complete execution prompt rendered from the portfolio's
-canonical strategy and the editable wrapper for its mode.
+manually. All paths use the same server-side proposal and symbol validation and atomically create
+either a managed allocation or rebuilt signal. At claim time, the worker receives a complete
+execution prompt rendered from the portfolio's canonical strategy and the editable wrapper for its
+mode.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
@@ -152,6 +169,10 @@ with short-lived browser-session records; existing JWT browser sessions stop wor
 
 Migration `0015` clears cached Yahoo-originated price series once so they cannot mix with Massive
 total-return data. The cache refills on the next valuation request.
+
+Migration `0016` installs the daily signal arena. It preserves managed allocation history and all
+evaluator audit records, resets only rebuilt v1 allocation history, removes stored benchmark
+portfolios, and marks existing rebuilt portfolios as the founding v2 cohort.
 
 ## Development
 
@@ -233,8 +254,8 @@ Web app:
 | `CODEX_HOME`                    | `/var/lib/codex` | Codex authentication and generated config dir |
 | `PORT`                          | `8000`           | Listen port; normally injected by Coolify     |
 
-## Non-goals (v1)
+## Non-goals
 
 No broker integration, OpenAI Platform API execution, shorts or leverage, options/futures,
 intraday prices, cash positions, OpenCode automation, application-managed user accounts, external
-notifications, historical backtesting, or significance testing beyond the age badge.
+notifications, or historical backtesting.

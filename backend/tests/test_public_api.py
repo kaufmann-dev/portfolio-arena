@@ -1,5 +1,4 @@
-"""Public reads: leaderboard, portfolio detail, compare, prompts, agents,
-benchmark auto-seeding."""
+"""Public managed-arena reads, detail, compare, prompts, and agents."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -17,148 +16,73 @@ def find(rows, slug):
 
 class TestLeaderboard:
     def test_empty_arena(self, client):
-        payload = client.get("/api/leaderboard").json()
+        payload = client.get("/api/arena/managed").json()
         assert payload["market_data_status"] == "fresh"
-        # Benchmarks exist but have no allocations until a real portfolio does.
-        slugs = {row["slug"] for row in payload["portfolios"]}
-        assert {"spy-buy-and-hold", "rsp-buy-and-hold"} <= slugs
-        assert all(not row["metrics"]["has_data"] for row in payload["portfolios"])
+        assert payload["portfolios"] == [
+            {
+                "kind": "benchmark",
+                "id": None,
+                "slug": "spy",
+                "name": "SPY",
+                "status": "reference",
+                "rank": None,
+                "evidence": "pending",
+                "rank_score": None,
+                "metrics": {
+                    "has_data": False,
+                    "itd_return": None,
+                    "spy_return": None,
+                    "cumulative_excess": None,
+                    "mean_daily_alpha": None,
+                    "ci_lower": None,
+                    "ci_upper": None,
+                    "evidence": "pending",
+                },
+                "sparkline": [],
+            }
+        ]
 
     def test_portfolio_with_history(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        payload = client.get("/api/leaderboard").json()
+        payload = client.get("/api/arena/managed").json()
 
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row is not None
         assert row["prompt_mode"] == "managed"
         assert row["metrics"]["has_data"]
         assert row["metrics"]["itd_return"] is not None
-        assert row["metrics"]["vs_spy"] is not None
-        assert row["too_early"] is True  # 45 days < 6 months
+        assert row["metrics"]["cumulative_excess"] is not None
+        assert row["evidence"] in {"pending", "inconclusive", "positive", "negative"}
+        assert "too_early" not in row
         assert len(row["sparkline"]) > 5
         assert row["prompt"]["slug"] == "weekly-manager-v1"
 
-    def test_benchmarks_seeded_at_same_inception(self, client, sample_portfolio):
+    def test_synthetic_spy_uses_arena_window_without_database_identity(
+        self,
+        client,
+        sample_portfolio,
+    ):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        payload = client.get("/api/leaderboard").json()
+        payload = client.get("/api/arena/managed").json()
 
         row = find(payload["portfolios"], sample_portfolio["slug"])
-        spy = find(payload["portfolios"], "spy-buy-and-hold")
-        assert spy["is_benchmark"] is True
+        spy = find(payload["portfolios"], "spy")
+        assert spy["kind"] == "benchmark"
+        assert spy["id"] is None
         assert spy["metrics"]["has_data"]
-        assert spy["inception"] == row["inception"]
-        # Benchmarks are cost-free: SPY tracks itself exactly.
-        assert spy["metrics"]["vs_spy"] == 0 or abs(spy["metrics"]["vs_spy"]) < 1e-9
-        assert spy["cost_bps"] == 0
+        assert spy["metrics"]["start_date"] == row["inception"]
+        assert spy["metrics"]["cumulative_excess"] == 0
 
-    def test_benchmarks_move_to_later_surviving_inception(
-        self,
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        sample_portfolio,
-    ):
-        later_portfolio = client.post(
-            "/api/portfolios",
-            json={
-                "name": "Later Portfolio",
-                "agent_id": sample_agent["id"],
-                "prompt_id": sample_prompt["id"],
-                "prompt_mode": "managed",
-            },
-            headers=admin_headers,
-        ).json()
-        later_allocation = client.post(
-            f"/api/portfolios/{later_portfolio['id']}/allocations",
-            json={"positions": [{"symbol": "AAPL", "weight_pct": 100}], "note": "later"},
-            headers=admin_headers,
-        ).json()
-        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        later_date = backdate_allocation(later_allocation["id"], days_back=20)
-
-        client.get("/api/leaderboard")
-        response = client.delete(
-            f"/api/portfolios/{sample_portfolio['id']}",
-            headers=admin_headers,
-        )
-        assert response.status_code == 200, response.text
-
-        rows = client.get("/api/leaderboard").json()["portfolios"]
-        benchmarks = [row for row in rows if row["is_benchmark"]]
-        assert len(benchmarks) == 2
-        assert all(row["inception"] == later_date.isoformat() for row in benchmarks)
-        assert all(row["allocation_count"] == 1 for row in benchmarks)
-
-    def test_archived_history_keeps_benchmark_inception(
-        self,
-        client,
-        admin_headers,
-        sample_portfolio,
-    ):
-        inception = backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        response = client.patch(
-            f"/api/portfolios/{sample_portfolio['id']}",
-            json={"status": "archived"},
-            headers=admin_headers,
-        )
-        assert response.status_code == 200, response.text
-
-        benchmarks = [
-            row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]
-        ]
-        assert all(row["inception"] == inception.isoformat() for row in benchmarks)
-
-    def test_benchmark_reconciliation_repairs_duplicates_and_holdings(
-        self,
-        client,
-        sample_portfolio,
-    ):
-        inception = backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        client.get("/api/leaderboard")
-
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
+        from sqlalchemy import func, select
 
         from app.db import session_factory
-        from app.models import Allocation, Portfolio, Position
-        from app.services.benchmarks import BENCHMARK_ALLOCATION_NOTE
+        from app.models import Portfolio
 
         with session_factory()() as session:
-            spy = session.scalars(
-                select(Portfolio)
-                .where(Portfolio.slug == "spy-buy-and-hold")
-                .options(selectinload(Portfolio.allocations).selectinload(Allocation.positions))
-            ).one()
-            spy.allocations[0].note = "corrupt"
-            spy.allocations[0].positions[0].symbol = "AAPL"
-            duplicate = Allocation(
-                portfolio_id=spy.id,
-                entered_at=datetime.now(UTC) + timedelta(seconds=1),
-                effective_date=inception,
-                note="duplicate",
-            )
-            duplicate.positions.append(Position(symbol="SPY", weight_pct=100))
-            session.add(duplicate)
-            session.commit()
-
-        client.get("/api/leaderboard")
-
-        with session_factory()() as session:
-            spy = session.scalars(
-                select(Portfolio)
-                .where(Portfolio.slug == "spy-buy-and-hold")
-                .options(selectinload(Portfolio.allocations).selectinload(Allocation.positions))
-            ).one()
-            assert len(spy.allocations) == 1
-            assert spy.allocations[0].effective_date == inception
-            assert spy.allocations[0].note == BENCHMARK_ALLOCATION_NOTE
-            assert len(spy.allocations[0].positions) == 1
-            assert spy.allocations[0].positions[0].symbol == "SPY"
-            assert float(spy.allocations[0].positions[0].weight_pct) == 100
+            assert session.scalar(select(func.count()).select_from(Portfolio)) == 1
 
     def test_pending_allocation_has_no_data(self, client, sample_portfolio):
-        payload = client.get("/api/leaderboard").json()
+        payload = client.get("/api/arena/managed").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row["metrics"]["has_data"] is False
 
@@ -178,7 +102,7 @@ class TestLeaderboard:
         from app.services import massive
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/leaderboard").json()["market_data_status"] == "fresh"
+        assert client.get("/api/arena/managed").json()["market_data_status"] == "fresh"
         with session_factory()() as session:
             session.execute(update(PriceCache).values(fetched_at=datetime.now(UTC) - timedelta(hours=2)))
             session.commit()
@@ -189,11 +113,9 @@ class TestLeaderboard:
         )
 
         requests = [
-            ("/api/leaderboard", {}),
+            ("/api/arena/managed", {}),
             (f"/api/portfolios/{sample_portfolio['slug']}", {}),
-            (f"/api/compare?slugs={sample_portfolio['slug']}", {}),
-            (f"/api/prompts/{sample_prompt['slug']}", {}),
-            (f"/api/agents/{sample_agent['slug']}", {}),
+            (f"/api/compare?track=managed&slugs={sample_portfolio['slug']}", {}),
             (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
         ]
         for url, headers in requests:
@@ -220,11 +142,9 @@ class TestLeaderboard:
         )
 
         requests = [
-            ("/api/leaderboard", {}),
+            ("/api/arena/managed", {}),
             (f"/api/portfolios/{sample_portfolio['slug']}", {}),
-            (f"/api/compare?slugs={sample_portfolio['slug']}", {}),
-            (f"/api/prompts/{sample_prompt['slug']}", {}),
-            (f"/api/agents/{sample_agent['slug']}", {}),
+            (f"/api/compare?track=managed&slugs={sample_portfolio['slug']}", {}),
             (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
         ]
         for url, headers in requests:
@@ -245,7 +165,7 @@ class TestLeaderboard:
         from app.services import arena
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/leaderboard").json()["market_data_status"] == "fresh"
+        assert client.get("/api/arena/managed").json()["market_data_status"] == "fresh"
         with session_factory()() as session:
             cached = {
                 row.symbol: row.series
@@ -260,7 +180,7 @@ class TestLeaderboard:
             lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
         )
 
-        payload = client.get("/api/leaderboard").json()
+        payload = client.get("/api/arena/managed").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
 
         assert payload["market_data_status"] == "stale"
@@ -279,7 +199,7 @@ class TestLeaderboard:
         from app.services import arena
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/leaderboard").json()["market_data_status"] == "fresh"
+        assert client.get("/api/arena/managed").json()["market_data_status"] == "fresh"
         with session_factory()() as session:
             cached = {
                 row.symbol: row.series
@@ -292,7 +212,7 @@ class TestLeaderboard:
             lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
         )
 
-        payload = client.get("/api/leaderboard").json()
+        payload = client.get("/api/arena/managed").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
 
         assert payload["market_data_status"] == "unavailable"
@@ -353,6 +273,11 @@ class TestPortfolioDetail:
             headers=admin_headers,
         )
         assert response.status_code == 200
+        response = client.post(
+            f"/api/portfolios/{sample_portfolio['id']}/reset",
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
         response = client.patch(
             f"/api/portfolios/{sample_portfolio['id']}",
             json={"prompt_mode": "rebuilt"},
@@ -365,9 +290,11 @@ class TestPortfolioDetail:
 
         assert payload["portfolio"]["prompt_mode"] == "rebuilt"
         assert reconstruction_strategy in execution_prompt
-        assert "rebuild the complete target portfolio independently from scratch" in execution_prompt
+        assert "construct the complete signal portfolio independently from scratch" in execution_prompt
+        assert "without regard to previous signals" in execution_prompt
         assert "continuity is useful" not in execution_prompt
         assert "prefer retaining the existing allocation" not in execution_prompt
+        assert "call `create_signal` exactly once" in execution_prompt
 
     def test_strategy_placeholders_are_not_expanded(
         self,
@@ -393,19 +320,21 @@ class TestPortfolioDetail:
 class TestCompare:
     def test_overlay_rebased_to_common_start(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        response = client.get(f"/api/compare?slugs={sample_portfolio['slug']},spy-buy-and-hold")
+        response = client.get(f"/api/compare?track=managed&slugs={sample_portfolio['slug']}")
         payload = response.json()
-        assert len(payload["series"]) == 2
+        assert len(payload["series"]) == 1
         for entry in payload["series"]:
             assert entry["series"][0]["nav"] == 100.0
             assert entry["series"][0]["date"] == payload["start"]
+        assert payload["spy_series"][0]["nav"] == 100.0
+        assert payload["spy_series"][0]["date"] == payload["start"]
 
     def test_bad_params(self, client):
-        assert client.get("/api/compare?slugs=").status_code == 422
+        assert client.get("/api/compare?track=managed&slugs=").status_code == 422
 
 
 class TestPromptsAndAgents:
-    def test_benchmark_identity_and_strategy_are_fully_hardcoded(self, client, admin_headers):
+    def test_synthetic_spy_has_no_prompt_agent_or_model_identity(self, client, admin_headers):
         prompts = client.get("/api/prompts").json()["prompts"]
         assert all(prompt["slug"] != "buy-and-hold" for prompt in prompts)
         assert client.get("/api/prompts/buy-and-hold").status_code == 404
@@ -416,68 +345,19 @@ class TestPromptsAndAgents:
             for model in client.get("/api/models", headers=admin_headers).json()["models"]
         )
 
-        benchmark = find(client.get("/api/leaderboard").json()["portfolios"], "spy-buy-and-hold")
-        assert benchmark["agent"] == {
-            "id": None,
-            "slug": "benchmark",
-            "name": "Benchmark",
-            "model": None,
-            "harness": None,
-            "execution_model_id": None,
-            "reasoning_effort": None,
+        benchmark = find(client.get("/api/arena/managed").json()["portfolios"], "spy")
+        assert set(benchmark) == {
+            "kind",
+            "id",
+            "slug",
+            "name",
+            "status",
+            "rank",
+            "evidence",
+            "rank_score",
+            "metrics",
+            "sparkline",
         }
-        assert benchmark["prompt"] == {
-            "id": None,
-            "slug": "buy-and-hold",
-            "name": "Buy & Hold",
-            "configurable": False,
-            "allocation_policy": {
-                "min_position_weight_pct": 100,
-                "max_position_weight_pct": 100,
-                "derived_min_positions": 1,
-                "derived_max_positions": 1,
-            },
-        }
-
-    def test_buy_and_hold_prompt_name_is_reserved(self, client, admin_headers):
-        response = client.post(
-            "/api/prompts",
-            json={
-                "name": "Buy & Hold",
-                "text": "Configurable copy.",
-                "allocation_policy": {
-                    "min_position_weight_pct": 100,
-                    "max_position_weight_pct": 100,
-                },
-            },
-            headers=admin_headers,
-        )
-        assert response.status_code == 409
-
-    def test_benchmark_model_and_agent_slugs_are_reserved(self, client, admin_headers):
-        model_response = client.post(
-            "/api/models",
-            json={"name": "Benchmark", "capabilities": []},
-            headers=admin_headers,
-        )
-        assert model_response.status_code == 409
-
-        model = client.post(
-            "/api/models",
-            json={"name": "Manual model", "capabilities": []},
-            headers=admin_headers,
-        ).json()
-        agent_response = client.post(
-            "/api/agents",
-            json={
-                "model_id": model["id"],
-                "harness": None,
-                "reasoning_effort": None,
-                "slug": "benchmark",
-            },
-            headers=admin_headers,
-        )
-        assert agent_response.status_code == 409
 
     def test_prompt_detail_lists_portfolios(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
@@ -552,7 +432,7 @@ class TestAdminMisc:
 
     def test_clear_price_cache(self, client, admin_headers, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"])
-        client.get("/api/leaderboard")  # populates the cache
+        client.get("/api/arena/managed")  # populates the cache
         response = client.delete("/api/prices/cache", headers=admin_headers)
         assert response.status_code == 200
         assert response.json()["deleted"] >= 1

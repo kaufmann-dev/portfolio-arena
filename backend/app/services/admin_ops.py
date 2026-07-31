@@ -1,8 +1,8 @@
 """Write operations shared by the REST admin router and the MCP tools.
 
 Every experiment-integrity rule lives here exactly once: server-set entry
-times, computed effective dates (no backdating), position locking after the
-effective close, benchmark protection, and slug uniqueness. Functions own their
+times, computed effective dates (no backdating), position and signal locking
+after the effective close, mode separation, and slug uniqueness. Functions own their
 `session.commit()` and raise `AdminOpError` on any rule violation; callers
 translate that into their transport's error shape (HTTP status / tool error).
 """
@@ -12,7 +12,6 @@ from datetime import UTC, date, datetime
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..config import BENCHMARK_IDENTITY, BENCHMARK_STRATEGY
 from ..models import (
     Agent,
     Allocation,
@@ -25,6 +24,8 @@ from ..models import (
     Position,
     Prompt,
     Setting,
+    Signal,
+    SignalPosition,
 )
 from ..seed import (
     DEFAULT_COST_BPS_KEY,
@@ -32,8 +33,7 @@ from ..seed import (
     REBUILT_WRAPPER_PROMPT_KEY,
 )
 from ..util import slugify
-from .arena import compute_valuations, load_portfolios
-from .benchmarks import reconcile_benchmark_allocations
+from .arena import compute_rebuilt_arena, compute_valuations, load_portfolios
 from .errors import AdminOpError
 from .harnesses import supports_automation
 from .model_catalog import (
@@ -53,7 +53,12 @@ from .prompt_policy import (
     validate_position_weights,
     validate_wrapper_prompt,
 )
-from .serialize import serialize_allocation, serialize_detail
+from .serialize import (
+    serialize_allocation,
+    serialize_detail,
+    serialize_rebuilt_detail,
+    serialize_signal,
+)
 from .symbols import (
     SymbolValidationError,
     normalize_symbol,
@@ -104,10 +109,6 @@ def create_model(
     clean_name = name.strip()
     if not clean_name:
         raise AdminOpError(422, "Model name is required")
-    reserved_name = clean_name.casefold() == BENCHMARK_IDENTITY["name"].casefold()
-    reserved_slug = slug is not None and slugify(slug) == BENCHMARK_IDENTITY["slug"]
-    if reserved_name or reserved_slug:
-        raise AdminOpError(409, "Benchmark is reserved for hardcoded benchmark portfolios")
     model = ModelDefinition(
         slug=unique_slug(session, ModelDefinition, slug or clean_name),
         name=clean_name,
@@ -171,8 +172,6 @@ def update_model(
         clean_name = name.strip()
         if not clean_name:
             raise AdminOpError(422, "Model name is required")
-        if clean_name.casefold() == BENCHMARK_IDENTITY["name"].casefold():
-            raise AdminOpError(409, "Benchmark is reserved for hardcoded benchmark portfolios")
         model.name = clean_name
     if notes is not None:
         model.notes = notes
@@ -232,8 +231,6 @@ def create_agent(
         reasoning_effort=reasoning_effort,
     )
     clean_harness = harness.strip() if harness else None
-    if slug is not None and slugify(slug) == BENCHMARK_IDENTITY["slug"]:
-        raise AdminOpError(409, "Benchmark is reserved for hardcoded benchmark portfolios")
     if _profile_exists(
         session,
         model_id=model.id,
@@ -342,10 +339,6 @@ def create_prompt(
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
-    reserved_name = name.strip().casefold() == BENCHMARK_STRATEGY["name"].casefold()
-    reserved_slug = slug is not None and slugify(slug) == BENCHMARK_STRATEGY["slug"]
-    if reserved_name or reserved_slug:
-        raise AdminOpError(409, "Buy & Hold is reserved for hardcoded benchmark portfolios")
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
         name=name,
@@ -372,8 +365,6 @@ def update_prompt(
     if prompt is None:
         raise AdminOpError(404, "Prompt not found")
     if name is not None:
-        if name.strip().casefold() == BENCHMARK_STRATEGY["name"].casefold():
-            raise AdminOpError(409, "Buy & Hold is reserved for hardcoded benchmark portfolios")
         prompt.name = name
     if text is not None:
         prompt.text = text
@@ -410,8 +401,6 @@ def writable_portfolio(session: Session, portfolio_id: int, *, lock: bool = Fals
     portfolio = session.scalars(query).first()
     if portfolio is None:
         raise AdminOpError(404, "Portfolio not found")
-    if portfolio.is_benchmark:
-        raise AdminOpError(403, "Benchmark portfolios are system-managed")
     return portfolio
 
 
@@ -462,9 +451,13 @@ def create_portfolio(
     prompt = session.get(Prompt, prompt_id)
     if prompt is None:
         raise AdminOpError(422, "Prompt not found")
+    clean_name = name.strip()
+    requested_slug = slugify(slug or clean_name)
+    if clean_name.casefold() == "spy" or requested_slug == "spy":
+        raise AdminOpError(409, "SPY is reserved for the synthetic benchmark reference.")
 
     portfolio = Portfolio(
-        slug=unique_slug(session, Portfolio, slug or name),
+        slug=unique_slug(session, Portfolio, requested_slug),
         name=name,
         agent_id=agent.id,
         prompt_id=prompt.id,
@@ -493,8 +486,13 @@ def update_portfolio(
     prompt_mode: str | None = None,
     cost_bps: int | None = None,
 ) -> dict:
-    portfolio = writable_portfolio(session, portfolio_id)
+    changing_prompt_mode = prompt_mode is not None
+    if changing_prompt_mode:
+        session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
+    portfolio = writable_portfolio(session, portfolio_id, lock=changing_prompt_mode)
     if name is not None:
+        if name.strip().casefold() == "spy":
+            raise AdminOpError(409, "SPY is reserved for the synthetic benchmark reference.")
         portfolio.name = name
     if status is not None:
         portfolio.status = status
@@ -515,7 +513,41 @@ def update_portfolio(
         portfolio.prompt_id = prompt_id
     if prompt_mode is not None:
         _validate_prompt_mode(prompt_mode)
-        portfolio.prompt_mode = prompt_mode
+        if prompt_mode != portfolio.prompt_mode:
+            allocation_count = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(Allocation)
+                    .where(Allocation.portfolio_id == portfolio.id)
+                )
+                or 0
+            )
+            signal_count = int(
+                session.scalar(
+                    select(func.count()).select_from(Signal).where(Signal.portfolio_id == portfolio.id)
+                )
+                or 0
+            )
+            active_run_count = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(EvaluationRun)
+                    .where(
+                        EvaluationRun.portfolio_id == portfolio.id,
+                        EvaluationRun.status.in_({"queued", "running"}),
+                    )
+                )
+                or 0
+            )
+            if allocation_count or signal_count or portfolio.founding_v2 or active_run_count:
+                raise AdminOpError(
+                    409,
+                    "Reset the portfolio's history before changing its prompt mode.",
+                )
+            portfolio.prompt_mode = prompt_mode
+            portfolio.founding_v2 = False
+            if prompt_mode == "rebuilt" and portfolio.evaluator_config is not None:
+                portfolio.evaluator_config.weekdays = [0, 1, 2, 3, 4]
     if cost_bps is not None:
         portfolio.cost_bps = cost_bps
     session.commit()
@@ -533,16 +565,14 @@ def update_portfolio(
 
 def delete_portfolio(session: Session, portfolio_id: int) -> dict:
     portfolio = writable_portfolio(session, portfolio_id)
-    session.delete(portfolio)  # allocations + positions cascade
-    session.flush()
-    reconcile_benchmark_allocations(session)
+    session.delete(portfolio)
     session.commit()
     return {"ok": True}
 
 
 def reset_portfolio(session: Session, portfolio_id: int) -> dict:
-    """Delete a contestant's complete allocation history while preserving its
-    identity, evaluator configuration, and evaluator audit trail."""
+    """Delete the portfolio's mode-specific history while preserving identity,
+    evaluator configuration, and evaluator audit rows."""
     session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
     portfolio = writable_portfolio(session, portfolio_id, lock=True)
 
@@ -569,19 +599,30 @@ def reset_portfolio(session: Session, portfolio_id: int) -> dict:
             run.error = "Cancellation requested because the portfolio was reset."
             cancellation_requested_runs += 1
 
-    deleted_allocations = int(
-        session.scalar(
-            select(func.count()).select_from(Allocation).where(Allocation.portfolio_id == portfolio.id)
+    deleted_allocations = 0
+    deleted_signals = 0
+    if portfolio.prompt_mode == "managed":
+        deleted_allocations = int(
+            session.scalar(
+                select(func.count()).select_from(Allocation).where(Allocation.portfolio_id == portfolio.id)
+            )
+            or 0
         )
-        or 0
-    )
-    session.execute(delete(Allocation).where(Allocation.portfolio_id == portfolio.id))
-    session.flush()
-    reconcile_benchmark_allocations(session)
+        session.execute(delete(Allocation).where(Allocation.portfolio_id == portfolio.id))
+    else:
+        deleted_signals = int(
+            session.scalar(
+                select(func.count()).select_from(Signal).where(Signal.portfolio_id == portfolio.id)
+            )
+            or 0
+        )
+        session.execute(delete(Signal).where(Signal.portfolio_id == portfolio.id))
+    portfolio.founding_v2 = False
     session.commit()
     return {
         "ok": True,
         "deleted_allocations": deleted_allocations,
+        "deleted_signals": deleted_signals,
         "cancelled_queued_runs": cancelled_queued_runs,
         "cancellation_requested_runs": cancellation_requested_runs,
     }
@@ -590,15 +631,33 @@ def reset_portfolio(session: Session, portfolio_id: int) -> dict:
 def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
     """Admin view: public detail plus the handoff fields (per-position notes,
     holding entry/current prices)."""
-    if reconcile_benchmark_allocations(session):
-        session.commit()
     portfolios = load_portfolios(session)
-    valuations = compute_valuations(session, portfolios)
     match = next((p for p in portfolios if p.id == portfolio_id), None)
-    valuation = valuations.by_portfolio_id.get(match.id) if match else None
-    if valuation is None:
+    if match is None:
         raise AdminOpError(404, "Portfolio not found")
     wrapper_prompt = wrapper_prompt_for_portfolio(session, match)
+    if match.prompt_mode == "rebuilt":
+        arena = compute_rebuilt_arena(session, portfolios)
+        analysis = arena.by_portfolio_id.get(match.id)
+        if analysis is None:
+            raise AdminOpError(404, "Portfolio not found")
+        return {
+            "as_of": arena.as_of,
+            "market_data_status": arena.market_data_status,
+            "portfolio": serialize_rebuilt_detail(
+                analysis,
+                arena,
+                view="tuned",
+                horizon=None,
+                admin=True,
+                wrapper_prompt=wrapper_prompt,
+            ),
+        }
+
+    valuations = compute_valuations(session, portfolios)
+    valuation = valuations.by_portfolio_id.get(match.id)
+    if valuation is None:
+        raise AdminOpError(404, "Portfolio not found")
     return {
         "as_of": valuations.as_of,
         "market_data_status": valuations.market_data_status,
@@ -676,6 +735,8 @@ def create_allocation(session: Session, portfolio_id: int, positions: list[dict]
     first market close strictly after it (no backdating). Rejects a clash if an
     allocation already takes effect that date — edit that one instead."""
     portfolio = writable_portfolio(session, portfolio_id)
+    if portfolio.prompt_mode != "managed":
+        raise AdminOpError(409, "Rebuilt portfolios accept daily signals, not allocations.")
     if portfolio.status != "active":
         raise AdminOpError(409, "Unarchive the portfolio before adding allocations")
 
@@ -695,8 +756,6 @@ def create_allocation(session: Session, portfolio_id: int, positions: list[dict]
 
     allocation = _new_allocation(portfolio, normalized, note, now, effective)
     session.add(allocation)
-    session.flush()
-    reconcile_benchmark_allocations(session)
     session.commit()
     return serialize_allocation(reload_allocation(session, allocation.id), admin=True)
 
@@ -716,8 +775,6 @@ def update_allocation(
     ).first()
     if allocation is None:
         raise AdminOpError(404, "Allocation not found")
-    if allocation.portfolio.is_benchmark:
-        raise AdminOpError(403, "Benchmark portfolios are system-managed")
 
     if positions is not None:
         if is_locked(allocation.effective_date, datetime.now(UTC)):
@@ -743,13 +800,146 @@ def delete_allocation(session: Session, allocation_id: int) -> dict:
     ).first()
     if allocation is None:
         raise AdminOpError(404, "Allocation not found")
-    if allocation.portfolio.is_benchmark:
-        raise AdminOpError(403, "Benchmark portfolios are system-managed")
     if is_locked(allocation.effective_date, datetime.now(UTC)):
         raise AdminOpError(403, "This allocation is locked: its effective close has passed.")
     session.delete(allocation)
-    session.flush()
-    reconcile_benchmark_allocations(session)
+    session.commit()
+    return {"ok": True}
+
+
+# --- Rebuilt signals --------------------------------------------------------
+
+
+SIGNAL_PROVENANCE = {"integrated", "browser_admin", "mcp"}
+
+
+def _apply_signal_positions(signal: Signal, positions: list[dict]) -> None:
+    for position in positions:
+        signal.positions.append(
+            SignalPosition(
+                symbol=position["symbol"],
+                weight_pct=position["weight_pct"],
+                note=position["note"],
+            )
+        )
+
+
+def _new_signal(
+    portfolio: Portfolio,
+    positions: list[dict],
+    note: str,
+    entered_at: datetime,
+    effective_date: date,
+    provenance: str,
+) -> Signal:
+    if provenance not in SIGNAL_PROVENANCE:
+        raise AdminOpError(422, "Invalid signal provenance.")
+    signal = Signal(
+        portfolio_id=portfolio.id,
+        entered_at=entered_at,
+        effective_date=effective_date,
+        note=note,
+        provenance=provenance,
+    )
+    _apply_signal_positions(signal, positions)
+    return signal
+
+
+def reload_signal(session: Session, signal_id: int) -> Signal:
+    return session.scalars(
+        select(Signal).where(Signal.id == signal_id).options(selectinload(Signal.positions))
+    ).one()
+
+
+def create_signal(
+    session: Session,
+    portfolio_id: int,
+    positions: list[dict],
+    note: str = "",
+    *,
+    provenance: str = "mcp",
+    now: datetime | None = None,
+) -> dict:
+    """Create one independent rebuilt signal for the next future close."""
+    portfolio = writable_portfolio(session, portfolio_id)
+    if portfolio.prompt_mode != "rebuilt":
+        raise AdminOpError(409, "Managed portfolios accept allocations, not daily signals.")
+    if portfolio.status != "active":
+        raise AdminOpError(409, "Unarchive the portfolio before adding signals.")
+    if provenance not in {"browser_admin", "mcp"}:
+        raise AdminOpError(422, "Only browser_admin or mcp provenance is accepted here.")
+
+    current_time = now or datetime.now(UTC)
+    effective = effective_date_for(current_time)
+    normalized = _normalize_positions(portfolio.prompt, positions)
+    clash = session.scalars(
+        select(Signal).where(
+            Signal.portfolio_id == portfolio.id,
+            Signal.effective_date == effective,
+        )
+    ).first()
+    if clash is not None:
+        raise AdminOpError(
+            409,
+            f"A signal already targets {effective.isoformat()} — edit it instead.",
+        )
+
+    signal = _new_signal(
+        portfolio,
+        normalized,
+        note,
+        current_time,
+        effective,
+        provenance,
+    )
+    session.add(signal)
+    session.commit()
+    return serialize_signal(reload_signal(session, signal.id), admin=True, now=current_time)
+
+
+def update_signal(
+    session: Session,
+    signal_id: int,
+    positions: list[dict] | None = None,
+    note: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    current_time = now or datetime.now(UTC)
+    signal = session.scalars(
+        select(Signal)
+        .where(Signal.id == signal_id)
+        .options(selectinload(Signal.positions), selectinload(Signal.portfolio))
+        .with_for_update()
+    ).first()
+    if signal is None:
+        raise AdminOpError(404, "Signal not found.")
+    if is_locked(signal.effective_date, current_time):
+        raise AdminOpError(403, "This signal is immutable: its effective close has passed.")
+    if positions is not None:
+        normalized = _normalize_positions(signal.portfolio.prompt, positions)
+        signal.positions.clear()
+        session.flush()
+        _apply_signal_positions(signal, normalized)
+    if note is not None:
+        signal.note = note
+    session.commit()
+    return serialize_signal(reload_signal(session, signal.id), admin=True, now=current_time)
+
+
+def delete_signal(
+    session: Session,
+    signal_id: int,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    current_time = now or datetime.now(UTC)
+    signal = session.scalars(select(Signal).where(Signal.id == signal_id).with_for_update()).first()
+    if signal is None:
+        raise AdminOpError(404, "Signal not found.")
+    if is_locked(signal.effective_date, current_time):
+        raise AdminOpError(403, "This signal is immutable: its effective close has passed.")
+    session.delete(signal)
     session.commit()
     return {"ok": True}
 
@@ -778,9 +968,7 @@ def get_app_settings(session: Session) -> dict:
     }
 
 
-def wrapper_prompt_for_portfolio(session: Session, portfolio: Portfolio) -> str | None:
-    if portfolio.is_benchmark:
-        return None
+def wrapper_prompt_for_portfolio(session: Session, portfolio: Portfolio) -> str:
     settings = get_app_settings(session)
     if portfolio.prompt_mode == "managed":
         return settings["managed_wrapper_prompt"]

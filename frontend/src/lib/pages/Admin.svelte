@@ -6,22 +6,25 @@
   import type {
     AgentOut,
     AllocationOut,
+    AdminPortfolioDetailResponse,
+    ArenaPortfolio,
     AppSettings,
     ApiKeyCreated,
     ApiKeyOut,
     ApiKeysResponse,
     HarnessDefinition,
     HarnessesResponse,
-    LeaderboardResponse,
+    ManagedArenaResponse,
+    ManagedPortfolioDetail,
     ModelDefinition,
     ModelHarnessCapability,
     MarketDataStatus,
-    PortfolioDetail,
-    PortfolioDetailResponse,
     PortfolioResetResult,
-    PortfolioSummary,
     PromptMode,
     PromptOut,
+    RebuiltArenaResponse,
+    RebuiltPortfolioDetail,
+    SignalOut,
   } from "../api/types";
   import AllocationForm, { type AllocationPayload } from "../components/AllocationForm.svelte";
   import AutomationPanel from "../components/AutomationPanel.svelte";
@@ -40,7 +43,7 @@
   }
 
   const ADMIN_TABS: { id: Tab; label: string }[] = [
-    { id: "allocation", label: "Allocations" },
+    { id: "allocation", label: "Portfolio state" },
     { id: "automation", label: "Automation" },
     { id: "portfolio", label: "Portfolios" },
     { id: "models", label: "Models" },
@@ -77,11 +80,11 @@
   }
 
   // ── Shared data ──────────────────────────────
-  let portfolios = $state<PortfolioSummary[]>([]);
-  let prompts = $state<PromptOut[]>([]);
-  let agents = $state<AgentOut[]>([]);
-  let models = $state<ModelDefinition[]>([]);
-  let harnesses = $state<HarnessDefinition[]>([]);
+  let portfolios = $state.raw<ArenaPortfolio[]>([]);
+  let prompts = $state.raw<PromptOut[]>([]);
+  let agents = $state.raw<AgentOut[]>([]);
+  let models = $state.raw<ModelDefinition[]>([]);
+  let harnesses = $state.raw<HarnessDefinition[]>([]);
   let marketDataStatus = $state<MarketDataStatus>("fresh");
   let marketDataAsOf = $state<string | null>(null);
   let notice = $state("");
@@ -94,16 +97,30 @@
   }
 
   async function loadAll() {
-    const [leaderboard, promptsPayload, agentsPayload, modelsPayload, harnessesPayload] = await Promise.all([
-      apiJson<LeaderboardResponse>("/api/leaderboard"),
-      apiJson<{ prompts: PromptOut[] }>("/api/prompts"),
-      apiJson<{ agents: AgentOut[] }>("/api/agents"),
-      apiJson<{ models: ModelDefinition[] }>("/api/models"),
-      apiJson<HarnessesResponse>("/api/harnesses"),
-    ]);
-    portfolios = leaderboard.portfolios;
-    marketDataStatus = leaderboard.market_data_status;
-    marketDataAsOf = leaderboard.as_of;
+    const [managed, rebuilt, promptsPayload, agentsPayload, modelsPayload, harnessesPayload] =
+      await Promise.all([
+        apiJson<ManagedArenaResponse>("/api/arena/managed"),
+        apiJson<RebuiltArenaResponse>("/api/arena/rebuilt?view=tuned&objective=canonical&cost_basis=net"),
+        apiJson<{ prompts: PromptOut[] }>("/api/prompts"),
+        apiJson<{ agents: AgentOut[] }>("/api/agents"),
+        apiJson<{ models: ModelDefinition[] }>("/api/models"),
+        apiJson<HarnessesResponse>("/api/harnesses"),
+      ]);
+    portfolios = [
+      ...managed.portfolios.filter((row) => row.kind === "managed"),
+      ...rebuilt.portfolios.filter((row) => row.kind === "rebuilt"),
+    ];
+    marketDataStatus =
+      managed.market_data_status === "unavailable" || rebuilt.market_data_status === "unavailable"
+        ? "unavailable"
+        : managed.market_data_status === "stale" || rebuilt.market_data_status === "stale"
+          ? "stale"
+          : "fresh";
+    marketDataAsOf =
+      [managed.as_of, rebuilt.as_of]
+        .filter((value): value is string => value !== null)
+        .sort()
+        .at(-1) ?? null;
     prompts = promptsPayload.prompts;
     agents = agentsPayload.agents;
     models = modelsPayload.models;
@@ -121,15 +138,14 @@
     });
   });
 
-  const contestants = $derived(portfolios.filter((portfolio) => !portfolio.is_benchmark));
-
-  // ── Tab 1: allocations ───────────────────────
+  // ── Tab 1: managed allocations and rebuilt signals ───────────────────────
   let selectedSlug = $state("");
-  let detail = $state<PortfolioDetail | null>(null);
+  let detail = $state.raw<ManagedPortfolioDetail | RebuiltPortfolioDetail | null>(null);
   let detailAsOf = $state<string | null>(null);
   let detailMarketDataStatus = $state<MarketDataStatus>("fresh");
   let detailLoading = $state(false);
   let editingAllocation = $state<AllocationOut | null>(null);
+  let editingSignal = $state<SignalOut | null>(null);
   let formKey = $state(0);
 
   async function selectPortfolio(event: Event) {
@@ -137,6 +153,7 @@
     if (!selectedSlug) {
       detail = null;
       editingAllocation = null;
+      editingSignal = null;
       return;
     }
     await loadDetail(selectedSlug);
@@ -145,6 +162,7 @@
   async function loadDetail(slug: string) {
     detailLoading = true;
     editingAllocation = null;
+    editingSignal = null;
     try {
       const summary = portfolios.find((portfolio) => portfolio.slug === slug);
       if (!summary) {
@@ -152,7 +170,7 @@
         return;
       }
       // Admin endpoint: carries per-position notes + holding entry/current prices.
-      const payload = await apiJson<PortfolioDetailResponse>(`/api/portfolios/${summary.id}/detail`);
+      const payload = await apiJson<AdminPortfolioDetailResponse>(`/api/portfolios/${summary.id}/detail`);
       detail = payload.portfolio;
       detailAsOf = payload.as_of;
       detailMarketDataStatus = payload.market_data_status;
@@ -162,12 +180,12 @@
     }
   }
 
-  const latestAllocation = $derived(detail?.allocations[0] ?? null);
+  const latestAllocation = $derived(detail?.kind === "managed" ? (detail.allocations[0] ?? null) : null);
   const displayedMarketDataStatus = $derived(detail ? detailMarketDataStatus : marketDataStatus);
   const displayedMarketDataAsOf = $derived(detail ? detailAsOf : marketDataAsOf);
 
   function buildHandoff(): string {
-    if (!detail) return "";
+    if (!detail || detail.kind !== "managed") return "";
     const lines = [
       `${detail.name} — current state as of ${detailAsOf ?? "n/a"}`,
       `Overall note: ${latestAllocation?.note?.trim() || "—"}`,
@@ -210,14 +228,14 @@
   }
 
   async function submitRebalance(payload: AllocationPayload) {
-    if (!detail) return;
+    if (!detail || detail.kind !== "managed") return;
     await postJson(`/api/portfolios/${detail.id}/allocations`, payload);
     flash(`Rebalance for ${detail.name} entered.`);
     await loadDetail(detail.slug);
   }
 
   async function submitEdit(payload: AllocationPayload) {
-    if (!editingAllocation || !detail) return;
+    if (!editingAllocation || !detail || detail.kind !== "managed") return;
     const body: Record<string, unknown> = { note: payload.note };
     if (!editingAllocation.locked) body.positions = payload.positions;
     await putJson(`/api/allocations/${editingAllocation.id}`, body);
@@ -226,7 +244,7 @@
   }
 
   function deleteAllocation(allocation: AllocationOut) {
-    if (!detail) return;
+    if (!detail || detail.kind !== "managed") return;
     const portfolioSlug = detail.slug;
     requestConfirmation({
       title: "Delete allocation?",
@@ -247,26 +265,69 @@
     });
   }
 
-  function resetPortfolio(portfolio: PortfolioSummary) {
-    if (portfolio.allocation_count === 0) return;
+  async function submitSignal(payload: AllocationPayload) {
+    if (!detail || detail.kind !== "rebuilt") return;
+    await postJson(`/api/portfolios/${detail.id}/signals`, payload);
+    flash(`Signal for ${detail.name} entered.`);
+    await loadDetail(detail.slug);
+  }
+
+  async function submitSignalEdit(payload: AllocationPayload) {
+    if (!editingSignal || !detail || detail.kind !== "rebuilt") return;
+    await putJson(`/api/signals/${editingSignal.id}`, {
+      positions: payload.positions,
+      note: payload.note,
+    });
+    flash("Signal updated.");
+    await loadDetail(detail.slug);
+  }
+
+  function deleteSignal(signal: SignalOut) {
+    if (!detail || detail.kind !== "rebuilt") return;
+    const portfolioSlug = detail.slug;
+    requestConfirmation({
+      title: "Delete signal?",
+      description: `The pending signal effective ${signal.effective_date} will be permanently removed.`,
+      confirmLabel: "Delete signal",
+      action: async () => {
+        try {
+          await del(`/api/signals/${signal.id}`);
+          flash("Signal deleted.");
+          await loadDetail(portfolioSlug);
+          await loadAll();
+          return true;
+        } catch (e) {
+          flash(e instanceof Error ? e.message : "Delete failed");
+          return false;
+        }
+      },
+    });
+  }
+
+  function resetPortfolio(portfolio: ArenaPortfolio) {
     const portfolioSlug = portfolio.slug;
-    const allocationLabel =
-      portfolio.allocation_count === 1 ? "1 allocation" : `${portfolio.allocation_count} allocations`;
+    const historyLabel =
+      portfolio.prompt_mode === "managed" ? "managed allocation history" : "rebuilt signal history";
     requestConfirmation({
       title: `Reset ${portfolio.name}?`,
       description:
-        `This permanently deletes ${allocationLabel}, all current holdings, and the complete ` +
+        `This permanently deletes its ${historyLabel}, all current holdings, and the complete ` +
         "performance history. Queued or running evaluations will be cancelled, but the evaluator " +
         "schedule will remain enabled.",
       confirmLabel: "Reset portfolio",
       action: async () => {
         try {
           const result = await postJson<PortfolioResetResult>(`/api/portfolios/${portfolio.id}/reset`, {});
-          if (selectedSlug === portfolioSlug) editingAllocation = null;
+          if (selectedSlug === portfolioSlug) {
+            editingAllocation = null;
+            editingSignal = null;
+          }
           await loadAll();
           if (selectedSlug === portfolioSlug) await loadDetail(portfolioSlug);
-          const deletedLabel =
-            result.deleted_allocations === 1 ? "1 allocation" : `${result.deleted_allocations} allocations`;
+          const deletedCount =
+            portfolio.prompt_mode === "managed" ? result.deleted_allocations : result.deleted_signals;
+          const noun = portfolio.prompt_mode === "managed" ? "allocation" : "signal";
+          const deletedLabel = `${deletedCount} ${noun}${deletedCount === 1 ? "" : "s"}`;
           flash(`Portfolio ${portfolio.name} reset; ${deletedLabel} deleted.`);
           return true;
         } catch (e) {
@@ -301,14 +362,16 @@
     if (newCostBps.trim() !== "") body.cost_bps = parseInt(newCostBps, 10);
     try {
       const created = await postJson<{ slug: string; name: string }>("/api/portfolios", body);
-      flash(`Portfolio ${created.name} created — enter its first allocation.`);
+      flash(
+        `Portfolio ${created.name} created — enter its first ${newPromptMode === "managed" ? "allocation" : "signal"}.`,
+      );
       newName = "";
       newAgentId = null;
       newPromptId = null;
       newPromptMode = "managed";
       newCostBps = "";
       await loadAll();
-      // Jump to the Allocations tab with the new portfolio selected.
+      // Jump to Portfolio state with the new portfolio selected.
       selectedSlug = created.slug;
       tab = "allocation";
       await loadDetail(created.slug);
@@ -609,7 +672,7 @@
     cost_bps: string;
   } | null>(null);
 
-  async function toggleArchive(portfolio: PortfolioSummary) {
+  async function toggleArchive(portfolio: ArenaPortfolio) {
     await patchJson(`/api/portfolios/${portfolio.id}`, {
       status: portfolio.status === "active" ? "archived" : "active",
     });
@@ -635,10 +698,10 @@
     }
   }
 
-  function deletePortfolio(portfolio: PortfolioSummary) {
+  function deletePortfolio(portfolio: ArenaPortfolio) {
     requestConfirmation({
       title: "Delete portfolio?",
-      description: `${portfolio.name} and every allocation in its history will be permanently removed.`,
+      description: `${portfolio.name} and its complete mode-specific history will be permanently removed.`,
       confirmLabel: "Delete portfolio",
       action: async () => {
         try {
@@ -819,9 +882,9 @@
             <label for="portfolio-select">Portfolio</label>
             <select id="portfolio-select" value={selectedSlug} onchange={selectPortfolio}>
               <option value="">Select a portfolio…</option>
-              {#each contestants as portfolio (portfolio.slug)}
+              {#each portfolios as portfolio (portfolio.slug)}
                 <option value={portfolio.slug}>
-                  {portfolio.name} — {portfolio.agent.name}
+                  {portfolio.name} — {portfolio.agent.name} — {portfolio.prompt_mode}
                   {portfolio.status === "archived" ? " (archived)" : ""}
                 </option>
               {/each}
@@ -832,154 +895,213 @@
             <div class="loading-block"><span class="spinner" aria-hidden="true"></span></div>
           {:else if detail}
             <p class="muted picked-meta">
-              {detail.agent.name} · prompt {detail.prompt?.name ?? "—"}
+              {detail.agent.name} · prompt {detail.prompt.name} · {detail.prompt_mode}
             </p>
             <div class="state-head">
-              <h2>Allocation history</h2>
-              <button
-                class="btn small danger"
-                onclick={() => detail && resetPortfolio(detail)}
-                disabled={detail.allocation_count === 0}
-              >
-                Reset
-              </button>
-            </div>
-            <div class="table-scroll history">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Effective</th>
-                    <th>Status</th>
-                    <th class="right">Positions</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each detail.allocations as allocation (allocation.id)}
-                    <tr>
-                      <td class="num">{fmtDate(allocation.effective_date)}</td>
-                      <td>
-                        {#if allocation.locked}
-                          <span class="badge">locked</span>
-                        {:else}
-                          <span class="badge warn">editable until close</span>
-                        {/if}
-                      </td>
-                      <td class="right muted">
-                        {allocation.positions
-                          .map((p) => `${p.symbol} ${pctPoints(p.weight_pct, 1)}`)
-                          .join(", ")}
-                      </td>
-                      <td class="right actions">
-                        <button class="btn small" onclick={() => (editingAllocation = allocation)}>
-                          Edit
-                        </button>
-                        {#if !allocation.locked}
-                          <button class="btn small danger" onclick={() => deleteAllocation(allocation)}>
-                            Delete
-                          </button>
-                        {/if}
-                      </td>
-                    </tr>
-                  {:else}
-                    <tr>
-                      <td colspan="4" class="muted">No allocations yet — enter the first one below.</td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
+              <h2>{detail.kind === "managed" ? "Managed state" : "Daily signal state"}</h2>
+              <button class="btn small danger" onclick={() => detail && resetPortfolio(detail)}>Reset</button>
             </div>
 
-            <div class="state-head">
-              <h2>Current holdings</h2>
-              <button class="btn small" onclick={copyHandoff} disabled={!detail.allocations.length}>
-                Copy handoff
-              </button>
-            </div>
-            {#if detail.holdings.length}
+            {@const managedDetail = detail.kind === "managed" ? (detail as ManagedPortfolioDetail) : null}
+            {@const rebuiltDetail = detail.kind === "rebuilt" ? (detail as RebuiltPortfolioDetail) : null}
+
+            {#if managedDetail}
               <div class="table-scroll history">
                 <table>
                   <thead>
                     <tr>
-                      <th>Symbol</th>
-                      <th class="right">Buy</th>
-                      <th class="right">Now</th>
-                      <th class="right">Change</th>
-                      <th class="right">Weight</th>
-                      <th class="right">Target</th>
-                      <th>Note</th>
+                      <th>Effective</th>
+                      <th>Status</th>
+                      <th class="right">Positions</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {#each detail.holdings as holding (holding.symbol)}
-                      {@const chg =
-                        holding.entry_price && holding.current_price
-                          ? (holding.current_price / holding.entry_price - 1) * 100
-                          : null}
+                    {#each managedDetail.allocations as allocation (allocation.id)}
                       <tr>
-                        <td class="num">{holding.symbol}</td>
-                        <td class="right num"
-                          >{holding.entry_price != null ? num(holding.entry_price) : "—"}</td
-                        >
-                        <td class="right num"
-                          >{holding.current_price != null ? num(holding.current_price) : "—"}</td
-                        >
-                        <td class="right num {signClass(chg)}">{chg != null ? pctPoints(chg, 2) : "—"}</td>
-                        <td class="right num">{pctPoints(holding.weight_pct)}</td>
-                        <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
-                        <td class="muted preview">{holding.note || "—"}</td>
+                        <td class="num">{fmtDate(allocation.effective_date)}</td>
+                        <td>
+                          {#if allocation.locked}
+                            <span class="badge">locked</span>
+                          {:else}
+                            <span class="badge warn">editable until close</span>
+                          {/if}
+                        </td>
+                        <td class="right muted">
+                          {allocation.positions
+                            .map((position) => `${position.symbol} ${pctPoints(position.weight_pct, 1)}`)
+                            .join(", ")}
+                        </td>
+                        <td class="right actions">
+                          <button class="btn small" onclick={() => (editingAllocation = allocation)}
+                            >Edit</button
+                          >
+                          {#if !allocation.locked}
+                            <button class="btn small danger" onclick={() => deleteAllocation(allocation)}>
+                              Delete
+                            </button>
+                          {/if}
+                        </td>
                       </tr>
+                    {:else}
+                      <tr><td colspan="4" class="muted">No allocations yet.</td></tr>
                     {/each}
                   </tbody>
                 </table>
               </div>
-            {:else}
-              <p class="muted prefill-note">
-                No drifted holdings yet — the first allocation is still pending.
-              </p>
-            {/if}
 
-            {#if editingAllocation}
-              <h2>
-                Edit allocation effective {editingAllocation.effective_date}
-                <button class="btn small" onclick={() => (editingAllocation = null)}>Cancel</button>
-              </h2>
-              {#key editingAllocation.id}
-                <AllocationForm
-                  initialPositions={editingAllocation.positions}
-                  initialNote={editingAllocation.note}
-                  positionsEditable={!editingAllocation.locked}
-                  policy={detail.prompt?.allocation_policy}
-                  submitLabel="Save changes"
-                  onSubmit={submitEdit}
-                />
-              {/key}
-            {:else if detail.allocations.length === 0}
-              <h2>First allocation</h2>
-              {#key formKey}
-                <AllocationForm
-                  policy={detail.prompt?.allocation_policy}
-                  submitLabel="Enter first allocation"
-                  onSubmit={submitRebalance}
-                />
-              {/key}
-            {:else}
-              <h2>New rebalance</h2>
-              <p class="muted prefill-note">
-                Pre-filled with the previous allocation's target weights as the starting point.
-              </p>
-              {#key formKey}
-                <AllocationForm
-                  initialPositions={latestAllocation?.positions ?? []}
-                  policy={detail.prompt?.allocation_policy}
-                  submitLabel="Enter rebalance"
-                  onSubmit={submitRebalance}
-                />
-              {/key}
+              <div class="state-head">
+                <h2>Current holdings</h2>
+                <button class="btn small" onclick={copyHandoff} disabled={!managedDetail.allocations.length}>
+                  Copy handoff
+                </button>
+              </div>
+              {#if managedDetail.holdings.length}
+                <div class="table-scroll history">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Symbol</th><th class="right">Buy</th><th class="right">Now</th>
+                        <th class="right">Change</th><th class="right">Weight</th>
+                        <th class="right">Target</th><th>Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each managedDetail.holdings as holding (holding.symbol)}
+                        {@const chg =
+                          holding.entry_price && holding.current_price
+                            ? (holding.current_price / holding.entry_price - 1) * 100
+                            : null}
+                        <tr>
+                          <td class="num">{holding.symbol}</td>
+                          <td class="right num"
+                            >{holding.entry_price != null ? num(holding.entry_price) : "—"}</td
+                          >
+                          <td class="right num"
+                            >{holding.current_price != null ? num(holding.current_price) : "—"}</td
+                          >
+                          <td class="right num {signClass(chg)}">{chg != null ? pctPoints(chg, 2) : "—"}</td>
+                          <td class="right num">{pctPoints(holding.weight_pct)}</td>
+                          <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
+                          <td class="muted preview">{holding.note || "—"}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else}
+                <p class="muted prefill-note">No drifted holdings yet.</p>
+              {/if}
+
+              {#if editingAllocation}
+                <h2>
+                  Edit allocation effective {editingAllocation.effective_date}
+                  <button class="btn small" onclick={() => (editingAllocation = null)}>Cancel</button>
+                </h2>
+                {#key editingAllocation.id}
+                  <AllocationForm
+                    initialPositions={editingAllocation.positions}
+                    initialNote={editingAllocation.note}
+                    positionsEditable={!editingAllocation.locked}
+                    policy={managedDetail.prompt.allocation_policy}
+                    submitLabel="Save changes"
+                    onSubmit={submitEdit}
+                  />
+                {/key}
+              {:else}
+                <h2>{managedDetail.allocations.length ? "New rebalance" : "First allocation"}</h2>
+                {#if managedDetail.allocations.length}
+                  <p class="muted prefill-note">Pre-filled with the previous target weights.</p>
+                {/if}
+                {#key formKey}
+                  <AllocationForm
+                    initialPositions={latestAllocation?.positions ?? []}
+                    policy={managedDetail.prompt.allocation_policy}
+                    submitLabel={managedDetail.allocations.length
+                      ? "Enter rebalance"
+                      : "Enter first allocation"}
+                    onSubmit={submitRebalance}
+                  />
+                {/key}
+              {/if}
+            {:else if rebuiltDetail}
+              <div class="table-scroll history">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Effective</th>
+                      <th>Provenance</th>
+                      <th>Status</th>
+                      <th class="right">Positions</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each rebuiltDetail.signals as signal (signal.id)}
+                      <tr>
+                        <td class="num">{fmtDate(signal.effective_date)}</td>
+                        <td>
+                          <span class="badge">{signal.provenance?.replace("_", " ") ?? "—"}</span>
+                        </td>
+                        <td>
+                          <span class={["badge", !signal.locked && "warn"]}>
+                            {signal.locked ? "complete" : "pending"}
+                          </span>
+                        </td>
+                        <td class="right muted">
+                          {signal.positions
+                            .map((position) => `${position.symbol} ${pctPoints(position.weight_pct, 1)}`)
+                            .join(", ")}
+                        </td>
+                        <td class="right actions">
+                          {#if !signal.locked}
+                            <button class="btn small" onclick={() => (editingSignal = signal)}>Edit</button>
+                            <button class="btn small danger" onclick={() => deleteSignal(signal)}
+                              >Delete</button
+                            >
+                          {/if}
+                        </td>
+                      </tr>
+                    {:else}
+                      <tr><td colspan="5" class="muted">No daily signals yet.</td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+
+              {#if editingSignal}
+                <h2>
+                  Edit pending signal effective {editingSignal.effective_date}
+                  <button class="btn small" onclick={() => (editingSignal = null)}>Cancel</button>
+                </h2>
+                {#key editingSignal.id}
+                  <AllocationForm
+                    initialPositions={editingSignal.positions}
+                    initialNote={editingSignal.note}
+                    policy={rebuiltDetail.prompt.allocation_policy}
+                    entryKind="signal"
+                    submitLabel="Save signal"
+                    onSubmit={submitSignalEdit}
+                  />
+                {/key}
+              {:else}
+                <h2>New independent signal</h2>
+                <p class="muted prefill-note">
+                  Build this complete signal from scratch; prior targets are intentionally not pre-filled.
+                </p>
+                {#key formKey}
+                  <AllocationForm
+                    policy={rebuiltDetail.prompt.allocation_policy}
+                    entryKind="signal"
+                    submitLabel="Enter signal"
+                    onSubmit={submitSignal}
+                  />
+                {/key}
+              {/if}
             {/if}
           {:else}
             <div class="empty-state">
-              <p>Select a portfolio to enter a rebalance or fix a pending allocation.</p>
+              <p>Select a portfolio to manage its allocations or daily signals.</p>
             </div>
           {/if}
         </section>
@@ -1054,11 +1176,11 @@
             >
               Create portfolio
             </button>
-            <p class="muted hint">Enter its first allocation from the Allocations tab.</p>
+            <p class="muted hint">Enter its first allocation or daily signal from Portfolio state.</p>
           </form>
 
           <h2 class="spaced">Existing portfolios</h2>
-          {#each contestants as portfolio (portfolio.id)}
+          {#each portfolios as portfolio (portfolio.id)}
             {#if editPortfolio?.id === portfolio.id}
               <form class="edit-form" onsubmit={savePortfolio}>
                 <div class="field">
@@ -1107,7 +1229,7 @@
                 <div>
                   <strong>{portfolio.name}</strong>
                   <span class="muted">
-                    · {portfolio.agent.name} · {portfolio.prompt_mode ?? "—"} · {portfolio.cost_bps} bps ·
+                    · {portfolio.agent.name} · {portfolio.prompt_mode} · {portfolio.cost_bps} bps ·
                     {portfolio.status}</span
                   >
                 </div>
@@ -1118,9 +1240,9 @@
                       (editPortfolio = {
                         id: portfolio.id,
                         name: portfolio.name,
-                        agent_id: portfolio.agent.id ?? agents[0]?.id ?? 0,
-                        prompt_id: portfolio.prompt?.id ?? prompts[0]?.id ?? 0,
-                        prompt_mode: portfolio.prompt_mode ?? "managed",
+                        agent_id: portfolio.agent.id,
+                        prompt_id: portfolio.prompt.id,
+                        prompt_mode: portfolio.prompt_mode,
                         cost_bps: String(portfolio.cost_bps),
                       })}
                   >
@@ -1129,13 +1251,7 @@
                   <button class="btn small" onclick={() => toggleArchive(portfolio)}>
                     {portfolio.status === "active" ? "Archive" : "Unarchive"}
                   </button>
-                  <button
-                    class="btn small danger"
-                    onclick={() => resetPortfolio(portfolio)}
-                    disabled={portfolio.allocation_count === 0}
-                  >
-                    Reset
-                  </button>
+                  <button class="btn small danger" onclick={() => resetPortfolio(portfolio)}> Reset </button>
                   <button class="btn small danger" onclick={() => deletePortfolio(portfolio)}>Delete</button>
                 </div>
               </div>
@@ -1447,7 +1563,7 @@
           <h2>New prompt</h2>
           <form onsubmit={createPrompt}>
             <div class="field">
-              <label for="np-prompt-name">Name <span class="muted">(e.g. weekly-manager-v2)</span></label>
+              <label for="np-prompt-name">Name <span class="muted">(e.g. daily-signal-v2)</span></label>
               <input id="np-prompt-name" type="text" bind:value={newPromptName} />
             </div>
             <div class="field">
@@ -1487,7 +1603,7 @@
             <p class="muted hint">
               These defaults produce {Math.ceil(100 / newPromptMaxWeight)}–{Math.floor(
                 100 / newPromptMinWeight,
-              )} positions. The server enforces the limits on every allocation.
+              )} positions. The server enforces the limits on every allocation and signal.
             </p>
             <button
               class="btn primary"
@@ -1572,7 +1688,7 @@
                     class="btn small danger"
                     onclick={() => deletePrompt(prompt)}
                     disabled={used > 0}
-                    title={used > 0 ? "Used by existing allocations" : ""}
+                    title={used > 0 ? "Used by existing portfolios" : ""}
                   >
                     Delete
                   </button>
@@ -1592,12 +1708,13 @@
           <h2>New API key</h2>
           <p class="muted cache-note">
             API keys authenticate the MCP server, which can do everything the admin panel can (manage
-            portfolios, agents, prompts, allocations, and read performance) except manage keys.
+            portfolios, agents, prompts, managed allocations, rebuilt signals, and read performance) except
+            manage keys.
           </p>
           <form onsubmit={createKey}>
             <div class="field">
               <label for="nk-name">Name <span class="muted">(what this key is for)</span></label>
-              <input id="nk-name" type="text" bind:value={newKeyName} placeholder="Claude rebalancer" />
+              <input id="nk-name" type="text" bind:value={newKeyName} placeholder="External evaluator" />
             </div>
             {#if keyError}
               <div class="error-box" role="alert">{keyError}</div>

@@ -16,13 +16,13 @@ from ..models import (
     ModelDefinition,
     Portfolio,
     PortfolioEvaluatorConfig,
+    Signal,
 )
 from . import admin_ops
 from .admin_ops import AdminOpError
 from .harnesses import automation_harness_ids, supports_automation
 from .model_catalog import agent_out, agent_snapshot_out, model_ref
 from .prompt_policy import automated_execution_prompt
-from .serialize import serialize_allocation
 from .trading_calendar import close_at, effective_date_for, is_trading_day
 
 ACTIVE_STATUSES = {"queued", "running", "cancel_requested"}
@@ -55,15 +55,25 @@ def config_out(config: PortfolioEvaluatorConfig | None, portfolio: Portfolio) ->
             "slug": portfolio.slug,
             "name": portfolio.name,
             "status": portfolio.status,
+            "prompt_mode": portfolio.prompt_mode,
         },
         "agent": agent_out(portfolio.agent),
         "enabled": config.enabled if config is not None else False,
-        "weekdays": list(config.weekdays) if config is not None else [],
+        "weekdays": (
+            [0, 1, 2, 3, 4]
+            if portfolio.prompt_mode == "rebuilt"
+            else (list(config.weekdays) if config is not None else [])
+        ),
         "updated_at": config.updated_at.isoformat() if config is not None else None,
     }
 
 
 def run_out(run: EvaluationRun) -> dict:
+    result = None
+    if run.allocation_id is not None:
+        result = {"kind": "allocation", "id": run.allocation_id}
+    elif run.signal_id is not None:
+        result = {"kind": "signal", "id": run.signal_id}
     return {
         "id": run.id,
         "portfolio": {
@@ -94,7 +104,7 @@ def run_out(run: EvaluationRun) -> dict:
         "lease_expires_at": _iso(run.lease_expires_at),
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
-        "allocation_id": run.allocation_id,
+        "result": result,
         "report": run.report,
         "error": run.error,
         "created_at": run.created_at.isoformat(),
@@ -124,8 +134,6 @@ def _load_run(session: Session, run_id: int, *, lock: bool = False) -> Evaluatio
 
 def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
     wrapper_prompt = admin_ops.wrapper_prompt_for_portfolio(session, run.portfolio)
-    if wrapper_prompt is None:
-        raise AdminOpError(409, "Benchmark portfolios cannot be evaluated")
     return {
         **run_out(run),
         "execution_prompt": automated_execution_prompt(run.portfolio, wrapper_prompt),
@@ -193,9 +201,9 @@ def update_portfolio_config(
             selectinload(Portfolio.agent).selectinload(Agent.model).selectinload(ModelDefinition.capabilities)
         )
     ).first()
-    if portfolio is None or portfolio.is_benchmark:
-        raise AdminOpError(404, "Contestant portfolio not found")
-    clean_weekdays = sorted(set(weekdays))
+    if portfolio is None:
+        raise AdminOpError(404, "Portfolio not found")
+    clean_weekdays = [0, 1, 2, 3, 4] if portfolio.prompt_mode == "rebuilt" else sorted(set(weekdays))
     if enabled and portfolio.status != "active":
         raise AdminOpError(409, "Archived portfolios cannot be enabled for evaluation")
     if enabled and not supports_automation(portfolio.agent.harness):
@@ -275,7 +283,6 @@ def get_dashboard(session: Session, *, now: datetime | None = None) -> dict:
         select(Portfolio)
         .join(Portfolio.agent)
         .where(
-            Portfolio.is_benchmark.is_(False),
             Agent.harness.in_(automation_harness_ids()),
         )
         .options(
@@ -365,11 +372,23 @@ def _new_run(
     )
 
 
-def _pending_allocation(session: Session, portfolio_id: int, now: datetime) -> Allocation | None:
+def _pending_result(
+    session: Session,
+    portfolio: Portfolio,
+    now: datetime,
+) -> Allocation | Signal | None:
+    effective = effective_date_for(now)
+    if portfolio.prompt_mode == "managed":
+        return session.scalars(
+            select(Allocation).where(
+                Allocation.portfolio_id == portfolio.id,
+                Allocation.effective_date == effective,
+            )
+        ).first()
     return session.scalars(
-        select(Allocation).where(
-            Allocation.portfolio_id == portfolio_id,
-            Allocation.effective_date == effective_date_for(now),
+        select(Signal).where(
+            Signal.portfolio_id == portfolio.id,
+            Signal.effective_date == effective,
         )
     ).first()
 
@@ -404,7 +423,6 @@ def enqueue_manual_runs(
             config is None
             or portfolio is None
             or not config.enabled
-            or portfolio.is_benchmark
             or portfolio.status != "active"
             or not supports_automation(portfolio.agent.harness)
         ):
@@ -428,12 +446,12 @@ def enqueue_manual_runs(
                 }
             )
             continue
-        if _pending_allocation(session, portfolio_id, current_time) is not None:
+        if _pending_result(session, portfolio, current_time) is not None:
             items.append(
                 {
                     "portfolio_id": portfolio_id,
                     "action": "rejected",
-                    "reason": "An allocation already targets the next effective session.",
+                    "reason": "A result already targets the next effective session.",
                     "run": None,
                 }
             )
@@ -467,8 +485,8 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
     active = _active_run(session, source.portfolio_id)
     if active is not None:
         return {"action": "existing", "run": run_out(active)}
-    if _pending_allocation(session, source.portfolio_id, current_time) is not None:
-        raise AdminOpError(409, "An allocation already targets the next effective session")
+    if _pending_result(session, source.portfolio, current_time) is not None:
+        raise AdminOpError(409, "A result already targets the next effective session")
     run = _new_run(config, settings, trigger_kind="retry", retry_of_run_id=source.id)
     session.add(run)
     session.commit()
@@ -666,12 +684,13 @@ def submit_run(
     ).first()
     if run is None:
         raise AdminOpError(404, "Evaluation run not found")
-    if run.status == "succeeded" and run.allocation_id is not None:
-        allocation = admin_ops.reload_allocation(session, run.allocation_id)
-        return {
-            "run": run_out(run),
-            "allocation": serialize_allocation(allocation, admin=True),
-        }
+    if run.status == "succeeded":
+        if run.allocation_id is not None:
+            output = run_out(run)
+            return {"run": output, "result": output["result"]}
+        if run.signal_id is not None:
+            output = run_out(run)
+            return {"run": output, "result": output["result"]}
     if run.status == "cancel_requested":
         run.status = "cancelled"
         run.finished_at = current_time
@@ -693,38 +712,61 @@ def submit_run(
     normalized = admin_ops._normalize_positions(run.portfolio.prompt, positions)
     effective = run.scheduled_for if run.trigger_kind == "scheduled" else effective_date_for(current_time)
     assert effective is not None
-    allocation = session.scalars(
-        select(Allocation).where(
-            Allocation.portfolio_id == run.portfolio_id,
-            Allocation.effective_date == effective,
-        )
-    ).first()
-    if allocation is None:
-        allocation = admin_ops._new_allocation(
-            run.portfolio,
-            normalized,
-            note,
-            current_time,
-            effective,
-        )
-        session.add(allocation)
-        session.flush()
-        run.status = "succeeded"
+    if run.portfolio.prompt_mode == "managed":
+        allocation = session.scalars(
+            select(Allocation).where(
+                Allocation.portfolio_id == run.portfolio_id,
+                Allocation.effective_date == effective,
+            )
+        ).first()
+        if allocation is None:
+            allocation = admin_ops._new_allocation(
+                run.portfolio,
+                normalized,
+                note,
+                current_time,
+                effective,
+            )
+            session.add(allocation)
+            session.flush()
+            run.status = "succeeded"
+            run.allocation_id = allocation.id
+        else:
+            run.status = "skipped"
+            run.error = "An allocation already targets this effective session."
+            run.allocation_id = None
+        run.signal_id = None
     else:
-        run.status = "skipped"
-        run.error = "An allocation already targets this effective session."
-    run.allocation_id = allocation.id
+        signal = session.scalars(
+            select(Signal).where(
+                Signal.portfolio_id == run.portfolio_id,
+                Signal.effective_date == effective,
+            )
+        ).first()
+        if signal is None:
+            signal = admin_ops._new_signal(
+                run.portfolio,
+                normalized,
+                note,
+                current_time,
+                effective,
+                "integrated",
+            )
+            session.add(signal)
+            session.flush()
+            run.status = "succeeded"
+            run.signal_id = signal.id
+        else:
+            run.status = "skipped"
+            run.error = "A signal already targets this effective session."
+            run.signal_id = None
+        run.allocation_id = None
     run.report = report[:RUN_REPORT_MAX_LENGTH]
     run.lease_expires_at = None
     run.finished_at = current_time
     session.commit()
-    return {
-        "run": run_out(_load_run(session, run.id)),
-        "allocation": serialize_allocation(
-            admin_ops.reload_allocation(session, allocation.id),
-            admin=True,
-        ),
-    }
+    output = run_out(_load_run(session, run.id))
+    return {"run": output, "result": output["result"]}
 
 
 def fail_run(

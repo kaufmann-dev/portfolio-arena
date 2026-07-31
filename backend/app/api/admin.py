@@ -27,6 +27,8 @@ from ..schemas import (
     PromptCreate,
     PromptPatch,
     SettingsUpdate,
+    SignalCreate,
+    SignalUpdate,
 )
 from ..security import require_admin
 from ..services import admin_ops, evaluator, price_cache
@@ -48,7 +50,9 @@ def _run[T](fn: Callable[..., T], *args, **kwargs) -> T:
         raise HTTPException(exc.status_code, exc.message) from None
 
 
-def _positions(body: AllocationCreate | AllocationUpdate) -> list[dict] | None:
+def _positions(
+    body: AllocationCreate | AllocationUpdate | SignalCreate | SignalUpdate,
+) -> list[dict] | None:
     if body.positions is None:
         return None
     return [{"symbol": p.symbol, "weight_pct": p.weight_pct, "note": p.note} for p in body.positions]
@@ -318,6 +322,28 @@ def update_allocation(allocation_id: int, body: AllocationUpdate, session: Sessi
 @router.delete("/allocations/{allocation_id}")
 def delete_allocation(allocation_id: int, session: Session = Depends(get_session)):
     return _run(admin_ops.delete_allocation, session, allocation_id)
+
+
+@router.post("/portfolios/{portfolio_id}/signals", status_code=201)
+def create_signal(portfolio_id: int, body: SignalCreate, session: Session = Depends(get_session)):
+    return _run(
+        admin_ops.create_signal,
+        session,
+        portfolio_id,
+        _positions(body),
+        body.note,
+        provenance="browser_admin",
+    )
+
+
+@router.put("/signals/{signal_id}")
+def update_signal(signal_id: int, body: SignalUpdate, session: Session = Depends(get_session)):
+    return _run(admin_ops.update_signal, session, signal_id, _positions(body), body.note)
+
+
+@router.delete("/signals/{signal_id}")
+def delete_signal(signal_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.delete_signal, session, signal_id)
 
 
 # --- Settings & cache ---------------------------------------------------------

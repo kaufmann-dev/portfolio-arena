@@ -1,0 +1,243 @@
+<script lang="ts">
+  import type { RebuiltAnalysisContext, RebuiltArenaPortfolio, SignalHorizon } from "../api/types";
+  import { portfolioAnalysisHref } from "../arena";
+  import { pct } from "../format";
+  import { link } from "../stores/router.svelte";
+
+  interface Props {
+    rows: RebuiltArenaPortfolio[];
+    selectedHorizon: number;
+    context: RebuiltAnalysisContext;
+  }
+
+  const { rows, selectedHorizon, context }: Props = $props();
+  const horizons = Array.from({ length: 20 }, (_, index) => index + 1);
+
+  function cellFor(row: RebuiltArenaPortfolio, horizon: number): SignalHorizon | undefined {
+    return row.signal_horizons.find((cell) => cell.horizon === horizon);
+  }
+
+  function cellText(cell: SignalHorizon | undefined): string {
+    if (!cell || cell.evidence === "pending") return "Pending";
+    return pct(cell.mean_daily_alpha, 2);
+  }
+
+  function cellTitle(row: RebuiltArenaPortfolio, cell: SignalHorizon | undefined, horizon: number): string {
+    if (!cell) return `${row.name}, ${horizon}-session horizon: pending`;
+    const lower = pct(cell.ci_lower, 2);
+    const upper = pct(cell.ci_upper, 2);
+    return `${row.name}, ${horizon}-session horizon: ${cellText(cell)} mean daily alpha; 95% interval ${lower} to ${upper}; ${cell.evidence}`;
+  }
+
+  function detailHref(slug: string): string {
+    return portfolioAnalysisHref(slug, "rebuilt", {
+      ...context,
+      view: "signal",
+      objective: "canonical",
+      cost_basis: "gross",
+      horizon: selectedHorizon,
+    });
+  }
+</script>
+
+<section class="matrix-section" aria-labelledby="signal-matrix-title">
+  <header>
+    <div>
+      <h2 id="signal-matrix-title">Signal Alpha matrix</h2>
+      <p>
+        Mean daily alpha for every completed holding period. The selected {selectedHorizon}-session horizon is
+        outlined.
+      </p>
+    </div>
+  </header>
+
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="matrix-scroll" role="region" aria-labelledby="signal-matrix-title" tabindex="0">
+    <table>
+      <caption>
+        Portfolio rows by one through twenty trading-session holding periods. Every cell contains its numeric
+        result or pending state.
+      </caption>
+      <thead>
+        <tr>
+          <th class="portfolio-head" scope="col">Portfolio</th>
+          {#each horizons as horizon (horizon)}
+            <th scope="col" class={{ selected: horizon === selectedHorizon }}>
+              H{horizon}
+            </th>
+          {/each}
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="benchmark">
+          <th scope="row">SPY reference</th>
+          {#each horizons as horizon (horizon)}
+            <td class={{ selected: horizon === selectedHorizon }}>0.00%</td>
+          {/each}
+        </tr>
+        {#each rows as row (row.id)}
+          <tr>
+            <th scope="row">
+              <a href={detailHref(row.slug)} onclick={(event) => link(event, detailHref(row.slug))}>
+                {row.name}
+              </a>
+            </th>
+            {#each horizons as horizon (horizon)}
+              {@const cell = cellFor(row, horizon)}
+              <td
+                class={[cell?.evidence ?? "pending", horizon === selectedHorizon && "selected"]}
+                title={cellTitle(row, cell, horizon)}
+              >
+                {cellText(cell)}
+              </td>
+            {/each}
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<style>
+  .matrix-section {
+    min-width: 0;
+    display: grid;
+    gap: 12px;
+    margin-top: 4px;
+  }
+
+  header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  p {
+    margin-top: 5px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  .matrix-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+  }
+
+  .matrix-scroll:focus-visible {
+    outline-offset: 2px;
+  }
+
+  table {
+    min-width: 1740px;
+    table-layout: fixed;
+  }
+
+  caption {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  th,
+  td {
+    width: 74px;
+    padding: 8px 7px;
+    border-right: 1px solid var(--border-subtle);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    width: 236px;
+    min-width: 236px;
+    padding-left: 12px;
+    background: var(--bg-surface);
+    font-family: var(--font-sans);
+    text-align: left;
+  }
+
+  thead th:first-child {
+    z-index: 3;
+  }
+
+  tbody th {
+    font-size: 11px;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  td.positive {
+    color: var(--pos);
+    background: color-mix(in srgb, var(--pos) 9%, transparent);
+  }
+
+  td.negative {
+    color: var(--neg);
+    background: color-mix(in srgb, var(--neg) 9%, transparent);
+  }
+
+  td.inconclusive {
+    color: var(--warn);
+    background: var(--warn-bg);
+  }
+
+  td.pending {
+    color: var(--text-tertiary);
+    font-family: var(--font-sans);
+    font-size: 9px;
+  }
+
+  .selected {
+    box-shadow:
+      inset 2px 0 var(--accent),
+      inset -2px 0 var(--accent);
+  }
+
+  thead .selected {
+    color: var(--accent);
+    box-shadow:
+      inset 2px 0 var(--accent),
+      inset -2px 0 var(--accent),
+      inset 0 2px var(--accent);
+  }
+
+  tbody tr:last-child .selected {
+    box-shadow:
+      inset 2px 0 var(--accent),
+      inset -2px 0 var(--accent),
+      inset 0 -2px var(--accent);
+  }
+
+  .benchmark th,
+  .benchmark td {
+    color: var(--text-tertiary);
+    background: var(--bg-inset);
+  }
+
+  .benchmark .selected {
+    color: var(--accent);
+  }
+</style>

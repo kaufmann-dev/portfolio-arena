@@ -22,24 +22,6 @@ PRICE_FAILURE_COOLDOWN_SECONDS = 300
 MASSIVE_BASE_URL = "https://api.massive.com"
 MASSIVE_DATA_DELAY_MINUTES = 15
 
-# Benchmark portfolios are valued by the identical engine, at zero cost.
-BENCHMARKS = [
-    {"slug": "spy-buy-and-hold", "name": "SPY Buy & Hold", "symbol": "SPY"},
-    {"slug": "rsp-buy-and-hold", "name": "RSP Buy & Hold", "symbol": "RSP"},
-]
-BENCHMARK_IDENTITY = {
-    "slug": "benchmark",
-    "name": "Benchmark",
-}
-BENCHMARK_STRATEGY = {
-    "slug": "buy-and-hold",
-    "name": "Buy & Hold",
-    "text": "Hold the benchmark ETF forever.",
-    "min_position_weight_pct": 100,
-    "max_position_weight_pct": 100,
-}
-
-TOO_EARLY_AGE_DAYS = 183  # portfolios younger than ~6 months are "too early to judge"
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 

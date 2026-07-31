@@ -17,7 +17,7 @@
   const ACTIVITY_INTERVAL_MS = 5 * 60 * 1000;
   const ACTIVITY_EVENT_TYPES = new Set(["pointerdown", "keydown", "click"]);
   const navItems = [
-    { href: "/", label: "Leaderboard", route: "home" },
+    { href: "/", label: "Arena", route: "home" },
     { href: "/about", label: "About", route: "about" },
     { href: "/admin", label: "Admin", route: "admin" },
   ] as const;
@@ -29,7 +29,7 @@
   const routeLabel = $derived.by(() => {
     switch (router.route.name) {
       case "home":
-        return "Leaderboard";
+        return "Arena";
       case "portfolio":
         return `${router.route.params.slug} portfolio`;
       case "prompt":

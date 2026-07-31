@@ -40,10 +40,10 @@ class TestDeletePortfolio:
         response = client.delete(f"/api/portfolios/{sample_portfolio['id']}", headers=admin_headers)
         assert response.status_code == 200, response.text
         assert client.get(f"/api/portfolios/{sample_portfolio['slug']}").status_code == 404
-        rows = client.get("/api/leaderboard").json()["portfolios"]
+        rows = client.get("/api/arena/managed").json()["portfolios"]
         assert all(p["id"] != sample_portfolio["id"] for p in rows)
 
-    def test_delete_last_portfolio_clears_benchmark_history(
+    def test_delete_last_portfolio_leaves_only_synthetic_spy(
         self,
         client,
         admin_headers,
@@ -52,25 +52,22 @@ class TestDeletePortfolio:
         from .util import backdate_allocation
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        seeded = client.get("/api/leaderboard").json()["portfolios"]
-        assert all(row["allocation_count"] == 1 for row in seeded if row["is_benchmark"])
+        seeded = client.get("/api/arena/managed").json()["portfolios"]
+        assert seeded[0]["kind"] == "benchmark"
+        assert seeded[0]["metrics"]["has_data"] is True
 
         response = client.delete(f"/api/portfolios/{sample_portfolio['id']}", headers=admin_headers)
         assert response.status_code == 200, response.text
 
-        benchmarks = [
-            row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]
-        ]
-        assert len(benchmarks) == 2
-        assert all(row["allocation_count"] == 0 for row in benchmarks)
-        assert all(row["inception"] is None for row in benchmarks)
-        assert all(row["metrics"]["has_data"] is False for row in benchmarks)
+        rows = client.get("/api/arena/managed").json()["portfolios"]
+        assert len(rows) == 1
+        assert rows[0]["kind"] == "benchmark"
+        assert rows[0]["id"] is None
+        assert rows[0]["metrics"]["has_data"] is False
 
-    def test_delete_benchmark_blocked(self, client, admin_headers):
-        rows = client.get("/api/leaderboard").json()["portfolios"]
-        benchmark = next(p for p in rows if p["is_benchmark"])
-        response = client.delete(f"/api/portfolios/{benchmark['id']}", headers=admin_headers)
-        assert response.status_code == 403
+    def test_synthetic_spy_is_not_an_addressable_portfolio(self, client, admin_headers):
+        assert client.get("/api/portfolios/spy").status_code == 404
+        assert client.delete("/api/portfolios/spy", headers=admin_headers).status_code == 422
 
     def test_delete_missing_portfolio(self, client, admin_headers):
         assert client.delete("/api/portfolios/999999", headers=admin_headers).status_code == 404

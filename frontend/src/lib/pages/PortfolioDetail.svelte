@@ -1,11 +1,16 @@
 <script lang="ts">
-  import { Accordion } from "bits-ui";
-
   import { apiJson } from "../api/client";
-  import type { AllocationOut, PortfolioDetail, PortfolioDetailResponse } from "../api/types";
-  import { ChevronDown, ChevronRight } from "@lucide/svelte";
+  import type {
+    ManagedPortfolioDetail,
+    PortfolioAnalysisResponse,
+    RebuiltPortfolioDetail,
+  } from "../api/types";
+  import EvidenceBadge from "../components/EvidenceBadge.svelte";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
+  import PolicyMatrix from "../components/PolicyMatrix.svelte";
+  import SignalHistory from "../components/SignalHistory.svelte";
+  import SignalMatrix from "../components/SignalMatrix.svelte";
   import { ageLabel, fmtDate, fmtDateTime, num, pct, pctPoints, signClass } from "../format";
   import { link } from "../stores/router.svelte";
 
@@ -14,38 +19,51 @@
   }
 
   const { slug }: Props = $props();
+  let copyResult = $state<"" | "copied" | "error">("");
 
-  let expanded = $state<string[]>([]);
-  let copyResult = $state.raw<{ slug: string; status: "" | "copied" | "error" }>({ slug: "", status: "" });
+  function requestUrl(portfolioSlug: string): string {
+    const source = new URLSearchParams(window.location.search);
+    const track = source.get("track");
+    if (track !== "managed" && track !== "rebuilt") return `/api/portfolios/${portfolioSlug}`;
 
-  function chartSeriesFor(portfolio: PortfolioDetail): ChartSeries[] {
-    if (!portfolio.series.length) return [];
-    const out: ChartSeries[] = [{ name: portfolio.name, points: portfolio.series }];
-    if (!portfolio.is_benchmark || portfolio.slug !== "spy-buy-and-hold") {
-      out.push({ name: "SPY", points: portfolio.spy_series, dashed: true, color: "var(--spark)" });
+    const query = new URLSearchParams({ track });
+    if (track === "rebuilt") {
+      for (const key of ["view", "objective", "cost_basis", "horizon"]) {
+        const value = source.get(key);
+        if (value) query.set(key, value);
+      }
     }
-    return out;
+    return `/api/portfolios/${portfolioSlug}?${query.toString()}`;
   }
 
-  function markersFor(portfolio: PortfolioDetail): string[] {
-    return portfolio.allocations
-      .map((allocation) => allocation.applied_date)
-      .filter((date): date is string => date !== null);
+  function chartSeries(portfolio: ManagedPortfolioDetail | RebuiltPortfolioDetail): ChartSeries[] {
+    if (!portfolio.series.length) return [];
+    return [
+      { name: portfolio.name, points: portfolio.series },
+      { name: "SPY", points: portfolio.spy_series, dashed: true, color: "var(--spark)" },
+    ];
   }
 
-  function allocationTitle(allocation: AllocationOut, index: number, total: number): string {
-    if (index === total - 1) return "Initial allocation";
-    return "Rebalance";
+  function allocationTitle(index: number, total: number): string {
+    return index === total - 1 ? "Initial allocation" : "Rebalance";
   }
 
-  async function copyPrompt(portfolio: PortfolioDetail) {
-    if (!portfolio.execution_prompt) return;
+  function markersFor(data: PortfolioAnalysisResponse): string[] {
+    if (data.track === "managed") {
+      return data.portfolio.allocations
+        .map((allocation) => allocation.applied_date)
+        .filter((date): date is string => date !== null);
+    }
+    return data.portfolio.signals.map((signal) => signal.effective_date);
+  }
 
+  async function copyPrompt(executionPrompt: string | null): Promise<void> {
+    if (!executionPrompt) return;
     try {
-      await navigator.clipboard.writeText(portfolio.execution_prompt);
-      copyResult = { slug: portfolio.slug, status: "copied" };
+      await navigator.clipboard.writeText(executionPrompt);
+      copyResult = "copied";
     } catch {
-      copyResult = { slug: portfolio.slug, status: "error" };
+      copyResult = "error";
     }
   }
 
@@ -54,231 +72,328 @@
   }
 </script>
 
+{#snippet metricTile(label: string, value: string, className = "")}
+  <div class="metric card">
+    <span class="metric-label">{label}</span>
+    <span class={["metric-value", "num", className]}>{value}</span>
+  </div>
+{/snippet}
+
+{#snippet allocationHistory(portfolio: ManagedPortfolioDetail)}
+  <section class="history-section" aria-labelledby="allocation-history-title">
+    <header class="section-head">
+      <div>
+        <h2 id="allocation-history-title">Allocation history</h2>
+        <p>Stateful target portfolios, newest first.</p>
+      </div>
+      <span class="num">{portfolio.allocations.length}</span>
+    </header>
+    <div class="history-list">
+      {#each portfolio.allocations as allocation, index (allocation.id)}
+        <details>
+          <summary>
+            <span class="history-primary">
+              <strong class="num">{fmtDate(allocation.effective_date)}</strong>
+              <span>{allocationTitle(index, portfolio.allocations.length)}</span>
+            </span>
+            <span class="history-meta">
+              {#if !allocation.applied_date}
+                Pending
+              {:else if allocation.turnover_pct !== null}
+                {pctPoints(allocation.turnover_pct)} turnover
+              {:else}
+                Applied
+              {/if}
+            </span>
+          </summary>
+          <div class="history-body">
+            <p class="muted num">Entered {fmtDateTime(allocation.entered_at)}</p>
+            {#if allocation.note}<p>{allocation.note}</p>{/if}
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Symbol</th><th class="right">Weight</th></tr></thead>
+                <tbody>
+                  {#each allocation.positions as position (position.symbol)}
+                    <tr>
+                      <td class="num">{position.symbol}</td>
+                      <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      {:else}
+        <div class="empty-state">No allocations entered yet.</div>
+      {/each}
+    </div>
+  </section>
+{/snippet}
+
 {#key slug}
-  {@const request = apiJson<PortfolioDetailResponse>(`/api/portfolios/${slug}`)}
+  {@const request = apiJson<PortfolioAnalysisResponse>(requestUrl(slug))}
   {#await request}
-    <div class="loading-block"><span class="spinner" aria-hidden="true"></span> Valuing portfolio…</div>
+    <div class="loading-block">
+      <span class="spinner" aria-hidden="true"></span> Building portfolio analysis…
+    </div>
   {:then data}
     {@const portfolio = data.portfolio}
-    {@const chartSeries = chartSeriesFor(portfolio)}
-    {@const markers = markersFor(portfolio)}
-    {@const staleSymbols = Object.keys(portfolio.stale_days)}
-    <div class="head">
-      <div>
-        <nav class="crumbs" aria-label="Breadcrumb">
-          <a href="/" onclick={(e) => link(e, "/")}>Leaderboard</a>
-          <span aria-hidden="true">/</span>
-          <span>{portfolio.name}</span>
-        </nav>
-        <h1>{portfolio.name}</h1>
-        <p class="muted">
-          {#if portfolio.agent.id !== null && portfolio.agent.model}
-            <a href="/agent/{portfolio.agent.slug}" onclick={(e) => link(e, `/agent/${portfolio.agent.slug}`)}
-              >{portfolio.agent.name}</a
+    {@const managedPortfolio = data.track === "managed" ? (data.portfolio as ManagedPortfolioDetail) : null}
+    {@const rebuiltPortfolio = data.track === "rebuilt" ? (data.portfolio as RebuiltPortfolioDetail) : null}
+    {@const rebuiltContext = data.track === "rebuilt" ? data.context : null}
+    {@const series = chartSeries(portfolio)}
+    {@const markers = markersFor(data)}
+    <article class="portfolio-detail">
+      <header class="detail-head">
+        <div>
+          <nav class="crumbs" aria-label="Breadcrumb">
+            <a href="/" onclick={(event) => link(event, "/")}>Portfolio Arena</a>
+            <span aria-hidden="true">/</span>
+            <span>{data.track === "rebuilt" ? "Rebuilt" : "Managed"}</span>
+          </nav>
+          <h1>{portfolio.name}</h1>
+          <p class="identity">
+            <a
+              href="/agent/{portfolio.agent.slug}"
+              onclick={(event) => link(event, `/agent/${portfolio.agent.slug}`)}
             >
-            <span class="muted">
-              · {portfolio.agent.model.name} · {portfolio.agent.harness?.name ?? "No supported harness"}
-              {portfolio.agent.reasoning_effort ? ` · ${portfolio.agent.reasoning_effort}` : ""}
-            </span>
-          {:else}
-            <span>{portfolio.agent.name}</span>
-          {/if}
-          {#if portfolio.prompt?.configurable}
+              {portfolio.agent.name}
+            </a>
             · prompt
             <a
               href="/prompt/{portfolio.prompt.slug}"
-              onclick={(e) => link(e, `/prompt/${portfolio.prompt!.slug}`)}>{portfolio.prompt.name}</a
+              onclick={(event) => link(event, `/prompt/${portfolio.prompt.slug}`)}
             >
-            {#if !portfolio.is_benchmark}
-              <button class="btn small prompt-copy" type="button" onclick={() => copyPrompt(portfolio)}>
-                Copy prompt
+              {portfolio.prompt.name}
+            </a>
+            · {data.track}
+            {#if data.as_of}· as of <span class="num">{data.as_of}</span>{/if}
+          </p>
+          {#if portfolio.execution_prompt}
+            <div class="prompt-action">
+              <button class="btn small" type="button" onclick={() => copyPrompt(portfolio.execution_prompt)}>
+                Copy evaluation prompt
               </button>
-              {#if copyResult.slug === portfolio.slug && copyResult.status}
-                <span
-                  class={["copy-status", copyResult.status === "error" && "copy-status-error"]}
-                  role="status"
-                >
-                  {copyResult.status === "copied"
-                    ? "Copied with this portfolio's slug."
-                    : "Copy failed — open the prompt and copy it manually."}
+              {#if copyResult}
+                <span class={copyResult === "error" ? "neg" : "muted"} role="status">
+                  {copyResult === "copied" ? "Copied." : "Copy failed."}
                 </span>
               {/if}
-            {/if}
-          {:else if portfolio.prompt}
-            · strategy {portfolio.prompt.name}
+            </div>
           {/if}
-          {#if portfolio.prompt_mode}· {portfolio.prompt_mode}{/if}
-          · costs {portfolio.cost_bps} bps on turnover
-          {#if data.as_of}· as of <span class="num">{data.as_of}</span>{/if}
-        </p>
-      </div>
-      <div class="head-badges">
-        {#if portfolio.is_benchmark}<span class="badge accent">benchmark</span>{/if}
-        {#if portfolio.prompt_mode}<span class="badge">{portfolio.prompt_mode}</span>{/if}
-        {#if portfolio.status === "archived"}<span class="badge">archived</span>{/if}
-        {#if portfolio.too_early && !portfolio.is_benchmark}
-          <span class="badge warn">too early to judge · {ageLabel(portfolio.age_days)}</span>
-        {/if}
-      </div>
-    </div>
+        </div>
+        <div class="head-badges">
+          <span class="badge">{data.track}</span>
+          <EvidenceBadge state={portfolio.evidence} />
+          {#if portfolio.status === "archived"}<span class="badge">archived</span>{/if}
+          {#if rebuiltPortfolio && rebuiltContext?.view === "common" && !rebuiltPortfolio.common_admitted && rebuiltPortfolio.status === "active" && !rebuiltPortfolio.founding_v2 && !rebuiltPortfolio.error}
+            <span class="badge warn" title="Not yet admitted to the Common-policy meta-portfolio">
+              H20 incubation
+            </span>
+          {/if}
+          {#if portfolio.stale_data}<span class="badge warn">stale data</span>{/if}
+          {#if portfolio.frozen_symbols.length}
+            <span class="badge neg">{portfolio.frozen_symbols.length} frozen</span>
+          {/if}
+        </div>
+      </header>
 
-    <MarketDataWarning status={data.market_data_status} asOf={data.as_of} />
+      <MarketDataWarning status={data.market_data_status} asOf={data.as_of} />
 
-    {#if portfolio.error}
-      <div class="error-box" role="alert">Valuation failed: {portfolio.error}</div>
-    {/if}
+      {#if portfolio.error}
+        <div class="error-box" role="alert">Analysis failed: {portfolio.error}</div>
+      {/if}
 
-    {#if portfolio.frozen_symbols.length}
-      <div class="error-box" role="alert">
-        <strong>Frozen positions:</strong>
-        {portfolio.frozen_symbols.join(", ")} stopped returning prices (possible delisting). The position is held
-        at its last known price — resolve it with a corrective rebalance.
-      </div>
-    {/if}
-
-    {#if portfolio.metrics.has_data}
-      <div class="metric-row">
-        {#snippet tile(label: string, value: string, cls = "")}
-          <div class="metric card">
-            <span class="metric-label">{label}</span>
-            <span class="metric-value num {cls}">{value}</span>
-          </div>
-        {/snippet}
-        {@render tile(
-          "ITD return",
-          pct(portfolio.metrics.itd_return),
-          signClass(portfolio.metrics.itd_return),
-        )}
-        {@render tile("vs SPY", pct(portfolio.metrics.vs_spy), signClass(portfolio.metrics.vs_spy))}
-        {@render tile("Max drawdown", pct(portfolio.metrics.max_drawdown))}
-        {@render tile("Sharpe (rf=0)", num(portfolio.metrics.sharpe))}
-        {@render tile("Ann. volatility", pct(portfolio.metrics.ann_volatility))}
-        {@render tile("Cost drag", pctPoints(portfolio.metrics.cost_drag_pct, 2))}
-        {@render tile("Turnover", pctPoints(portfolio.metrics.turnover_pct, 0))}
-        {@render tile("Age", ageLabel(portfolio.age_days))}
-      </div>
-
-      <div class="metric-row trailing">
-        {#snippet trail(label: string, value: number | null | undefined)}
-          <div class="metric card">
-            <span class="metric-label">{label}</span>
-            <span class="metric-value num {signClass(value)}">{pct(value)}</span>
-          </div>
-        {/snippet}
-        {@render trail("1M", portfolio.metrics.r1m)}
-        {@render trail("3M", portfolio.metrics.r3m)}
-        {@render trail("6M", portfolio.metrics.r6m)}
-        {@render trail("1Y", portfolio.metrics.r1y)}
-      </div>
-
-      <section class="card chart-card">
-        <h2>NAV vs SPY <span class="muted">(base 100 at inception, total return)</span></h2>
-        <LineChart series={chartSeries} {markers} ariaLabel="{portfolio.name} NAV versus SPY" />
-        <p class="muted chart-note">Dotted vertical lines mark allocation effective dates.</p>
-      </section>
-
-      {#if staleSymbols.length}
-        <div class="card warn-card">
-          <strong>Stale data:</strong>
-          {#each staleSymbols as symbol, i (symbol)}
-            {symbol} ({portfolio.stale_days[symbol].length} day{portfolio.stale_days[symbol].length === 1
-              ? ""
-              : "s"} carried forward){i < staleSymbols.length - 1 ? ", " : ""}
-          {/each}
+      {#if portfolio.frozen_symbols.length}
+        <div class="error-box" role="alert">
+          <strong>Frozen positions:</strong>
+          {portfolio.frozen_symbols.join(", ")} stopped returning prices and remain at their last known values.
         </div>
       {/if}
 
-      <section class="holdings-section">
-        <h2>Current holdings <span class="muted">(drifted)</span></h2>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th class="right">Weight</th>
-                <th class="right">Target</th>
-                <th class="right">Drift</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each portfolio.holdings as holding (holding.symbol)}
-                <tr>
-                  <td class="num">{holding.symbol}</td>
-                  <td class="right num">{pctPoints(holding.weight_pct)}</td>
-                  <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
-                  <td class="right num {signClass(holding.weight_pct - holding.target_weight_pct)}">
-                    {pctPoints(holding.weight_pct - holding.target_weight_pct)}
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    {:else}
-      <div class="empty-state card">
-        <h3>No track record yet</h3>
-        <p>
-          The first allocation takes effect at the next market close
-          {#if portfolio.allocations.length}
-            ({fmtDate(portfolio.allocations[portfolio.allocations.length - 1].effective_date)}).
-          {:else}
-            once it is entered.
-          {/if}
-        </p>
-      </div>
-    {/if}
+      {#if rebuiltPortfolio && rebuiltContext}
+        <section class="policy-context" aria-label="Selected rebuilt policy">
+          <div>
+            <span>Analysis mode</span>
+            <strong
+              >{rebuiltContext.view === "common"
+                ? "Common policy"
+                : rebuiltContext.view === "tuned"
+                  ? "Portfolio tuned"
+                  : "Signal Alpha"}</strong
+            >
+          </div>
+          <div>
+            <span>Selected policy</span>
+            <strong class="num">
+              {rebuiltPortfolio.selected_policy
+                ? `H${rebuiltPortfolio.selected_policy.horizon} · ${pctPoints(rebuiltPortfolio.selected_policy.exposure_pct, 0)} exposure`
+                : "Pending"}
+            </strong>
+          </div>
+          <div>
+            <span>Selected H completed / open</span>
+            <strong class="num"
+              >{rebuiltPortfolio.completion.complete_count} / {rebuiltPortfolio.completion.open_count}</strong
+            >
+          </div>
+          <div>
+            <span>Selected H completion</span>
+            <strong class="num">{pct(rebuiltPortfolio.completion.completion_ratio, 0)}</strong>
+          </div>
+        </section>
+      {/if}
 
-    <section class="allocations-section">
-      <h2>Allocation history</h2>
-      <div class="timeline">
-        <Accordion.Root type="multiple" bind:value={expanded}>
-          {#each portfolio.allocations as allocation, index (allocation.id)}
-            <Accordion.Item class="allocation-item" value={String(allocation.id)}>
-              <Accordion.Header class="allocation-header" level={3}>
-                <Accordion.Trigger class="allocation-trigger">
-                  <span class="allocation-primary">
-                    <span class="alloc-date num">{fmtDate(allocation.effective_date)}</span>
-                    <span class="alloc-kind">
-                      {allocationTitle(allocation, index, portfolio.allocations.length)}
-                    </span>
+      {#if portfolio.metrics.has_data}
+        <section class="metric-grid" aria-label="Portfolio metrics">
+          {@render metricTile("Lower 95%", pct(portfolio.rank_score, 2), signClass(portfolio.rank_score))}
+          {@render metricTile(
+            "Mean α/day",
+            pct(portfolio.metrics.mean_daily_alpha, 2),
+            signClass(portfolio.metrics.mean_daily_alpha),
+          )}
+          {@render metricTile(
+            "Cumulative excess",
+            pct(portfolio.metrics.cumulative_excess),
+            signClass(portfolio.metrics.cumulative_excess),
+          )}
+          {@render metricTile("Hit rate", pct(portfolio.metrics.hit_rate, 0))}
+          {@render metricTile("Information ratio", num(portfolio.metrics.information_ratio))}
+          {@render metricTile("Sharpe (rf=0)", num(portfolio.metrics.sharpe))}
+          {@render metricTile("Max drawdown", pct(portfolio.metrics.max_drawdown))}
+          {@render metricTile("Ann. volatility", pct(portfolio.metrics.ann_volatility))}
+          {@render metricTile("Turnover", pctPoints(portfolio.metrics.turnover_pct, 0))}
+          {@render metricTile("Cost drag", pctPoints(portfolio.metrics.cost_drag_pct, 2))}
+          {#if managedPortfolio}
+            {@render metricTile(
+              "ITD return",
+              pct(managedPortfolio.metrics.itd_return),
+              signClass(managedPortfolio.metrics.itd_return),
+            )}
+            {@render metricTile("Age", ageLabel(managedPortfolio.age_days))}
+          {/if}
+        </section>
+      {:else}
+        <div class="empty-state card">
+          <h3>Evidence pending</h3>
+          <p>
+            {data.track === "rebuilt"
+              ? "Daily signals will populate this policy as their holding periods complete."
+              : "The first allocation has not produced a valued close yet."}
+          </p>
+        </div>
+      {/if}
+
+      {#if series.length}
+        <section class="card chart-card">
+          <header class="section-head">
+            <div>
+              <h2>NAV vs SPY</h2>
+              <p>Base 100, total return{rebuiltContext ? ` · ${rebuiltContext.cost_basis}` : ""}.</p>
+            </div>
+          </header>
+          <LineChart {series} {markers} ariaLabel="{portfolio.name} NAV versus SPY" />
+          <p class="chart-note">
+            Dotted vertical lines mark {data.track === "managed" ? "allocation" : "signal"} effective sessions.
+          </p>
+        </section>
+      {/if}
+
+      {#if managedPortfolio}
+        {#if Object.keys(managedPortfolio.stale_days).length}
+          <div class="card warning-card">
+            <strong>Carried-forward prices:</strong>
+            {Object.entries(managedPortfolio.stale_days)
+              .map(([symbol, days]) => `${symbol} (${days.length} sessions)`)
+              .join(", ")}.
+          </div>
+        {/if}
+        <section class="data-section" aria-labelledby="managed-holdings-title">
+          <header class="section-head">
+            <div>
+              <h2 id="managed-holdings-title">Current holdings</h2>
+              <p>Drifted weights against the latest managed target.</p>
+            </div>
+          </header>
+          <div class="table-scroll">
+            <table>
+              <thead
+                ><tr
+                  ><th>Symbol</th><th class="right">Weight</th><th class="right">Target</th><th class="right"
+                    >Drift</th
+                  ></tr
+                ></thead
+              >
+              <tbody>
+                {#each managedPortfolio.holdings as holding (holding.symbol)}
+                  <tr>
+                    <td class="num">{holding.symbol}</td>
+                    <td class="right num">{pctPoints(holding.weight_pct)}</td>
+                    <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
+                    <td class="right num {signClass(holding.weight_pct - holding.target_weight_pct)}">
+                      {pctPoints(holding.weight_pct - holding.target_weight_pct)}
+                    </td>
+                  </tr>
+                {:else}
+                  <tr><td colspan="4" class="muted">No current holdings.</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        {@render allocationHistory(managedPortfolio)}
+      {:else if rebuiltPortfolio && rebuiltContext}
+        <section class="data-section" aria-labelledby="aggregate-holdings-title">
+          <header class="section-head">
+            <div>
+              <h2 id="aggregate-holdings-title">Aggregate holdings</h2>
+              <p>Overlapping active cohorts plus the unallocated SPY sleeve.</p>
+            </div>
+          </header>
+          <div class="table-scroll compact-table">
+            <table>
+              <thead><tr><th>Symbol</th><th class="right">Weight</th></tr></thead>
+              <tbody>
+                {#each rebuiltPortfolio.holdings as holding (holding.symbol)}
+                  <tr>
+                    <td class="num">{holding.symbol}</td>
+                    <td class="right num">{pctPoints(holding.weight_pct, 2)}</td>
+                  </tr>
+                {:else}
+                  <tr><td colspan="2" class="muted">No active policy holdings.</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="data-section" aria-labelledby="active-cohorts-title">
+          <header class="section-head">
+            <div>
+              <h2 id="active-cohorts-title">Active cohorts</h2>
+              <p>Signals that are still contributing to the selected aggregate policy.</p>
+            </div>
+            <span class="num">{rebuiltPortfolio.active_cohorts.length}</span>
+          </header>
+          <div class="history-list">
+            {#each rebuiltPortfolio.active_cohorts as cohort (cohort.signal_id)}
+              <details>
+                <summary>
+                  <span class="history-primary">
+                    <strong class="num">{fmtDate(cohort.start_date)}</strong>
+                    <span>Signal #{cohort.signal_id}</span>
                   </span>
-                  <span class="allocation-meta">
-                    {#if !allocation.applied_date}
-                      <span class="badge accent">pending — effective at the next close</span>
-                    {:else if allocation.turnover_pct !== null}
-                      <span class="muted">
-                        turnover {pctPoints(allocation.turnover_pct)} · cost {num(allocation.cost, 3)} pts
-                      </span>
-                    {:else if allocation.cost !== null}
-                      <span class="muted">entry cost {num(allocation.cost, 3)} pts</span>
-                    {/if}
-                    {#if !allocation.locked}
-                      <span class="badge warn">editable until close</span>
-                    {/if}
+                  <span class="history-meta">
+                    {cohort.age_sessions} sessions · ends {fmtDate(cohort.end_date)}
                   </span>
-                  <span class="chevron" aria-hidden="true">
-                    {#if expanded.includes(String(allocation.id))}
-                      <ChevronDown size={16} />
-                    {:else}
-                      <ChevronRight size={16} />
-                    {/if}
-                  </span>
-                </Accordion.Trigger>
-              </Accordion.Header>
-              <Accordion.Content class="allocation-content">
-                <div class="allocation-body">
-                  <p class="muted num entered">entered {fmtDateTime(allocation.entered_at)}</p>
-                  {#if allocation.note}
-                    <p class="note"><strong>Note:</strong> {allocation.note}</p>
-                  {/if}
-                  <div class="table-scroll">
+                </summary>
+                <div class="history-body">
+                  <div class="table-scroll compact-table">
                     <table>
-                      <thead>
-                        <tr><th>Symbol</th><th class="right">Weight</th></tr>
-                      </thead>
+                      <thead><tr><th>Symbol</th><th class="right">Signal weight</th></tr></thead>
                       <tbody>
-                        {#each allocation.positions as position (position.symbol)}
+                        {#each cohort.positions as position (position.symbol)}
                           <tr>
                             <td class="num">{position.symbol}</td>
                             <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
@@ -288,290 +403,268 @@
                     </table>
                   </div>
                 </div>
-              </Accordion.Content>
-            </Accordion.Item>
-          {:else}
-            <div class="empty-state card"><p>No allocations entered yet.</p></div>
-          {/each}
-        </Accordion.Root>
-      </div>
-    </section>
+              </details>
+            {:else}
+              <div class="empty-state">No cohorts are active in the selected policy.</div>
+            {/each}
+          </div>
+        </section>
+
+        <SignalHistory
+          slug={rebuiltPortfolio.slug}
+          initialSignals={rebuiltPortfolio.signals}
+          initialNextCursor={rebuiltPortfolio.signals_next_cursor}
+        />
+        <SignalMatrix
+          rows={[rebuiltPortfolio]}
+          selectedHorizon={rebuiltContext.horizon ?? rebuiltPortfolio.selected_policy?.horizon ?? 1}
+          context={rebuiltContext}
+        />
+        <PolicyMatrix cells={rebuiltPortfolio.policy_matrix} selected={rebuiltPortfolio.selected_policy} />
+      {/if}
+    </article>
   {:catch error}
     <div class="error-box" role="alert">{requestErrorMessage(error)}</div>
   {/await}
 {/key}
 
 <style>
-  .head {
-    margin-bottom: 24px;
-    padding-bottom: 22px;
+  .portfolio-detail {
+    min-width: 0;
+    display: grid;
+    gap: 22px;
+  }
+
+  .detail-head {
     display: flex;
     align-items: start;
     justify-content: space-between;
     gap: 18px;
-    flex-wrap: wrap;
+    padding-bottom: 22px;
     border-bottom: 1px solid var(--border-subtle);
   }
 
   .crumbs {
-    max-width: 100%;
-    margin-bottom: 10px;
     display: flex;
     align-items: center;
     gap: 6px;
-    overflow: hidden;
+    margin-bottom: 10px;
     color: var(--text-tertiary);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .crumbs span:last-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 11px;
   }
 
   h1 {
-    margin: 0 0 8px;
-    font-size: clamp(28px, 8vw, 44px);
-    line-height: 1.05;
-    letter-spacing: -0.04em;
+    margin: 0;
+    font-size: clamp(30px, 7vw, 48px);
+    letter-spacing: -0.045em;
   }
 
   h2 {
-    margin: 30px 0 12px;
-    font-size: 17px;
-    line-height: 1.2;
-    letter-spacing: -0.015em;
+    margin: 0;
+    font-size: 16px;
   }
 
-  .head-badges {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  .prompt-copy {
-    min-height: 34px;
-    margin: 6px 4px 2px;
-    vertical-align: middle;
-  }
-
-  .copy-status {
-    display: inline-block;
-    margin: 4px 0;
+  .identity {
+    margin-top: 9px;
     color: var(--text-secondary);
     font-size: 12px;
   }
 
-  .copy-status-error {
-    color: var(--neg);
+  .prompt-action {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 12px;
+    font-size: 11px;
   }
 
-  .metric-row {
+  .head-badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .policy-context {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border: 1px solid var(--border-strong);
+  }
+
+  .policy-context div {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+    border-right: 1px solid var(--border-subtle);
+  }
+
+  .policy-context div:last-child {
+    border-right: 0;
+  }
+
+  .policy-context span,
+  .metric-label {
+    color: var(--text-tertiary);
+    font-size: 8.5px;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .policy-context strong {
+    font-size: 12px;
+  }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 1px;
-    margin-bottom: 1px;
-    border: 1px solid var(--border-subtle);
     background: var(--border-subtle);
   }
 
   .metric {
     min-width: 0;
-    min-height: 82px;
-    padding: 13px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+    min-height: 76px;
+    display: grid;
+    align-content: space-between;
+    gap: 10px;
+    padding: 12px;
     border: 0;
-    border-radius: 0;
-    background: var(--bg-base);
-  }
-
-  .metric-label {
-    display: block;
-    color: var(--text-secondary);
-    font-size: 10.5px;
-    font-weight: 650;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
+    background: var(--bg-surface);
   }
 
   .metric-value {
-    overflow: hidden;
-    font-size: clamp(16px, 5vw, 21px);
-    font-weight: 650;
-    text-overflow: ellipsis;
+    font-size: clamp(14px, 2vw, 18px);
+    font-weight: 700;
   }
 
-  .trailing {
-    max-width: none;
-  }
-
-  .chart-card {
-    margin-top: 24px;
-    padding: 14px 10px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 0;
-    background: var(--bg-base);
-  }
-
-  .chart-card h2 {
-    margin: 0 0 12px;
-  }
-
-  .chart-note {
-    font-size: 12px;
-    margin-top: 6px;
-  }
-
-  .warn-card {
-    margin-top: 14px;
-    border-radius: 0;
-    border-color: var(--warn);
-    background: var(--warn-bg);
-    font-size: 13px;
-  }
-
-  .holdings-section,
-  .allocations-section {
-    margin-top: 34px;
-  }
-
-  .holdings-section h2,
-  .allocations-section h2 {
-    margin-top: 0;
-  }
-
-  .timeline {
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .timeline :global(.allocation-item) {
-    border-top: 1px solid var(--border-subtle);
-    border-radius: 0;
-  }
-
-  .timeline :global(.allocation-header) {
+  .section-head {
     margin: 0;
   }
 
-  .timeline :global(.allocation-trigger) {
-    width: 100%;
-    min-height: 68px;
-    padding: 12px 4px;
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    gap: 8px 12px;
-    border-radius: 0;
-    text-align: left;
-    font-size: 13px;
+  .section-head p,
+  .section-head > span {
+    margin-top: 5px;
+    color: var(--text-secondary);
+    font-size: 11px;
   }
 
-  .timeline :global(.allocation-trigger:hover),
-  .timeline :global(.allocation-trigger[data-state="open"]) {
-    background: var(--bg-surface-hover);
-  }
-
-  .allocation-primary,
-  .allocation-meta {
+  .chart-card,
+  .data-section,
+  .history-section {
     min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+    display: grid;
+    gap: 12px;
   }
 
-  .allocation-primary {
-    font-size: 14px;
-  }
-
-  .allocation-meta {
-    grid-column: 1 / -1;
-  }
-
-  .alloc-date {
-    font-weight: 650;
-  }
-
-  .alloc-kind {
-    font-weight: 500;
-  }
-
-  .chevron {
-    grid-column: 2;
-    grid-row: 1;
+  .chart-note {
     color: var(--text-tertiary);
+    font-size: 10px;
   }
 
-  .timeline :global(.allocation-content) {
-    overflow: hidden;
+  .warning-card {
+    color: var(--warn);
+    font-size: 12px;
   }
 
-  .allocation-body {
-    padding: 4px 4px 18px;
+  .table-scroll {
+    overflow-x: auto;
+  }
+
+  .compact-table table {
+    width: min(100%, 620px);
+  }
+
+  .history-list {
+    display: grid;
     border-top: 1px solid var(--border-subtle);
   }
 
-  .entered {
+  details {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  summary {
+    min-height: 54px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 4px;
+    cursor: pointer;
+  }
+
+  .history-primary {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .history-primary strong {
     font-size: 12px;
-    margin: 8px 0;
   }
 
-  .note {
-    margin: 12px 0;
-    line-height: 1.6;
+  .history-primary span,
+  .history-meta {
+    color: var(--text-secondary);
+    font-size: 10px;
   }
 
-  @media (max-width: 460px) {
-    .holdings-section :global(th),
-    .holdings-section :global(td) {
-      padding-inline: 6px;
-      font-size: 11.5px;
-    }
+  .history-meta {
+    text-align: right;
   }
 
-  @media (min-width: 640px) {
-    .metric-row {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
+  .history-body {
+    display: grid;
+    gap: 10px;
+    padding: 4px 4px 16px;
+    font-size: 12px;
+  }
 
-    .chart-card {
-      padding: 18px;
-    }
+  .history-body table {
+    min-width: 360px;
+  }
 
-    .timeline :global(.allocation-trigger) {
-      min-height: 62px;
-      padding: 12px 14px;
-      grid-template-columns: auto minmax(0, 1fr) auto;
-    }
-
-    .allocation-primary {
-      min-width: 230px;
-    }
-
-    .allocation-meta {
-      grid-column: 2;
-    }
-
-    .chevron {
-      grid-column: 3;
-      grid-row: 1;
-    }
-
-    .allocation-body {
-      padding: 8px 14px 20px;
+  @media (max-width: 960px) {
+    .metric-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
 
-  @media (min-width: 1120px) {
-    .metric-row:not(.trailing) {
-      grid-template-columns: repeat(8, minmax(0, 1fr));
+  @media (max-width: 680px) {
+    .detail-head {
+      flex-direction: column;
     }
 
-    .trailing {
-      width: 50%;
+    .head-badges {
+      justify-content: flex-start;
+    }
+
+    .policy-context {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .policy-context div:nth-child(2) {
+      border-right: 0;
+    }
+
+    .policy-context div:nth-child(-n + 2) {
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .metric-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    summary {
+      align-items: start;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .history-meta {
+      text-align: left;
     }
   }
 </style>
