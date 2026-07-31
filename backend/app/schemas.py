@@ -3,9 +3,9 @@
 import math
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .services.prompt_policy import validate_wrapper_prompt
+from .services.prompt_policy import validate_prompt_texts, validate_wrapper_prompt
 
 
 class CurrentUser(BaseModel):
@@ -62,16 +62,29 @@ class AllocationPolicyIn(BaseModel):
 
 
 class PromptCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None
-    text: str = Field(min_length=1)
+    mode: Literal["managed", "rebuilt", "both"]
+    managed_text: str | None = None
+    rebuilt_text: str | None = None
     notes: str = ""
     allocation_policy: AllocationPolicyIn
 
+    @model_validator(mode="after")
+    def validate_mode_texts(self):
+        validate_prompt_texts(self.mode, self.managed_text, self.rebuilt_text)
+        return self
+
 
 class PromptPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    text: str | None = Field(default=None, min_length=1)
+    mode: Literal["managed", "rebuilt", "both"] | None = None
+    managed_text: str | None = None
+    rebuilt_text: str | None = None
     notes: str | None = None
     allocation_policy: AllocationPolicyIn | None = None
 

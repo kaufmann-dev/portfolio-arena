@@ -183,8 +183,19 @@ class Prompt(Base):
         return self._required_current_version().name
 
     @property
-    def text(self) -> str:
-        return self._required_current_version().text
+    def mode(self) -> str:
+        return self._required_current_version().mode
+
+    @property
+    def managed_text(self) -> str | None:
+        return self._required_current_version().managed_text
+
+    @property
+    def rebuilt_text(self) -> str | None:
+        return self._required_current_version().rebuilt_text
+
+    def text_for_mode(self, mode: str) -> str:
+        return self._required_current_version().text_for_mode(mode)
 
     @property
     def notes(self) -> str:
@@ -211,6 +222,20 @@ class PromptVersion(Base):
     __table_args__ = (
         CheckConstraint("version >= 1", name="prompt_versions_version_check"),
         CheckConstraint(
+            "mode IN ('managed', 'rebuilt', 'both')",
+            name="prompt_versions_mode_check",
+        ),
+        CheckConstraint(
+            "(mode = 'managed' AND managed_text IS NOT NULL "
+            "AND btrim(managed_text) <> '' AND rebuilt_text IS NULL) OR "
+            "(mode = 'rebuilt' AND managed_text IS NULL "
+            "AND rebuilt_text IS NOT NULL AND btrim(rebuilt_text) <> '') OR "
+            "(mode = 'both' AND managed_text IS NOT NULL "
+            "AND btrim(managed_text) <> '' AND rebuilt_text IS NOT NULL "
+            "AND btrim(rebuilt_text) <> '')",
+            name="prompt_versions_mode_texts_check",
+        ),
+        CheckConstraint(
             "min_position_weight_pct > 0 AND max_position_weight_pct <= 100 "
             "AND min_position_weight_pct <= max_position_weight_pct",
             name="prompt_versions_position_weights_check",
@@ -231,7 +256,9 @@ class PromptVersion(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    managed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rebuilt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     min_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
     max_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
@@ -254,6 +281,15 @@ class PromptVersion(Base):
         foreign_keys=[restored_from_version_id],
         remote_side=[id],
     )
+
+    def text_for_mode(self, mode: str) -> str:
+        if mode == "managed" and self.mode in {"managed", "both"} and self.managed_text is not None:
+            return self.managed_text
+        if mode == "rebuilt" and self.mode in {"rebuilt", "both"} and self.rebuilt_text is not None:
+            return self.rebuilt_text
+        if mode not in {"managed", "rebuilt"}:
+            raise ValueError("Prompt mode must be 'managed' or 'rebuilt'.")
+        raise ValueError(f"Prompt version {self.version} does not support {mode} portfolios.")
 
 
 class Portfolio(Base):

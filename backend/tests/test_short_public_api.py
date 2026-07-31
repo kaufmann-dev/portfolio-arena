@@ -28,7 +28,9 @@ def _create_prompt(client, admin_headers, name: str) -> dict:
         "/api/admin/prompts",
         json={
             "name": name,
-            "text": "Select evidence-backed opportunities.",
+            "mode": "both",
+            "managed_text": "Manage evidence-backed opportunities.",
+            "rebuilt_text": "Select fresh evidence-backed opportunities.",
             "allocation_policy": {
                 "min_position_weight_pct": 1,
                 "max_position_weight_pct": 100,

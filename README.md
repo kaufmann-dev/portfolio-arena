@@ -54,15 +54,17 @@ _arena_: honest, deterministic measurement — not trading and not advice.
   allocation history or rebuilt signal history, cancels in-flight evaluator work, and preserves its
   identity, configuration, schedule, and evaluator audit records. A portfolio cannot switch mode or
   direction until its history has been reset and in-flight cancellation has completed.
-- **One canonical strategy, two execution modes.** Managed evaluations receive holdings, allocation
-  history, notes, performance, and costs. Rebuilt evaluations receive no prior portfolio state and
-  construct each signal independently. Each mode has a global editable wrapper prompt under
-  Admin → Settings.
+- **Mode-aware strategy prompts.** Every prompt supports Managed, Rebuilt, or Both and stores a
+  complete strategy text for each supported mode. Managed evaluations receive holdings, allocation
+  history, notes, performance, and costs; rebuilt evaluations receive no prior portfolio state and
+  construct each signal independently. The applicable strategy text is inserted into that mode's
+  global editable wrapper under Admin → Settings.
 - **One direction per portfolio.** A portfolio is entirely long or entirely short. Submitted weights
   are always positive and total exactly 100%; direction is portfolio metadata, so mixed books and
   signed position weights cannot enter the experiment.
-- **Prompt changes are recoverable.** Editing a prompt appends an immutable version. Prompts are
-  archived rather than deleted, and restoring an older snapshot creates another new version.
+- **Prompt changes are recoverable.** Editing a prompt's supported modes, mode-specific texts,
+  shared allocation policy, or metadata appends an immutable version. Prompts are archived rather
+  than deleted, and restoring an older snapshot creates another new version.
   Archived prompts and version history are browser-admin-only; public and MCP reads expose only the
   current version of active prompts.
 - **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
@@ -121,16 +123,18 @@ admin panel.
 - **Auth.** Every request needs an API key (`Authorization: Bearer <key>`, or `X-API-Key`);
   there is no anonymous access. Create and revoke keys in the admin panel's **API Keys** tab.
   The plaintext key is shown once at creation; only a SHA-256 hash is stored.
-- **Flagship read tools.** `get_portfolio(slug_or_id)` always returns the strategy, structured
-  policy, prompt mode, and next effective date. Managed mode also returns drifted holdings with
+- **Flagship read tools.** `get_portfolio(slug_or_id)` always returns only the strategy text selected
+  for that portfolio's mode, its structured policy, prompt mode, and next effective date. Managed
+  mode also returns drifted holdings with
   entry/current prices, the full allocation history with notes, performance, and costs. Rebuilt
   mode intentionally omits prior signals, notes, performance, and costs. `get_arena_overview()`
   and `get_rebuilt_analysis()` require `direction="long"` or `"short"` and never mix directions.
   Rebuilt analysis exposes Common Policy, Tuned, and Signal Alpha views. Use `create_allocation` for
   managed portfolios and `create_signal` for rebuilt portfolios.
-- **Prompt tools.** MCP can list, read, create, update, and archive active prompts. It cannot expose
-  archived prompt content, immutable history, unarchive, or restore operations; those recovery
-  controls remain in the browser admin.
+- **Prompt tools.** MCP can list, read, create, update, and archive active prompts, including their
+  Managed/Rebuilt/Both support and current mode-specific texts. It cannot expose archived prompt
+  content, immutable history, unarchive, or restore operations; those recovery controls remain in
+  the browser admin.
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
   `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
   `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
@@ -172,9 +176,9 @@ new claims while active work finishes. Queued work can be cancelled immediately;
 receives a cancellation request and its Codex process is terminated. Failed runs can be retried
 manually. All paths use the same server-side proposal and symbol validation and atomically create
 either a managed allocation or rebuilt signal. At claim time, the worker receives a complete
-execution prompt rendered from the portfolio's canonical strategy and the editable wrapper for its
-mode. A liquidated managed short cannot be enabled, queued, claimed, retried, or submitted again
-until its portfolio history is reset.
+execution prompt rendered from the portfolio's selected mode-specific strategy text and the editable
+wrapper for its mode. A liquidated managed short cannot be enabled, queued, claimed, retried, or
+submitted again until its portfolio history is reset.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
@@ -199,6 +203,10 @@ portfolios, and marks existing rebuilt portfolios as the founding v2 cohort.
 Migration `0017` marks every existing portfolio as long, adds the required portfolio direction, and
 moves each prompt's current content into immutable version 1. It also adds prompt archive state; no
 prompt content is discarded.
+
+Migration `0018` replaces each version's single strategy text with Managed/Rebuilt/Both support and
+mode-specific texts. Existing versions are classified from their portfolios' current modes; text is
+copied into both fields only for prompts used by both modes or by no portfolio.
 
 ## Development
 

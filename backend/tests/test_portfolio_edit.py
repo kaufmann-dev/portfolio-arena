@@ -1,5 +1,26 @@
 """Creating and editing portfolios with canonical prompts and execution modes."""
 
+import pytest
+
+
+def _create_mode_prompt(client, admin_headers, *, name: str, mode: str) -> dict:
+    response = client.post(
+        "/api/admin/prompts",
+        json={
+            "name": name,
+            "mode": mode,
+            "managed_text": "Managed strategy." if mode in {"managed", "both"} else None,
+            "rebuilt_text": "Rebuilt strategy." if mode in {"rebuilt", "both"} else None,
+            "allocation_policy": {
+                "min_position_weight_pct": 10,
+                "max_position_weight_pct": 25,
+            },
+        },
+        headers=admin_headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
 
 class TestCreatePortfolioPrompt:
     def test_create_requires_prompt(self, client, admin_headers, sample_agent):
@@ -105,8 +126,97 @@ class TestCreatePortfolioPrompt:
         assert row["prompt"]["slug"] == "weekly-manager-v1"
         assert row["prompt_mode"] == "managed"
 
+    @pytest.mark.parametrize(
+        ("prompt_support", "portfolio_mode"),
+        [("managed", "rebuilt"), ("rebuilt", "managed")],
+    )
+    def test_create_rejects_prompt_without_requested_mode(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+        prompt_support,
+        portfolio_mode,
+    ):
+        prompt = _create_mode_prompt(
+            client,
+            admin_headers,
+            name=f"{prompt_support} only",
+            mode=prompt_support,
+        )
+
+        response = client.post(
+            "/api/portfolios",
+            json={
+                "name": "Unsupported prompt mode",
+                "agent_id": sample_agent["id"],
+                "prompt_id": prompt["id"],
+                "prompt_mode": portfolio_mode,
+                "direction": "long",
+            },
+            headers=admin_headers,
+        )
+
+        assert response.status_code == 422
+
 
 class TestEditPortfolio:
+    def test_patch_validates_final_prompt_and_mode_together(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+    ):
+        managed_prompt = _create_mode_prompt(
+            client,
+            admin_headers,
+            name="Managed only",
+            mode="managed",
+        )
+        rebuilt_prompt = _create_mode_prompt(
+            client,
+            admin_headers,
+            name="Rebuilt only",
+            mode="rebuilt",
+        )
+        portfolio = client.post(
+            "/api/portfolios",
+            json={
+                "name": "Mode transition",
+                "agent_id": sample_agent["id"],
+                "prompt_id": managed_prompt["id"],
+                "prompt_mode": "managed",
+                "direction": "long",
+            },
+            headers=admin_headers,
+        ).json()
+
+        prompt_only = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            json={"prompt_id": rebuilt_prompt["id"]},
+            headers=admin_headers,
+        )
+        assert prompt_only.status_code == 422
+
+        mode_only = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            json={"prompt_mode": "rebuilt"},
+            headers=admin_headers,
+        )
+        assert mode_only.status_code == 422
+
+        simultaneous = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            json={
+                "prompt_id": rebuilt_prompt["id"],
+                "prompt_mode": "rebuilt",
+            },
+            headers=admin_headers,
+        )
+        assert simultaneous.status_code == 200, simultaneous.text
+        assert simultaneous.json()["prompt_id"] == rebuilt_prompt["id"]
+        assert simultaneous.json()["prompt_mode"] == "rebuilt"
+
     def test_patch_updates_name_agent_cost(
         self,
         client,
@@ -194,7 +304,8 @@ class TestEditPortfolio:
             "/api/admin/prompts",
             json={
                 "name": "weekly-manager-v2",
-                "text": "Be bolder.",
+                "mode": "managed",
+                "managed_text": "Be bolder.",
                 "allocation_policy": {
                     "min_position_weight_pct": 10,
                     "max_position_weight_pct": 25,
@@ -232,7 +343,8 @@ class TestEditPortfolio:
             "/api/admin/prompts",
             json={
                 "name": "alternate-manager",
-                "text": "Use a different strategy.",
+                "mode": "managed",
+                "managed_text": "Use a different strategy.",
                 "allocation_policy": {
                     "min_position_weight_pct": 10,
                     "max_position_weight_pct": 25,

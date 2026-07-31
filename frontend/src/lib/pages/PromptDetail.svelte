@@ -1,6 +1,6 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { PortfolioRefOut, PromptOut } from "../api/types";
+  import type { PortfolioRefOut, PromptAvailability, PromptOut } from "../api/types";
   import PortfolioRefTable from "../components/PortfolioRefTable.svelte";
   import { link } from "../stores/router.svelte";
 
@@ -17,6 +17,11 @@
 
   function requestErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : "Could not load this prompt.";
+  }
+
+  function promptModeLabel(mode: PromptAvailability): string {
+    if (mode === "both") return "Managed + Rebuilt";
+    return mode === "managed" ? "Managed only" : "Rebuilt only";
   }
 </script>
 
@@ -36,17 +41,38 @@
         <p class="muted detail-meta">
           <span class="num">{data.prompt.slug}</span>
           <span aria-hidden="true">·</span>
+          <span class="badge">{promptModeLabel(data.prompt.mode)}</span>
+          <span aria-hidden="true">·</span>
           updated <span class="num">{data.prompt.updated_at.slice(0, 10)}</span>
         </p>
       </header>
 
-      <section class="detail-section prompt-card">
-        <h2>Strategy</h2>
-        <pre>{data.prompt.text}</pre>
-        {#if data.prompt.notes}
+      {#if data.prompt.managed_text}
+        <section class="detail-section prompt-card">
+          <h2>Managed strategy</h2>
+          <p class="muted strategy-context">
+            Used when a managed evaluator receives the portfolio's current state and prior decisions.
+          </p>
+          <pre>{data.prompt.managed_text}</pre>
+        </section>
+      {/if}
+
+      {#if data.prompt.rebuilt_text}
+        <section class="detail-section prompt-card">
+          <h2>Rebuilt strategy</h2>
+          <p class="muted strategy-context">
+            Used when a rebuilt evaluator creates an independent signal without prior portfolio context.
+          </p>
+          <pre>{data.prompt.rebuilt_text}</pre>
+        </section>
+      {/if}
+
+      {#if data.prompt.notes}
+        <section class="detail-section notes-card">
+          <h2>Shared notes</h2>
           <p class="muted notes">{data.prompt.notes}</p>
-        {/if}
-      </section>
+        </section>
+      {/if}
 
       <section class="detail-section policy-card">
         <h2>Allocation policy</h2>
@@ -151,8 +177,14 @@
   }
 
   .notes {
-    margin-top: 14px;
+    margin: 0;
     font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .strategy-context {
+    margin: -5px 0 12px;
+    font-size: 12.5px;
     line-height: 1.6;
   }
 

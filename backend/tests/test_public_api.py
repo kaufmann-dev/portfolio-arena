@@ -239,11 +239,16 @@ class TestPortfolioDetail:
         assert symbols == {"AAPL", "MSFT"}
 
         assert portfolio["prompt"]["slug"] == "weekly-manager-v1"
+        assert portfolio["prompt"]["mode"] == "both"
+        assert "managed_text" not in portfolio["prompt"]
+        assert "rebuilt_text" not in portfolio["prompt"]
+        assert "text" not in portfolio["prompt"]
         assert portfolio["prompt_mode"] == "managed"
         execution_prompt = portfolio["execution_prompt"]
         assert execution_prompt.startswith("Evaluate the Portfolio Arena portfolio")
         assert sample_portfolio["slug"] in execution_prompt
-        assert sample_prompt["text"] in execution_prompt
+        assert sample_prompt["managed_text"] in execution_prompt
+        assert sample_prompt["rebuilt_text"] not in execution_prompt
         assert execution_prompt.count("If the returned allocation history is empty") == 1
         assert "construct the portfolio's initial allocation" in execution_prompt
         assert "do not rebuild it from scratch" in execution_prompt
@@ -273,7 +278,7 @@ class TestPortfolioDetail:
         )
         response = client.patch(
             f"/api/admin/prompts/{sample_prompt['id']}",
-            json={"text": reconstruction_strategy},
+            json={"rebuilt_text": reconstruction_strategy},
             headers=admin_headers,
         )
         assert response.status_code == 200
@@ -310,7 +315,7 @@ class TestPortfolioDetail:
         strategy = "Keep this literal token in the strategy: {{portfolio_slug}}."
         response = client.patch(
             f"/api/admin/prompts/{sample_prompt['id']}",
-            json={"text": strategy},
+            json={"managed_text": strategy},
             headers=admin_headers,
         )
         assert response.status_code == 200, response.text
@@ -369,9 +374,22 @@ class TestPromptsAndAgents:
     def test_prompt_detail_lists_portfolios(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
         payload = client.get("/api/prompts/weekly-manager-v1").json()
-        assert payload["prompt"]["text"].startswith("Manage a portfolio")
+        assert payload["prompt"]["mode"] == "both"
+        assert payload["prompt"]["managed_text"].startswith("Manage a portfolio")
+        assert payload["prompt"]["rebuilt_text"].startswith("Select a fresh portfolio")
+        assert "text" not in payload["prompt"]
         assert payload["prompt"]["allocation_policy"]["derived_max_positions"] == 100
         assert find(payload["portfolios"], sample_portfolio["slug"]) is not None
+
+        row = next(
+            prompt
+            for prompt in client.get("/api/prompts").json()["prompts"]
+            if prompt["id"] == payload["prompt"]["id"]
+        )
+        assert row["mode"] == "both"
+        assert row["managed_text"] == payload["prompt"]["managed_text"]
+        assert row["rebuilt_text"] == payload["prompt"]["rebuilt_text"]
+        assert "text" not in row
 
     def test_agent_detail_lists_portfolios(self, client, sample_portfolio, sample_agent):
         payload = client.get(f"/api/agents/{sample_agent['slug']}").json()
@@ -385,11 +403,12 @@ class TestPromptsAndAgents:
     def test_prompt_editing_reflected_publicly(self, client, admin_headers, sample_prompt):
         client.patch(
             f"/api/admin/prompts/{sample_prompt['id']}",
-            json={"text": "Updated instructions."},
+            json={"managed_text": "Updated instructions."},
             headers=admin_headers,
         )
         payload = client.get(f"/api/prompts/{sample_prompt['slug']}").json()
-        assert payload["prompt"]["text"] == "Updated instructions."
+        assert payload["prompt"]["managed_text"] == "Updated instructions."
+        assert payload["prompt"]["rebuilt_text"] == sample_prompt["rebuilt_text"]
 
 
 class TestAdminMisc:

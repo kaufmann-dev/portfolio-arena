@@ -167,7 +167,21 @@ class TestPublicReads:
 class TestWriteBoundaries:
     def test_writes_require_browser_session(self, client):
         assert client.post("/api/agents", json={"name": "X"}).status_code == 401
-        assert client.post("/api/admin/prompts", json={"name": "X", "text": "y"}).status_code == 401
+        assert (
+            client.post(
+                "/api/admin/prompts",
+                json={
+                    "name": "X",
+                    "mode": "managed",
+                    "managed_text": "y",
+                    "allocation_policy": {
+                        "min_position_weight_pct": 1,
+                        "max_position_weight_pct": 100,
+                    },
+                },
+            ).status_code
+            == 401
+        )
         assert client.put("/api/settings", json={"default_cost_bps": 5}).status_code == 401
         assert client.delete("/api/prices/cache").status_code == 401
 
