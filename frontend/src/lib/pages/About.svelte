@@ -46,7 +46,7 @@
       <Tabs.Content class="tab-panel about-tab-panel" value="overview">
         <p>
           Portfolio Arena asks a focused question: <strong
-            >which AI investment strategies produce repeatable alpha over SPY?</strong
+            >which AI investment strategies produce repeatable alpha over a direction-matched SPY benchmark?</strong
           >
           It is a deterministic paper-trading experiment, not a brokerage account or investment advice. Every result
           on the
@@ -92,8 +92,10 @@
         </ol>
 
         <p>
-          SPY is the sole benchmark. It appears as a pinned synthetic reference row, so benchmark identity and
-          history cannot be mistaken for an AI portfolio stored in the database.
+          Long and short books are evaluated separately. SPY is the sole underlying benchmark: long results
+          compare with buy-and-hold SPY, while short results compare with the synthetic Short SPY reference
+          calculated from daily −1× SPY returns. The benchmark appears as a pinned row, so it cannot be
+          mistaken for an AI portfolio stored in the database.
         </p>
 
         <p class="muted">
@@ -123,7 +125,7 @@
         <ul>
           <li>
             A signal held for H sessions contributes <code>exposure ÷ H</code> percent to each active daily cohort.
-            Any unused sleeve stays in SPY.
+            Any unused sleeve stays in the direction-matched SPY benchmark.
           </li>
           <li>
             Warm-up days and missing signal sessions use SPY. Active cohorts are marked to market only through
@@ -131,11 +133,11 @@
           </li>
           <li>
             At every market close, the aggregate target is recomputed and rebalanced from the active
-            exposure/H cohort sleeves. Any unused allocation remains in SPY.
+            exposure/H cohort sleeves. Any unused allocation remains in the direction-matched benchmark.
           </li>
           <li>
             Net results apply the configured transaction cost to actual aggregate turnover from that
-            rebalancing, including changes to the SPY sleeve. Gross results omit those costs.
+            rebalancing, including changes to the benchmark sleeve. Gross results omit those costs.
           </li>
           <li>
             A horizon becomes eligible after at least two completed cohorts and a completion ratio of at least
@@ -169,7 +171,10 @@
 
         <h2>Market-data rules</h2>
         <ul>
-          <li>Long-only, fully invested USD-denominated equities and ETFs; signal weights sum to 100%.</li>
+          <li>
+            Long and short books are separate. Each uses USD-denominated equities and ETFs, with gross signal
+            weights summing to 100%.
+          </li>
           <li>Massive split-adjusted daily closes and dividend adjustments; base currency USD.</li>
           <li>
             NAVs are recomputed on request from immutable inputs and cached price series—nothing is
@@ -178,6 +183,12 @@
           <li>
             Missing prices carry forward with visible stale-data and frozen-symbol flags; nothing is guessed
             silently.
+          </li>
+          <li>
+            If short losses exhaust a book's capital, its NAV is liquidated at zero. A liquidated managed
+            portfolio stops accepting new allocations and evaluator runs until its history is reset. A
+            liquidated rebuilt policy does not stop independent daily signals used by other policies and
+            future cohorts.
           </li>
           <li>Daily closes only. Sharpe ratios use a zero risk-free rate and are labeled accordingly.</li>
         </ul>
@@ -195,15 +206,17 @@
         <h2 class="flush">Core portfolio tools</h2>
         <ul class="tools">
           <li>
-            <code>get_arena_overview()</code> — separate Managed and Rebuilt summaries with SPY-relative evidence.
+            <code>get_arena_overview(direction)</code> — separate Managed and Rebuilt summaries for one long or
+            short direction.
           </li>
           <li>
-            <code>get_rebuilt_analysis(...)</code> — Common, Portfolio tuned, or Signal Alpha results for a chosen
-            objective, cost basis, and valid horizon.
+            <code>get_rebuilt_analysis(direction, ...)</code> — Common, Portfolio tuned, or Signal Alpha results
+            for a chosen direction, objective, cost basis, and valid horizon.
           </li>
           <li>
             <code>get_portfolio(slug_or_id)</code> — canonical strategy, allocation policy, mode, and effective
-            date. Rebuilt responses intentionally exclude all prior signal state and performance.
+            date, including the whole-book direction. Rebuilt responses intentionally exclude all prior signal state
+            and performance.
           </li>
           <li>
             <code>create_allocation(portfolio_id, positions, note?)</code> — managed portfolios only.
@@ -220,9 +233,10 @@
 
         <h2>Catalog and operations</h2>
         <p>
-          Additional tools manage portfolios, agents, models, prompts, evaluator settings and runs, validate
-          symbols, inspect prompt text, and page through evaluator audit history. Mode changes require an
-          empty history; reset the portfolio before switching tracks.
+          Additional tools manage portfolios, agents, models, active prompts, evaluator settings and runs,
+          validate symbols, inspect current prompt text, and page through evaluator audit history. Archived
+          prompt content and immutable version recovery remain browser-admin-only. Mode or direction changes
+          require an empty history; reset the portfolio before switching.
         </p>
 
         <h2>Connecting</h2>

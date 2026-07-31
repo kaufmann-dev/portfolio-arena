@@ -154,8 +154,8 @@ class FailingLogoutOidcClient:
 
 class TestPublicReads:
     def test_arenas_open(self, client):
-        assert client.get("/api/arena/managed").status_code == 200
-        assert client.get("/api/arena/rebuilt").status_code == 200
+        assert client.get("/api/arena/managed?direction=long").status_code == 200
+        assert client.get("/api/arena/rebuilt?direction=long").status_code == 200
 
     def test_prompts_open(self, client):
         assert client.get("/api/prompts").status_code == 200
@@ -167,7 +167,7 @@ class TestPublicReads:
 class TestWriteBoundaries:
     def test_writes_require_browser_session(self, client):
         assert client.post("/api/agents", json={"name": "X"}).status_code == 401
-        assert client.post("/api/prompts", json={"name": "X", "text": "y"}).status_code == 401
+        assert client.post("/api/admin/prompts", json={"name": "X", "text": "y"}).status_code == 401
         assert client.put("/api/settings", json={"default_cost_bps": 5}).status_code == 401
         assert client.delete("/api/prices/cache").status_code == 401
 

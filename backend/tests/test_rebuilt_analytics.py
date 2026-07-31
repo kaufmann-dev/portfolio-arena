@@ -7,6 +7,7 @@ import pytest
 
 from app.services.arena import (
     RebuiltPortfolioAnalysis,
+    _common_candidate_data,
     _common_candidate_metrics,
     _rankable_common_members,
 )
@@ -421,12 +422,49 @@ def test_common_meta_uses_fixed_members_shared_dates_and_spy_for_missing_observa
     assert members[2]["observation_count"] == 2
 
 
+def test_common_member_metrics_stop_at_liquidation_while_display_series_stays_zero():
+    liquidated = _analysis(
+        1,
+        [
+            {
+                "date": DAYS[1],
+                "return": -1.0,
+                "spy_return": 0.01,
+                "turnover_pct": 0.0,
+                "cost": 0.0,
+            },
+        ],
+    )
+    liquidated.policies[(1, 100)].liquidated_at = DAYS[1]
+    surviving = _analysis(
+        2,
+        [
+            {"date": DAYS[1], "return": 0.02, "spy_return": 0.01},
+            {"date": DAYS[2], "return": 0.03, "spy_return": 0.01},
+        ],
+    )
+
+    result = _common_candidate_data(
+        [liquidated, surviving],
+        horizon=1,
+        exposure=100,
+        family_size=1,
+        dates=[DAYS[1], DAYS[2]],
+        baseline=DAYS[0],
+    )
+
+    assert result is not None
+    assert result.member_metrics[1]["observation_count"] == 1
+    assert [point["nav"] for point in result.member_series[1]] == [100.0, 0.0, 0.0]
+
+
 def test_common_excludes_failed_analysis_without_hiding_its_arena_row():
     failed = RebuiltPortfolioAnalysis(
         portfolio=SimpleNamespace(
             id=9,
             status="active",
             founding_v2=True,
+            direction="long",
         ),
         signal_horizons=[],
         policies={},
@@ -434,4 +472,222 @@ def test_common_excludes_failed_analysis_without_hiding_its_arena_row():
         error="missing price",
     )
 
-    assert _rankable_common_members({9: failed}) == []
+    assert _rankable_common_members({9: failed}, "long") == []
+
+
+def test_explicit_long_policy_direction_is_identical_to_default_path():
+    arguments = {
+        "signals": [signal(1, DAYS[0]), signal(2, DAYS[2])],
+        "prices": market(
+            aapl=[100, 104, 103, 108, 106, 111],
+            spy=[100, 101, 100, 102, 103, 105],
+        ),
+        "calendar": DAYS,
+        "horizon": 2,
+        "exposure_pct": 70,
+        "cost_bps": 25,
+        "cost_basis": "net",
+    }
+
+    default = construct_policy(**arguments)
+    explicit = construct_policy(**arguments, direction="long")
+
+    assert explicit == default
+
+
+def test_short_policy_applies_inverse_pnl_to_signal_and_spy_residual():
+    result = construct_policy(
+        [signal(1, DAYS[0])],
+        market(
+            aapl=[100, 110, 110, 110, 110, 110],
+            spy=[100, 102, 102, 102, 102, 102],
+        ),
+        DAYS,
+        horizon=2,
+        exposure_pct=50,
+        cost_bps=0,
+        cost_basis="gross",
+        direction="short",
+    )
+
+    # H=2 allocates 25% to the active signal and leaves 75% in short SPY.
+    assert result.daily_returns[0]["return"] == pytest.approx(-(0.25 * 0.10 + 0.75 * 0.02))
+    assert result.direction == "short"
+
+
+def test_short_policy_spy_series_compounds_negative_daily_spy_returns():
+    result = construct_policy(
+        [signal(1, DAYS[0])],
+        market(spy=[100, 110, 99, 99, 99, 99]),
+        DAYS,
+        horizon=2,
+        exposure_pct=100,
+        cost_bps=0,
+        cost_basis="gross",
+        direction="short",
+    )
+
+    assert result.spy_series[2]["nav"] == pytest.approx(100.0 * 0.9 * 1.1)
+
+
+def test_short_direct_alpha_uses_inverse_signal_and_compounded_short_spy():
+    stats = signal_horizon_statistics(
+        [signal(1, DAYS[0])],
+        market(
+            aapl=[100, 100, 121, 121, 121, 121],
+            spy=[100, 100, 110, 110, 110, 110],
+        ),
+        DAYS,
+        horizon=2,
+        direction="short",
+    )
+
+    expected = (0.79 / 0.90) ** 0.5 - 1.0
+    completed = stats["completed_cohorts"][0]
+    assert completed["signal_return"] == pytest.approx(-0.21)
+    assert completed["spy_return"] == pytest.approx(-0.10)
+    assert completed["daily_alpha"] == pytest.approx(expected)
+
+
+def test_short_direct_candidate_liquidates_but_remains_completed_evidence():
+    signals = [signal(1, DAYS[0])]
+    prices = market(
+        aapl=[100, 210, 220, 220, 220, 220],
+        # Short SPY survives through the candidate's liquidation, then
+        # liquidates before the originally planned H=2 endpoint.
+        spy=[100, 90, 210, 210, 210, 210],
+    )
+    stats = signal_horizon_statistics(
+        signals,
+        prices,
+        DAYS,
+        horizon=2,
+        direction="short",
+    )
+
+    completed = stats["completed_cohorts"][0]
+    assert stats["complete_count"] == 1
+    assert stats["invalid_count"] == 0
+    assert completed["signal_return"] == -1.0
+    assert completed["daily_alpha"] == -1.0
+    assert completed["liquidated_at"] == DAYS[1]
+    assert completed["end_date"] == DAYS[1]
+    assert completed["spy_return"] == pytest.approx(0.1)
+
+    # Liquidation is terminal evidence even while the requested H=20 endpoint
+    # is still in the future.
+    horizon_twenty = signal_horizon_statistics(
+        signals,
+        prices,
+        DAYS,
+        horizon=20,
+        direction="short",
+    )
+    assert horizon_twenty["complete_count"] == 1
+    assert horizon_twenty["open_count"] == 0
+    assert horizon_twenty["completed_cohorts"][0]["end_date"] == DAYS[1]
+
+
+def test_short_direct_signal_without_an_observed_interval_remains_open():
+    stats = signal_horizon_statistics(
+        [signal(1, DAYS[-1])],
+        market(
+            aapl=[100, 100, 100, 100, 100, 100],
+            spy=[100, 100, 100, 100, 100, 100],
+        ),
+        DAYS,
+        horizon=20,
+        direction="short",
+    )
+
+    assert stats["complete_count"] == 0
+    assert stats["open_count"] == 1
+    assert stats["invalid_count"] == 0
+
+
+def test_short_direct_alpha_is_invalid_when_short_spy_liquidates():
+    stats = signal_horizon_statistics(
+        [signal(1, DAYS[0])],
+        market(
+            aapl=[100, 100, 100, 100, 100, 100],
+            spy=[100, 210, 210, 210, 210, 210],
+        ),
+        DAYS,
+        horizon=1,
+        direction="short",
+    )
+
+    assert stats["complete_count"] == 0
+    assert stats["invalid_count"] == 1
+
+
+def test_short_policy_liquidation_extends_zero_series_without_post_liquidation_returns():
+    result = construct_policy(
+        [signal(1, DAYS[0])],
+        market(
+            aapl=[100, 210, 220, 230, 240, 250],
+            spy=[100, 100, 100, 100, 100, 100],
+        ),
+        DAYS,
+        horizon=1,
+        exposure_pct=100,
+        cost_bps=0,
+        cost_basis="gross",
+        direction="short",
+    )
+
+    assert result.liquidated_at == DAYS[1]
+    assert result.series[1:] == [{"date": day, "nav": 0.0} for day in DAYS[1:]]
+    assert result.daily_returns == [
+        {
+            "date": DAYS[1],
+            "return": -1.0,
+            "spy_return": 0.0,
+            "alpha": -1.0,
+            "turnover_pct": 100.0,
+            "cost": 0.0,
+        }
+    ]
+    assert result.holdings == []
+
+
+def test_short_founding_portfolio_still_requires_eligible_horizon_twenty_for_common():
+    policy = PolicyResult(
+        horizon=1,
+        exposure_pct=100,
+        cost_basis="net",
+        series=[],
+        spy_series=[],
+        daily_returns=[],
+        holdings=[],
+        active_cohorts=[],
+        cumulative_cost=0.0,
+        cumulative_turnover_pct=0.0,
+    )
+    policies = {(horizon, exposure): policy for horizon in range(1, 21) for exposure in range(10, 101, 10)}
+    signal_horizons = [{"horizon": horizon, "eligible": horizon != 20} for horizon in range(1, 21)]
+    long = RebuiltPortfolioAnalysis(
+        portfolio=SimpleNamespace(
+            id=1,
+            status="active",
+            founding_v2=True,
+            direction="long",
+        ),
+        signal_horizons=signal_horizons,
+        policies=policies,
+        selected=policy,
+    )
+    short = RebuiltPortfolioAnalysis(
+        portfolio=SimpleNamespace(
+            id=2,
+            status="active",
+            founding_v2=True,
+            direction="short",
+        ),
+        signal_horizons=signal_horizons,
+        policies=policies,
+        selected=policy,
+    )
+
+    assert _rankable_common_members({1: long, 2: short}, "long") == [long]
+    assert _rankable_common_members({1: long, 2: short}, "short") == []

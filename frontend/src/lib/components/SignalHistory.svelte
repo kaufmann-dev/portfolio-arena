@@ -1,15 +1,16 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { SignalOut, SignalsPage } from "../api/types";
+  import type { Direction, SignalOut, SignalsPage } from "../api/types";
   import { fmtDate, fmtDateTime, pctPoints } from "../format";
 
   interface Props {
     slug: string;
+    direction: Direction;
     initialSignals: SignalOut[];
     initialNextCursor: number | null;
   }
 
-  const { slug, initialSignals, initialNextCursor }: Props = $props();
+  const { slug, direction, initialSignals, initialNextCursor }: Props = $props();
   // Initial API data seeds local cursor state; the parent remounts this component per portfolio.
   // svelte-ignore state_referenced_locally
   let signals = $state.raw<SignalOut[]>(initialSignals);
@@ -40,7 +41,7 @@
   <header>
     <div>
       <h2 id="signal-history-title">Recent signals</h2>
-      <p>Independent target portfolios, newest first.</p>
+      <p>Independent {direction} target portfolios, newest first.</p>
     </div>
     <span class="num">{signals.length} loaded</span>
   </header>

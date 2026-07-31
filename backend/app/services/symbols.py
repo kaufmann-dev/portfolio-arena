@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from . import massive
 
-# Massive reference ticker type codes accepted as long-only positions.
+# Massive reference ticker type codes accepted as whole-book long/short positions.
 SECURITY_TYPES = {
     "CS": "equity",
     "ADRC": "equity",
@@ -124,7 +124,9 @@ def validate_positions(positions: list[dict]) -> None:
             raise SymbolValidationError(f"Duplicate symbol {symbol}.")
         seen.add(symbol)
         if weight < 0:
-            raise SymbolValidationError(f"Negative weight for {symbol}; long-only means weights >= 0.")
+            raise SymbolValidationError(
+                f"Negative weight for {symbol}; portfolio direction is set separately."
+            )
         total += weight
 
     # Weights are entered with 4 decimals; exactly-100 means to that precision.

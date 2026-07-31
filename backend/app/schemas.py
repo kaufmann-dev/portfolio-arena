@@ -112,6 +112,7 @@ class PortfolioCreate(BaseModel):
     agent_id: int
     prompt_id: int
     prompt_mode: Literal["managed", "rebuilt"]
+    direction: Literal["long", "short"]
     cost_bps: int | None = Field(default=None, ge=0)
 
 
@@ -121,6 +122,7 @@ class PortfolioPatch(BaseModel):
     agent_id: int | None = None
     prompt_id: int | None = None
     prompt_mode: Literal["managed", "rebuilt"] | None = None
+    direction: Literal["long", "short"] | None = None
     cost_bps: int | None = Field(default=None, ge=0)
 
 

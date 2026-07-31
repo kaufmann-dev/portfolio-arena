@@ -8,9 +8,10 @@
     rows: RebuiltArenaPortfolio[];
     selectedHorizon: number;
     context: RebuiltAnalysisContext;
+    benchmarkName: string;
   }
 
-  const { rows, selectedHorizon, context }: Props = $props();
+  const { rows, selectedHorizon, context, benchmarkName }: Props = $props();
   const horizons = Array.from({ length: 20 }, (_, index) => index + 1);
 
   function cellFor(row: RebuiltArenaPortfolio, horizon: number): SignalHorizon | undefined {
@@ -29,8 +30,8 @@
     return `${row.name}, ${horizon}-session horizon: ${cellText(cell)} mean daily alpha; 95% interval ${lower} to ${upper}; ${cell.evidence}`;
   }
 
-  function detailHref(slug: string): string {
-    return portfolioAnalysisHref(slug, "rebuilt", {
+  function detailHref(row: RebuiltArenaPortfolio): string {
+    return portfolioAnalysisHref(row.slug, "rebuilt", row.direction, {
       ...context,
       view: "signal",
       objective: "canonical",
@@ -70,7 +71,7 @@
       </thead>
       <tbody>
         <tr class="benchmark">
-          <th scope="row">SPY reference</th>
+          <th scope="row">{benchmarkName} reference</th>
           {#each horizons as horizon (horizon)}
             <td class={{ selected: horizon === selectedHorizon }}>0.00%</td>
           {/each}
@@ -78,7 +79,7 @@
         {#each rows as row (row.id)}
           <tr>
             <th scope="row">
-              <a href={detailHref(row.slug)} onclick={(event) => link(event, detailHref(row.slug))}>
+              <a href={detailHref(row)} onclick={(event) => link(event, detailHref(row))}>
                 {row.name}
               </a>
             </th>

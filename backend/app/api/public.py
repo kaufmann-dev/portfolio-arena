@@ -31,6 +31,7 @@ RebuiltView = Literal["common", "tuned", "signal"]
 Objective = Literal["canonical", "max_alpha", "max_information_ratio", "max_sharpe"]
 CostBasis = Literal["net", "gross"]
 Track = Literal["managed", "rebuilt"]
+Direction = Literal["long", "short"]
 
 
 def _validate_rebuilt_context(
@@ -66,17 +67,27 @@ def _context(
 
 @router.get("/arena/managed")
 @limiter.limit("30/minute")
-def managed_arena(request: Request, session: Session = Depends(get_session)):
+def managed_arena(
+    request: Request,
+    direction: Direction,
+    session: Session = Depends(get_session),
+):
     portfolios = load_portfolios(session)
-    valuations = compute_valuations(session, portfolios)
+    selected = [
+        portfolio
+        for portfolio in portfolios
+        if portfolio.prompt_mode == "managed" and portfolio.direction == direction
+    ]
+    valuations = compute_valuations(session, selected)
     rows = [
         serialize_summary(valuations.by_portfolio_id[portfolio.id], valuations)
-        for portfolio in portfolios
-        if portfolio.prompt_mode == "managed" and portfolio.id in valuations.by_portfolio_id
+        for portfolio in selected
+        if portfolio.id in valuations.by_portfolio_id
     ]
     rank_rows(rows)
     return {
         "track": "managed",
+        "direction": direction,
         "as_of": valuations.as_of,
         "market_data_status": valuations.market_data_status,
         "ranking": {
@@ -84,7 +95,10 @@ def managed_arena(request: Request, session: Session = Depends(get_session)):
             "alpha": "daily_excess_vs_spy",
             "hac_bandwidth": "automatic",
         },
-        "portfolios": [synthetic_spy_row(valuations.spy_series), *rows],
+        "portfolios": [
+            synthetic_spy_row(valuations.spy_series, direction=direction),
+            *rows,
+        ],
     }
 
 
@@ -92,6 +106,7 @@ def managed_arena(request: Request, session: Session = Depends(get_session)):
 @limiter.limit("30/minute")
 def rebuilt_arena(
     request: Request,
+    direction: Direction,
     view: RebuiltView = "common",
     objective: Objective = "canonical",
     cost_basis: CostBasis = "net",
@@ -100,9 +115,14 @@ def rebuilt_arena(
 ):
     _validate_rebuilt_context(view, objective, cost_basis, horizon)
     portfolios = load_portfolios(session)
+    selected = [
+        portfolio
+        for portfolio in portfolios
+        if portfolio.prompt_mode == "rebuilt" and portfolio.direction == direction
+    ]
     arena = compute_rebuilt_arena(
         session,
-        portfolios,
+        selected,
         objective=objective,
         cost_basis=cost_basis,
     )
@@ -113,20 +133,26 @@ def rebuilt_arena(
             view=view,
             horizon=horizon,
         )
-        for portfolio in portfolios
-        if portfolio.prompt_mode == "rebuilt" and portfolio.id in arena.by_portfolio_id
+        for portfolio in selected
+        if portfolio.id in arena.by_portfolio_id
     ]
     rank_rows(rows)
-    if view == "common" and arena.common_spy_series:
-        spy_row = synthetic_spy_row(arena.common_spy_series, precomputed_nav=True)
+    common = arena.common_for(direction)
+    if view == "common" and common.spy_series:
+        spy_row = synthetic_spy_row(
+            common.spy_series,
+            precomputed_nav=True,
+            direction=direction,
+        )
     else:
-        spy_row = synthetic_spy_row(arena.spy_series)
+        spy_row = synthetic_spy_row(arena.spy_series, direction=direction)
     return {
         "track": "rebuilt",
+        "direction": direction,
         "as_of": arena.as_of,
         "market_data_status": arena.market_data_status,
         "context": _context(view, objective, cost_basis, horizon),
-        "common_policy": arena.common_policy,
+        "common_policy": common.policy,
         "ranking": {
             "metric": "search_adjusted_lower_95_ci",
             "alpha": "daily_excess_vs_spy",
@@ -159,12 +185,13 @@ def portfolio_detail(
     if selected_track == "managed":
         if view != "common" or objective != "canonical" or cost_basis != "net" or horizon is not None:
             raise HTTPException(422, "Rebuilt analysis context is not valid for managed portfolios.")
-        valuations = compute_valuations(session, portfolios)
+        valuations = compute_valuations(session, [match])
         valuation = valuations.by_portfolio_id.get(match.id)
         if valuation is None:
             raise HTTPException(404, "Portfolio not found")
         return {
             "track": "managed",
+            "direction": match.direction,
             "as_of": valuations.as_of,
             "market_data_status": valuations.market_data_status,
             "context": None,
@@ -176,9 +203,14 @@ def portfolio_detail(
         }
 
     _validate_rebuilt_context(view, objective, cost_basis, horizon)
+    same_direction = [
+        portfolio
+        for portfolio in portfolios
+        if portfolio.prompt_mode == "rebuilt" and portfolio.direction == match.direction
+    ]
     arena = compute_rebuilt_arena(
         session,
-        portfolios,
+        same_direction,
         objective=objective,
         cost_basis=cost_basis,
     )
@@ -187,10 +219,11 @@ def portfolio_detail(
         raise HTTPException(404, "Portfolio not found")
     return {
         "track": "rebuilt",
+        "direction": match.direction,
         "as_of": arena.as_of,
         "market_data_status": arena.market_data_status,
         "context": _context(view, objective, cost_basis, horizon),
-        "common_policy": arena.common_policy,
+        "common_policy": arena.common_for(match.direction).policy,
         "portfolio": serialize_rebuilt_detail(
             analysis,
             arena,
@@ -237,6 +270,7 @@ def compare(
     slugs: str,
     request: Request,
     track: Track,
+    direction: Direction,
     view: RebuiltView = "common",
     objective: Objective = "canonical",
     cost_basis: CostBasis = "net",
@@ -254,7 +288,18 @@ def compare(
     wrong_track = [slug for slug in wanted if by_slug[slug].prompt_mode != track]
     if wrong_track:
         raise HTTPException(422, f"Portfolio belongs to the other track: {', '.join(wrong_track)}")
+    wrong_direction = [slug for slug in wanted if by_slug[slug].direction != direction]
+    if wrong_direction:
+        raise HTTPException(
+            422,
+            f"Portfolio belongs to the other direction: {', '.join(wrong_direction)}",
+        )
     selected = [by_slug[slug] for slug in wanted]
+    direction_universe = [
+        portfolio
+        for portfolio in portfolios
+        if portfolio.prompt_mode == track and portfolio.direction == direction
+    ]
 
     output = []
     spy_raw = []
@@ -265,7 +310,7 @@ def compare(
     if track == "managed":
         if view != "common" or objective != "canonical" or cost_basis != "net" or horizon is not None:
             raise HTTPException(422, "Rebuilt analysis context is not valid for managed comparisons.")
-        valuations = compute_valuations(session, portfolios)
+        valuations = compute_valuations(session, direction_universe)
         as_of = valuations.as_of
         status = valuations.market_data_status
         spy_raw = valuations.spy_series
@@ -278,14 +323,15 @@ def compare(
         context = _context(view, objective, cost_basis, horizon)
         arena = compute_rebuilt_arena(
             session,
-            portfolios,
+            direction_universe,
             objective=objective,
             cost_basis=cost_basis,
         )
         as_of = arena.as_of
         status = arena.market_data_status
-        if view == "common" and arena.common_spy_series:
-            spy_raw = arena.common_spy_series
+        common = arena.common_for(direction)
+        if view == "common" and common.spy_series:
+            spy_raw = common.spy_series
             spy_is_precomputed = True
         else:
             spy_raw = arena.spy_series
@@ -295,7 +341,7 @@ def compare(
             policy = summary["selected_policy"]
             if policy:
                 if view == "common":
-                    series = arena.common_series_by_portfolio_id.get(portfolio.id, [])
+                    series = common.member_series.get(portfolio.id, [])
                 else:
                     result = analysis.policies[(policy["horizon"], policy["exposure_pct"])]
                     series = result.series
@@ -305,6 +351,7 @@ def compare(
     if not output:
         return {
             "track": track,
+            "direction": direction,
             "as_of": as_of,
             "market_data_status": status,
             "context": context,
@@ -334,10 +381,16 @@ def compare(
             if common_start <= point["date"] <= (as_of or common_start)
         ]
         if spy_is_precomputed
-        else rebase_series(spy_raw, common_start, as_of or common_start)
+        else rebase_series(
+            spy_raw,
+            common_start,
+            as_of or common_start,
+            direction=direction,
+        )
     )
     return {
         "track": track,
+        "direction": direction,
         "as_of": as_of,
         "market_data_status": status,
         "context": context,
@@ -355,6 +408,7 @@ def _portfolio_refs(portfolios: list[Portfolio]) -> list[dict]:
             "name": portfolio.name,
             "status": portfolio.status,
             "prompt_mode": portfolio.prompt_mode,
+            "direction": portfolio.direction,
         }
         for portfolio in portfolios
     ]
@@ -363,7 +417,7 @@ def _portfolio_refs(portfolios: list[Portfolio]) -> list[dict]:
 @router.get("/prompts")
 @limiter.limit("60/minute")
 def list_prompts(request: Request, session: Session = Depends(get_session)):
-    prompts = session.scalars(select(Prompt).order_by(Prompt.slug)).all()
+    prompts = session.scalars(select(Prompt).where(Prompt.status == "active").order_by(Prompt.slug)).all()
     portfolios = list(session.scalars(select(Portfolio)))
     usage: dict[int, int] = {}
     for portfolio in portfolios:
@@ -388,7 +442,12 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
 @router.get("/prompts/{slug}")
 @limiter.limit("60/minute")
 def prompt_detail(slug: str, request: Request, session: Session = Depends(get_session)):
-    prompt = session.scalar(select(Prompt).where(Prompt.slug == slug))
+    prompt = session.scalar(
+        select(Prompt).where(
+            Prompt.slug == slug,
+            Prompt.status == "active",
+        )
+    )
     if prompt is None:
         raise HTTPException(404, "Prompt not found")
     users = list(session.scalars(select(Portfolio).where(Portfolio.prompt_id == prompt.id)))

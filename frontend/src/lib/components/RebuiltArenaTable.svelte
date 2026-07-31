@@ -99,8 +99,8 @@
     return sortDesc ? "descending" : "ascending";
   }
 
-  function detailHref(slug: string): string {
-    return portfolioAnalysisHref(slug, "rebuilt", context);
+  function detailHref(row: RebuiltArenaPortfolio): string {
+    return portfolioAnalysisHref(row.slug, "rebuilt", row.direction, context);
   }
 </script>
 
@@ -124,16 +124,18 @@
 {/snippet}
 
 {#snippet identity(row: RebuiltArenaPortfolio)}
-  <a
-    class="portfolio-link"
-    href={detailHref(row.slug)}
-    onclick={(event) => link(event, detailHref(row.slug))}
-  >
+  <a class="portfolio-link" href={detailHref(row)} onclick={(event) => link(event, detailHref(row))}>
     {row.name}
   </a>
   <span class="badges">
+    <span class="badge">{row.direction}</span>
     <EvidenceBadge state={row.evidence} compact />
     {#if row.status === "archived"}<span class="badge">archived</span>{/if}
+    {#if row.is_liquidated}
+      <span class="badge neg" title={row.liquidated_at ? `Liquidated ${row.liquidated_at}` : "Liquidated"}>
+        policy liquidated
+      </span>
+    {/if}
     {#if view === "common" && !row.common_admitted && row.status === "active" && !row.founding_v2 && !row.error}
       <span class="badge warn" title="Not yet admitted to the Common-policy meta-portfolio">
         H20 incubation
@@ -202,9 +204,12 @@
           <tr class="benchmark">
             <td></td>
             <td class="rank-col"><span class="badge">REF</span></td>
-            <th scope="row">SPY</th>
+            <th scope="row">
+              {benchmark.name}
+              {#if benchmark.is_liquidated}<span class="badge neg">liquidated</span>{/if}
+            </th>
             <td>—</td>
-            <td>Buy and hold</td>
+            <td>{benchmark.direction === "short" ? "Daily −1× SPY" : "Buy and hold SPY"}</td>
             <td class="right num">—</td>
             {#if view !== "signal"}<td class="right num">100%</td>{/if}
             <td class="right num">0.00%</td>
@@ -290,8 +295,13 @@
 
     {#if benchmark}
       <article class="mobile-card benchmark-card">
-        <header><span class="rank">REF</span><strong>SPY</strong><span class="badge">reference</span></header>
-        <p>Zero-alpha benchmark · buy and hold</p>
+        <header>
+          <span class="rank">REF</span><strong>{benchmark.name}</strong><span class="badge">reference</span>
+          {#if benchmark.is_liquidated}<span class="badge neg">liquidated</span>{/if}
+        </header>
+        <p>
+          Zero-alpha benchmark · {benchmark.direction === "short" ? "daily −1× SPY" : "buy and hold SPY"}
+        </p>
       </article>
     {/if}
 

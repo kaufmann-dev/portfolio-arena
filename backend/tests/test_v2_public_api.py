@@ -13,6 +13,7 @@ def _create_rebuilt(client, admin_headers, sample_agent, sample_prompt, name):
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "rebuilt",
+            "direction": "long",
         },
         headers=admin_headers,
     )
@@ -82,7 +83,7 @@ def test_separate_track_routes_have_synthetic_spy_and_no_rsp(
         "Daily Rebuilt",
     )
 
-    managed = client.get("/api/arena/managed")
+    managed = client.get("/api/arena/managed?direction=long")
     assert managed.status_code == 200, managed.text
     managed_payload = managed.json()
     assert managed_payload["track"] == "managed"
@@ -90,7 +91,7 @@ def test_separate_track_routes_have_synthetic_spy_and_no_rsp(
     assert managed_payload["portfolios"][0]["slug"] == "spy"
     assert sample_portfolio["slug"] in {row["slug"] for row in managed_payload["portfolios"]}
 
-    response = client.get("/api/arena/rebuilt")
+    response = client.get("/api/arena/rebuilt?direction=long")
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["track"] == "rebuilt"
@@ -106,15 +107,18 @@ def test_separate_track_routes_have_synthetic_spy_and_no_rsp(
 
 
 def test_rebuilt_query_combinations_are_explicitly_validated(client):
-    assert client.get("/api/arena/rebuilt?view=signal").status_code == 422
+    assert client.get("/api/arena/rebuilt?direction=long&view=signal").status_code == 422
     assert (
         client.get(
-            "/api/arena/rebuilt?view=signal&horizon=5&cost_basis=gross&objective=max_alpha"
+            "/api/arena/rebuilt?direction=long&view=signal&horizon=5&cost_basis=gross&objective=max_alpha"
         ).status_code
         == 422
     )
-    assert client.get("/api/arena/rebuilt?view=tuned&horizon=5").status_code == 422
-    assert client.get("/api/arena/rebuilt?view=signal&horizon=5&cost_basis=gross").status_code == 200
+    assert client.get("/api/arena/rebuilt?direction=long&view=tuned&horizon=5").status_code == 422
+    assert (
+        client.get("/api/arena/rebuilt?direction=long&view=signal&horizon=5&cost_basis=gross").status_code
+        == 200
+    )
 
 
 def test_rebuilt_detail_bounds_recent_signals_and_public_payload_hides_provenance(
@@ -184,7 +188,7 @@ def test_common_rows_and_spy_use_one_shared_scoring_window(
     _insert_signals(first["id"], _weekdays(date(2026, 4, 1), 5), "AAPL")
     _insert_signals(second["id"], _weekdays(date(2026, 4, 8), 5), "MSFT")
 
-    payload = client.get("/api/arena/rebuilt").json()
+    payload = client.get("/api/arena/rebuilt?direction=long").json()
     scoring_start = payload["common_policy"]["scoring_start"]
     rows = [row for row in payload["portfolios"] if row["slug"] in {first["slug"], second["slug"]}]
 
@@ -205,12 +209,14 @@ def test_common_rows_and_spy_use_one_shared_scoring_window(
     assert detail["spy_series"][0] == {"date": scoring_start, "nav": 100.0}
     assert detail["spy_series"][-1]["nav"] / 100.0 - 1.0 == pytest.approx(detail["metrics"]["spy_return"])
 
-    comparison = client.get(f"/api/compare?track=rebuilt&slugs={first['slug']},{second['slug']}").json()
+    comparison = client.get(
+        f"/api/compare?direction=long&track=rebuilt&slugs={first['slug']},{second['slug']}"
+    ).json()
     assert comparison["start"] == scoring_start
     assert comparison["spy_series"][0] == {"date": scoring_start, "nav": 100.0}
     assert all(line["series"][0] == {"date": scoring_start, "nav": 100.0} for line in comparison["series"])
 
-    optimized = client.get("/api/arena/rebuilt?objective=max_alpha").json()
+    optimized = client.get("/api/arena/rebuilt?direction=long&objective=max_alpha").json()
     assert optimized["common_policy"]["metrics"]["family_size"] == 200
 
 
@@ -238,14 +244,16 @@ def test_common_incubation_gate_disables_result_and_rank(
     _insert_signals(founder["id"], _weekdays(date(2026, 4, 1), 5), "MSFT")
     _insert_signals(incubating["id"], _weekdays(date(2026, 7, 20), 5), "AAPL")
 
-    signal_payload = client.get("/api/arena/rebuilt?view=signal&horizon=1&cost_basis=gross").json()
+    signal_payload = client.get(
+        "/api/arena/rebuilt?direction=long&view=signal&horizon=1&cost_basis=gross"
+    ).json()
     signal_row = _row(signal_payload, incubating["slug"])
     assert signal_row["metrics"]["eligible"] is True
     assert signal_row["selected_policy"]["objective_score"] == pytest.approx(
         signal_row["metrics"]["ci_lower"]
     )
 
-    common_payload = client.get("/api/arena/rebuilt").json()
+    common_payload = client.get("/api/arena/rebuilt?direction=long").json()
     founder_row = _row(common_payload, founder["slug"])
     incubating_row = _row(common_payload, incubating["slug"])
     assert founder_row["common_admitted"] is True
@@ -274,7 +282,7 @@ def test_founding_common_admission_is_known_before_a_policy_can_be_selected(
     )
     _set_founding(founder["id"])
 
-    payload = client.get("/api/arena/rebuilt").json()
+    payload = client.get("/api/arena/rebuilt?direction=long").json()
     row = _row(payload, founder["slug"])
     assert payload["common_policy"] is None
     assert row["common_admitted"] is True
@@ -297,9 +305,11 @@ def test_compare_rejects_missing_and_wrong_track_slugs(
         "Compare Rebuilt",
     )
 
-    missing = client.get(f"/api/compare?track=rebuilt&slugs={rebuilt['slug']},missing")
+    missing = client.get(f"/api/compare?direction=long&track=rebuilt&slugs={rebuilt['slug']},missing")
     assert missing.status_code == 404
-    wrong_track = client.get(f"/api/compare?track=rebuilt&slugs={rebuilt['slug']},{sample_portfolio['slug']}")
+    wrong_track = client.get(
+        f"/api/compare?direction=long&track=rebuilt&slugs={rebuilt['slug']},{sample_portfolio['slug']}"
+    )
     assert wrong_track.status_code == 422
 
 
@@ -330,7 +340,7 @@ def test_rebuilt_rows_flag_stale_and_frozen_symbol_coverage(
         return result
 
     monkeypatch.setattr(massive, "download_prices", download_with_frozen_aapl)
-    response = client.get("/api/arena/rebuilt?view=signal&horizon=1&cost_basis=gross")
+    response = client.get("/api/arena/rebuilt?direction=long&view=signal&horizon=1&cost_basis=gross")
     assert response.status_code == 200, response.text
     payload = response.json()
     row = _row(payload, portfolio["slug"])

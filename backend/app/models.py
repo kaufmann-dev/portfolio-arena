@@ -127,17 +127,36 @@ class Agent(Base):
 
 
 class Prompt(Base):
-    """Editable strategy text plus server-enforced position sizing policy."""
+    """Stable strategy identity whose editable fields live in immutable versions."""
 
     __tablename__ = "prompts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'archived')",
+            name="prompts_status_check",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND archived_at IS NULL) OR "
+            "(status = 'archived' AND archived_at IS NOT NULL)",
+            name="prompts_archive_state_check",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(Text, nullable=False)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
-    min_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
-    max_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
-    notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_version_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "prompt_versions.id",
+            name="prompts_current_version_id_fkey",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -145,7 +164,96 @@ class Prompt(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
+    current_version: Mapped["PromptVersion | None"] = relationship(
+        foreign_keys=[current_version_id],
+        lazy="joined",
+        post_update=True,
+    )
+    versions: Mapped[list["PromptVersion"]] = relationship(
+        back_populates="prompt",
+        cascade="all, delete-orphan",
+        foreign_keys="PromptVersion.prompt_id",
+        order_by="PromptVersion.version",
+        passive_deletes=True,
+    )
     portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="prompt")
+
+    @property
+    def name(self) -> str:
+        return self._required_current_version().name
+
+    @property
+    def text(self) -> str:
+        return self._required_current_version().text
+
+    @property
+    def notes(self) -> str:
+        return self._required_current_version().notes
+
+    @property
+    def min_position_weight_pct(self) -> float:
+        return self._required_current_version().min_position_weight_pct
+
+    @property
+    def max_position_weight_pct(self) -> float:
+        return self._required_current_version().max_position_weight_pct
+
+    def _required_current_version(self) -> "PromptVersion":
+        if self.current_version is None:
+            raise RuntimeError(f"Prompt {self.id} has no current version")
+        return self.current_version
+
+
+class PromptVersion(Base):
+    """One immutable snapshot of every user-editable prompt field."""
+
+    __tablename__ = "prompt_versions"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="prompt_versions_version_check"),
+        CheckConstraint(
+            "min_position_weight_pct > 0 AND max_position_weight_pct <= 100 "
+            "AND min_position_weight_pct <= max_position_weight_pct",
+            name="prompt_versions_position_weights_check",
+        ),
+        UniqueConstraint(
+            "prompt_id",
+            "version",
+            name="prompt_versions_prompt_id_version_key",
+        ),
+        Index("idx_prompt_versions_prompt_id", "prompt_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prompt_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("prompts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    min_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
+    max_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
+    restored_from_version_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("prompt_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    prompt: Mapped[Prompt] = relationship(
+        back_populates="versions",
+        foreign_keys=[prompt_id],
+    )
+    restored_from: Mapped["PromptVersion | None"] = relationship(
+        foreign_keys=[restored_from_version_id],
+        remote_side=[id],
+    )
 
 
 class Portfolio(Base):
@@ -157,6 +265,10 @@ class Portfolio(Base):
             "prompt_mode IN ('managed', 'rebuilt')",
             name="portfolios_prompt_mode_check",
         ),
+        CheckConstraint(
+            "direction IN ('long', 'short')",
+            name="portfolios_direction_check",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -165,6 +277,7 @@ class Portfolio(Base):
     agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
     prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
     prompt_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    direction: Mapped[str] = mapped_column(Text, nullable=False)
     cost_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     founding_v2: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

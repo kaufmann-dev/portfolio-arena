@@ -24,6 +24,7 @@ export interface PromptRef {
 }
 
 export type PromptMode = "managed" | "rebuilt";
+export type Direction = "long" | "short";
 export type MarketDataStatus = "fresh" | "stale" | "unavailable";
 export type ArenaTrack = PromptMode;
 export type RebuiltView = "common" | "tuned" | "signal";
@@ -140,9 +141,12 @@ export interface ArenaPortfolioBase {
   kind: PromptMode;
   slug: string;
   name: string;
+  direction: Direction;
   agent: AgentRef;
   prompt: PromptRef;
   status: "active" | "archived";
+  is_liquidated: boolean;
+  liquidated_at: string | null;
 }
 
 export interface ManagedArenaPortfolio extends ArenaPortfolioBase {
@@ -219,7 +223,10 @@ export interface BenchmarkArenaPortfolio {
   kind: "benchmark";
   id: null;
   slug: "spy";
-  name: "SPY";
+  name: string;
+  direction: Direction;
+  is_liquidated: boolean;
+  liquidated_at: string | null;
   status: "reference";
   rank: null;
   evidence: EvidenceState;
@@ -230,6 +237,7 @@ export interface BenchmarkArenaPortfolio {
 
 export interface ManagedArenaResponse {
   track: "managed";
+  direction: Direction;
   as_of: string | null;
   market_data_status: MarketDataStatus;
   ranking: Record<string, unknown>;
@@ -238,6 +246,7 @@ export interface ManagedArenaResponse {
 
 export interface RebuiltArenaResponse {
   track: "rebuilt";
+  direction: Direction;
   as_of: string | null;
   market_data_status: MarketDataStatus;
   context: RebuiltAnalysisContext;
@@ -264,6 +273,7 @@ export interface ManagedPortfolioDetail extends ManagedArenaPortfolio {
 
 export interface ManagedPortfolioDetailResponse {
   track: "managed";
+  direction: Direction;
   as_of: string | null;
   market_data_status: MarketDataStatus;
   context: null;
@@ -293,6 +303,7 @@ export interface RebuiltPortfolioDetail extends RebuiltArenaPortfolio {
 
 export interface RebuiltPortfolioDetailResponse {
   track: "rebuilt";
+  direction: Direction;
   as_of: string | null;
   market_data_status: MarketDataStatus;
   context: RebuiltAnalysisContext;
@@ -313,8 +324,11 @@ export interface PortfolioRefOut {
   id: number;
   slug: string;
   name: string;
+  direction: Direction;
   status: "active" | "archived";
   prompt_mode: PromptMode;
+  is_liquidated?: boolean;
+  liquidated_at?: string | null;
 }
 
 export interface PolicyMatrixCell {
@@ -342,6 +356,35 @@ export interface PromptOut {
   allocation_policy: AllocationPolicy;
   updated_at?: string;
   portfolio_count?: number;
+}
+
+export interface AdminPrompt extends PromptOut {
+  status: "active" | "archived";
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+  current_version: number;
+  version_count: number;
+  portfolio_count: number;
+}
+
+export interface PromptVersion {
+  version: number;
+  name: string;
+  text: string;
+  notes: string;
+  allocation_policy: AllocationPolicy;
+  created_at: string;
+  restored_from_version: number | null;
+}
+
+export interface AdminPromptsResponse {
+  prompts: AdminPrompt[];
+}
+
+export interface PromptVersionsResponse {
+  prompt_id: number;
+  versions: PromptVersion[];
 }
 
 export interface AgentRef {
@@ -410,6 +453,7 @@ export interface CompareEntry {
 
 export interface CompareResponse {
   track: ArenaTrack;
+  direction: Direction;
   as_of: string | null;
   market_data_status: MarketDataStatus;
   start: string | null;
@@ -461,6 +505,9 @@ export interface EvaluatorSettings {
 export interface EvaluatorPortfolioRef extends Ref {
   status: "active" | "archived";
   prompt_mode: PromptMode;
+  direction: Direction;
+  is_liquidated: boolean;
+  liquidated_at: string | null;
 }
 
 export interface PortfolioEvaluatorConfig {
@@ -491,7 +538,7 @@ export interface EvaluatorDashboard {
 
 export interface EvaluationRun {
   id: number;
-  portfolio: Ref;
+  portfolio: Ref & { direction: Direction };
   agent: AgentOut;
   model: Ref;
   trigger_kind: EvaluationTriggerKind;

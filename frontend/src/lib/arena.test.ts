@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { portfolioAnalysisHref, rebuiltContext, rebuiltContextParams } from "./arena";
+import { parseDirection, portfolioAnalysisHref, rebuiltContext, rebuiltContextParams } from "./arena";
+
+describe("arena direction", () => {
+  it("defaults invalid or absent values to long", () => {
+    expect(parseDirection(null)).toBe("long");
+    expect(parseDirection("sideways")).toBe("long");
+  });
+
+  it("accepts the short direction", () => {
+    expect(parseDirection("short")).toBe("short");
+  });
+
+  it("carries direction into managed detail links", () => {
+    expect(portfolioAnalysisHref("example", "managed", "short")).toBe(
+      "/p/example?track=managed&direction=short",
+    );
+  });
+});
 
 describe("rebuilt analysis context", () => {
   it("omits a horizon from constructed-policy views", () => {
@@ -33,7 +50,7 @@ describe("rebuilt analysis context", () => {
 
   it("carries the complete context into rebuilt detail links", () => {
     const context = rebuiltContext("signal", "canonical", "gross", 12);
-    const href = portfolioAnalysisHref("example", "rebuilt", context);
+    const href = portfolioAnalysisHref("example", "rebuilt", "short", context);
     const url = new URL(href, "https://arena.test");
 
     expect(url.pathname).toBe("/p/example");
@@ -43,6 +60,7 @@ describe("rebuilt analysis context", () => {
       cost_basis: "gross",
       track: "rebuilt",
       horizon: "12",
+      direction: "short",
     });
   });
 });

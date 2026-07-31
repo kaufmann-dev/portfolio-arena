@@ -25,6 +25,7 @@ class TestCreation:
                 "agent_id": sample_agent["id"],
                 "prompt_id": sample_prompt["id"],
                 "prompt_mode": "managed",
+                "direction": "long",
             },
             headers=admin_headers,
         )
@@ -33,7 +34,7 @@ class TestCreation:
         assert "allocation" not in portfolio
 
         # It shows up in the managed arena with no track record yet.
-        rows = client.get("/api/arena/managed").json()["portfolios"]
+        rows = client.get("/api/arena/managed?direction=long").json()["portfolios"]
         row = next(p for p in rows if p["id"] == portfolio["id"])
         assert row["allocation_count"] == 0
         assert row["metrics"]["has_data"] is False
@@ -153,7 +154,7 @@ class TestCreation:
 
     def test_prompt_position_limits_enforced(self, client, admin_headers, sample_agent):
         prompt = client.post(
-            "/api/prompts",
+            "/api/admin/prompts",
             json={
                 "name": "Concentrated",
                 "text": "Own a focused portfolio.",
@@ -171,6 +172,7 @@ class TestCreation:
                 "agent_id": sample_agent["id"],
                 "prompt_id": prompt["id"],
                 "prompt_mode": "managed",
+                "direction": "long",
             },
             headers=admin_headers,
         ).json()
@@ -262,7 +264,7 @@ class TestLockEnforcement:
         )
         assert response.status_code == 200, response.text
 
-        rows = client.get("/api/arena/managed").json()["portfolios"]
+        rows = client.get("/api/arena/managed?direction=long").json()["portfolios"]
         portfolio = next(row for row in rows if row["id"] == sample_portfolio["id"])
         spy = next(row for row in rows if row["kind"] == "benchmark")
         assert portfolio["allocation_count"] == 0

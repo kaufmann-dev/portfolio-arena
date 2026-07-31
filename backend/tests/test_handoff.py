@@ -14,6 +14,7 @@ def _create_with_notes(client, admin_headers, agent_id, prompt_id) -> dict:
             "agent_id": agent_id,
             "prompt_id": prompt_id,
             "prompt_mode": "managed",
+            "direction": "long",
         },
         headers=admin_headers,
     )

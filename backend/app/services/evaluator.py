@@ -16,10 +16,12 @@ from ..models import (
     ModelDefinition,
     Portfolio,
     PortfolioEvaluatorConfig,
+    Prompt,
     Signal,
 )
 from . import admin_ops
 from .admin_ops import AdminOpError
+from .arena import compute_valuations
 from .harnesses import automation_harness_ids, supports_automation
 from .model_catalog import agent_out, agent_snapshot_out, model_ref
 from .prompt_policy import automated_execution_prompt
@@ -30,6 +32,36 @@ FINISHED_STATUSES = {"cancelled", "succeeded", "failed", "skipped"}
 RUN_ERROR_MAX_LENGTH = 4000
 RUN_REPORT_MAX_LENGTH = 20_000
 INSTANCE_STALE_SECONDS = 180
+
+
+def _managed_liquidations(
+    session: Session,
+    portfolios: list[Portfolio],
+) -> dict[int, str]:
+    candidates = [
+        portfolio
+        for portfolio in portfolios
+        if (portfolio.prompt_mode == "managed" and portfolio.direction == "short" and portfolio.allocations)
+    ]
+    if not candidates:
+        return {}
+    valuations = compute_valuations(session, candidates)
+    return {
+        portfolio.id: valuation.result.liquidated_at
+        for portfolio in candidates
+        if (
+            (valuation := valuations.by_portfolio_id.get(portfolio.id)) is not None
+            and valuation.result is not None
+            and valuation.result.liquidated_at is not None
+        )
+    }
+
+
+def _liquidated_managed_ids(
+    session: Session,
+    portfolios: list[Portfolio],
+) -> set[int]:
+    return set(_managed_liquidations(session, portfolios))
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -48,7 +80,12 @@ def settings_out(settings: EvaluatorSettings) -> dict:
     }
 
 
-def config_out(config: PortfolioEvaluatorConfig | None, portfolio: Portfolio) -> dict:
+def config_out(
+    config: PortfolioEvaluatorConfig | None,
+    portfolio: Portfolio,
+    *,
+    liquidated_at: str | None = None,
+) -> dict:
     return {
         "portfolio": {
             "id": portfolio.id,
@@ -56,6 +93,9 @@ def config_out(config: PortfolioEvaluatorConfig | None, portfolio: Portfolio) ->
             "name": portfolio.name,
             "status": portfolio.status,
             "prompt_mode": portfolio.prompt_mode,
+            "direction": portfolio.direction,
+            "is_liquidated": liquidated_at is not None,
+            "liquidated_at": liquidated_at,
         },
         "agent": agent_out(portfolio.agent),
         "enabled": config.enabled if config is not None else False,
@@ -80,6 +120,7 @@ def run_out(run: EvaluationRun) -> dict:
             "id": run.portfolio.id,
             "slug": run.portfolio.slug,
             "name": run.portfolio.name,
+            "direction": run.portfolio.direction,
         },
         "agent": agent_snapshot_out(
             run.agent,
@@ -193,7 +234,6 @@ def update_portfolio_config(
     enabled: bool,
     weekdays: list[int],
 ) -> dict:
-    get_settings(session, lock=True)
     portfolio = session.scalars(
         select(Portfolio)
         .where(Portfolio.id == portfolio_id)
@@ -203,6 +243,13 @@ def update_portfolio_config(
     ).first()
     if portfolio is None:
         raise AdminOpError(404, "Portfolio not found")
+    liquidations = _managed_liquidations(session, [portfolio])
+    if enabled and portfolio.id in liquidations:
+        raise AdminOpError(
+            409,
+            "Reset this liquidated short portfolio before enabling evaluation.",
+        )
+    get_settings(session, lock=True)
     clean_weekdays = [0, 1, 2, 3, 4] if portfolio.prompt_mode == "rebuilt" else sorted(set(weekdays))
     if enabled and portfolio.status != "active":
         raise AdminOpError(409, "Archived portfolios cannot be enabled for evaluation")
@@ -237,7 +284,11 @@ def update_portfolio_config(
             run.finished_at = current_time
             run.error = "Cancelled because portfolio automation was disabled."
     session.commit()
-    return config_out(config, portfolio)
+    return config_out(
+        config,
+        portfolio,
+        liquidated_at=liquidations.get(portfolio.id),
+    )
 
 
 def _runtime_out(session: Session, settings: EvaluatorSettings, now: datetime) -> dict:
@@ -293,9 +344,17 @@ def get_dashboard(session: Session, *, now: datetime | None = None) -> dict:
         )
         .order_by(Portfolio.name)
     ).all()
+    liquidations = _managed_liquidations(session, portfolios)
     return {
         "settings": settings_out(settings),
-        "portfolios": [config_out(portfolio.evaluator_config, portfolio) for portfolio in portfolios],
+        "portfolios": [
+            config_out(
+                portfolio.evaluator_config,
+                portfolio,
+                liquidated_at=liquidations.get(portfolio.id),
+            )
+            for portfolio in portfolios
+        ],
         "runtime": _runtime_out(session, settings, current_time),
     }
 
@@ -400,12 +459,14 @@ def enqueue_manual_runs(
     now: datetime | None = None,
 ) -> dict:
     current_time = now or datetime.now(UTC)
-    settings = get_settings(session, lock=True)
-    if not settings.enabled:
-        raise AdminOpError(409, "The evaluator is paused")
     unique_ids = list(dict.fromkeys(portfolio_ids))
     if not unique_ids:
         raise AdminOpError(422, "Select at least one portfolio")
+    candidate_portfolios = list(session.scalars(select(Portfolio).where(Portfolio.id.in_(unique_ids))))
+    liquidated_ids = _liquidated_managed_ids(session, candidate_portfolios)
+    settings = get_settings(session, lock=True)
+    if not settings.enabled:
+        raise AdminOpError(409, "The evaluator is paused")
 
     items = []
     for portfolio_id in unique_ids:
@@ -431,6 +492,16 @@ def enqueue_manual_runs(
                     "portfolio_id": portfolio_id,
                     "action": "rejected",
                     "reason": "Portfolio evaluator configuration is not enabled.",
+                    "run": None,
+                }
+            )
+            continue
+        if portfolio_id in liquidated_ids:
+            items.append(
+                {
+                    "portfolio_id": portfolio_id,
+                    "action": "rejected",
+                    "reason": "Reset this liquidated short portfolio before running evaluation.",
                     "run": None,
                 }
             )
@@ -476,6 +547,11 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
     source = _load_run(session, run_id)
     if source.status != "failed":
         raise AdminOpError(409, "Only failed evaluation runs can be retried")
+    if source.portfolio_id in _liquidated_managed_ids(session, [source.portfolio]):
+        raise AdminOpError(
+            409,
+            "Reset this liquidated short portfolio before retrying evaluation.",
+        )
     settings = get_settings(session, lock=True)
     if not settings.enabled:
         raise AdminOpError(409, "The evaluator is paused")
@@ -511,7 +587,12 @@ def cancel_run(session: Session, *, run_id: int, now: datetime | None = None) ->
     return run_out(_load_run(session, run.id))
 
 
-def _enqueue_scheduled(session: Session, settings: EvaluatorSettings, now: datetime) -> None:
+def _enqueue_scheduled(
+    session: Session,
+    settings: EvaluatorSettings,
+    now: datetime,
+    liquidated_ids: set[int],
+) -> None:
     from .trading_calendar import NY
 
     local_date = now.astimezone(NY).date()
@@ -533,6 +614,7 @@ def _enqueue_scheduled(session: Session, settings: EvaluatorSettings, now: datet
     for config in configs:
         if (
             config.portfolio.status != "active"
+            or config.portfolio_id in liquidated_ids
             or not supports_automation(config.portfolio.agent.harness)
             or not is_due_on(config, local_date)
         ):
@@ -601,6 +683,27 @@ def _cancel_archived_queued_runs(session: Session, now: datetime) -> None:
         run.error = "Cancelled because the portfolio was archived."
 
 
+def _cancel_liquidated_queued_runs(
+    session: Session,
+    liquidated_ids: set[int],
+    now: datetime,
+) -> None:
+    if not liquidated_ids:
+        return
+    runs = session.scalars(
+        select(EvaluationRun)
+        .where(
+            EvaluationRun.status == "queued",
+            EvaluationRun.portfolio_id.in_(liquidated_ids),
+        )
+        .with_for_update(skip_locked=True)
+    ).all()
+    for run in runs:
+        run.status = "cancelled"
+        run.finished_at = now
+        run.error = "Cancelled because the short portfolio is liquidated."
+
+
 def claim_runs(
     session: Session,
     *,
@@ -611,13 +714,27 @@ def claim_runs(
     now: datetime | None = None,
 ) -> dict:
     current_time = now or datetime.now(UTC)
+    short_managed = list(
+        session.scalars(
+            select(Portfolio)
+            .join(PortfolioEvaluatorConfig)
+            .where(
+                Portfolio.status == "active",
+                Portfolio.prompt_mode == "managed",
+                Portfolio.direction == "short",
+                PortfolioEvaluatorConfig.enabled.is_(True),
+            )
+        )
+    )
+    liquidated_ids = _liquidated_managed_ids(session, short_managed)
     # Serialize claims and every queue-creation path on the singleton settings
     # row. This keeps max_concurrency global across worker instances and
     # prevents manual/scheduled enqueue races.
     settings = get_settings(session, lock=True)
     _recover_stale_runs(session, current_time)
     _cancel_archived_queued_runs(session, current_time)
-    _enqueue_scheduled(session, settings, current_time)
+    _cancel_liquidated_queued_runs(session, liquidated_ids, current_time)
+    _enqueue_scheduled(session, settings, current_time, liquidated_ids)
 
     claimed: list[EvaluationRun] = []
     if settings.enabled:
@@ -638,6 +755,14 @@ def claim_runs(
                 .limit(claim_limit)
                 .with_for_update(skip_locked=True)
             ).all()
+            prompt_ids = sorted({run.portfolio.prompt_id for run in rows})
+            if prompt_ids:
+                # Prompt edits lock the same rows before checking running jobs.
+                # Taking these locks before queued -> running makes the claim
+                # and edit paths serialize on one prompt version.
+                session.scalars(
+                    select(Prompt.id).where(Prompt.id.in_(prompt_ids)).order_by(Prompt.id).with_for_update()
+                ).all()
             for run in rows:
                 run.status = "running"
                 run.attempt_count += 1
@@ -673,6 +798,11 @@ def submit_run(
     now: datetime | None = None,
 ) -> dict:
     current_time = now or datetime.now(UTC)
+    preflight_run = _load_run(session, run_id)
+    liquidated_before_submit = preflight_run.status in {
+        "running",
+        "cancel_requested",
+    } and preflight_run.portfolio_id in _liquidated_managed_ids(session, [preflight_run.portfolio])
     run = session.scalars(
         select(EvaluationRun)
         .where(EvaluationRun.id == run_id)
@@ -708,6 +838,16 @@ def submit_run(
         run.lease_expires_at = None
         session.commit()
         raise AdminOpError(409, "Portfolio is archived")
+    if liquidated_before_submit:
+        run.status = "skipped"
+        run.error = "Short portfolio liquidated before evaluation submission."
+        run.finished_at = current_time
+        run.lease_expires_at = None
+        session.commit()
+        raise AdminOpError(
+            409,
+            "Reset this liquidated short portfolio before submitting an allocation.",
+        )
 
     normalized = admin_ops._normalize_positions(run.portfolio.prompt, positions)
     effective = run.scheduled_for if run.trigger_kind == "scheduled" else effective_date_for(current_time)

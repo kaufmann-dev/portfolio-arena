@@ -1,6 +1,6 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { AllocationPolicy, ResolvedSymbol } from "../api/types";
+  import type { AllocationPolicy, Direction, ResolvedSymbol } from "../api/types";
   import { CircleCheck, ChevronUp, ChevronDown, X, Sigma } from "@lucide/svelte";
 
   export interface AllocationPayload {
@@ -28,6 +28,7 @@
     onSubmit: (payload: AllocationPayload) => Promise<void>;
     policy?: AllocationPolicy;
     entryKind?: "allocation" | "signal";
+    direction?: Direction;
   }
 
   const {
@@ -38,6 +39,7 @@
     onSubmit,
     policy,
     entryKind = "allocation",
+    direction = "long",
   }: Props = $props();
 
   let nextRowId = 1;
@@ -199,11 +201,13 @@
 <form onsubmit={submit} class="alloc-form" aria-busy={submitting}>
   {#if positionsEditable}
     <fieldset class="positions-fieldset">
-      <legend class="positions-legend">Target positions</legend>
+      <legend class="positions-legend">Target {direction} positions</legend>
       <div class="positions-head">
         <div>
-          <span class="positions-title" aria-hidden="true">Target positions</span>
-          <p class="muted">USD-denominated equities and ETFs · fully invested</p>
+          <span class="positions-title" aria-hidden="true">Target {direction} positions</span>
+          <p class="muted">
+            USD-denominated equities and ETFs · fully invested {direction} book
+          </p>
         </div>
         <span class={["weight-total", "num", sumOk ? "ok" : "neg"]} aria-live="polite">
           <Sigma size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -289,7 +293,9 @@
                 id="position-note-{row.id}"
                 class="pos-note"
                 type="text"
-                placeholder="Why this position belongs in the portfolio"
+                placeholder={direction === "short"
+                  ? "Why this security belongs in the short book"
+                  : "Why this security belongs in the long portfolio"}
                 bind:value={row.note}
                 aria-label="Agent note for row {index + 1}"
               />
@@ -323,7 +329,9 @@
       bind:value={note}
       rows="4"
       placeholder={entryKind === "signal"
-        ? "Summarize the independent thesis and evidence behind this signal."
+        ? direction === "short"
+          ? "Summarize why these securities should underperform and the evidence behind the signal."
+          : "Summarize why these securities should outperform and the evidence behind the signal."
         : "Summarize the thesis, changes, and what the next evaluation should watch."}></textarea>
   </div>
 

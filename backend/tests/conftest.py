@@ -316,7 +316,7 @@ def mcp_headers(api_key) -> dict:
 @pytest.fixture
 def sample_prompt(client, admin_headers) -> dict:
     response = client.post(
-        "/api/prompts",
+        "/api/admin/prompts",
         json={
             "name": "weekly-manager-v1",
             "text": "Manage a portfolio to beat SPY.",
@@ -378,6 +378,7 @@ def sample_portfolio(client, admin_headers, sample_agent, sample_prompt) -> dict
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "managed",
+            "direction": "long",
         },
         headers=admin_headers,
     )
