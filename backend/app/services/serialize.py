@@ -1,60 +1,38 @@
-"""Response shaping shared by public and admin routes."""
+"""Response shaping shared by public, admin, and MCP routes."""
+
+from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from ..config import BENCHMARK_IDENTITY, BENCHMARK_STRATEGY
-from ..models import Allocation, Portfolio
-from .arena import ArenaValuations, PortfolioValuation, age_days, downsample, too_early
-from .model_catalog import agent_out
-from .prompt_policy import (
-    allocation_policy_from_limits,
-    allocation_policy_out,
-    manual_execution_prompt,
+from ..models import Allocation, Portfolio, Signal
+from .arena import (
+    ArenaValuations,
+    PortfolioValuation,
+    RebuiltArena,
+    RebuiltPortfolioAnalysis,
+    age_days,
+    downsample,
 )
+from .model_catalog import agent_out
+from .prompt_policy import allocation_policy_out, manual_execution_prompt
+from .rebuilt import PolicyResult, selected_objective_score
 from .trading_calendar import is_locked
 from .valuation import AppliedAllocation, rebase_series
 
 
 def agent_ref(portfolio: Portfolio) -> dict:
-    if portfolio.is_benchmark:
-        return {
-            "id": None,
-            "slug": BENCHMARK_IDENTITY["slug"],
-            "name": BENCHMARK_IDENTITY["name"],
-            "model": None,
-            "harness": None,
-            "execution_model_id": None,
-            "reasoning_effort": None,
-        }
-    agent = portfolio.agent
-    if agent is None:
-        raise ValueError("Contestant portfolio is missing its agent")
-    result = agent_out(agent)
+    result = agent_out(portfolio.agent)
     result.pop("notes", None)
     return result
 
 
 def prompt_ref(portfolio: Portfolio) -> dict:
-    if portfolio.is_benchmark:
-        return {
-            "id": None,
-            "slug": BENCHMARK_STRATEGY["slug"],
-            "name": BENCHMARK_STRATEGY["name"],
-            "configurable": False,
-            "allocation_policy": allocation_policy_from_limits(
-                BENCHMARK_STRATEGY["min_position_weight_pct"],
-                BENCHMARK_STRATEGY["max_position_weight_pct"],
-            ),
-        }
-    prompt = portfolio.prompt
-    if prompt is None:
-        raise ValueError("Contestant portfolio is missing its prompt")
     return {
-        "id": prompt.id,
-        "slug": prompt.slug,
-        "name": prompt.name,
+        "id": portfolio.prompt.id,
+        "slug": portfolio.prompt.slug,
+        "name": portfolio.prompt.name,
         "configurable": True,
-        "allocation_policy": allocation_policy_out(prompt),
+        "allocation_policy": allocation_policy_out(portfolio.prompt),
     }
 
 
@@ -63,7 +41,6 @@ def allocation_positions(allocation: Allocation, admin: bool = False) -> list[di
         {
             "symbol": position.symbol,
             "weight_pct": float(position.weight_pct),
-            # Per-stock notes are admin-only — never exposed on public payloads.
             **({"note": position.note} if admin else {}),
         }
         for position in allocation.positions
@@ -91,6 +68,33 @@ def serialize_allocation(
     }
 
 
+def serialize_signal(
+    signal: Signal,
+    *,
+    admin: bool = False,
+    now: datetime | None = None,
+) -> dict:
+    """Serialize immutable signal inputs; provenance and position notes are private."""
+    now = now or datetime.now(UTC)
+    return {
+        "id": signal.id,
+        "portfolio_id": signal.portfolio_id,
+        "entered_at": signal.entered_at.isoformat(),
+        "effective_date": signal.effective_date.isoformat(),
+        "locked": is_locked(signal.effective_date, now),
+        "note": signal.note,
+        **({"provenance": signal.provenance} if admin else {}),
+        "positions": [
+            {
+                "symbol": position.symbol,
+                "weight_pct": float(position.weight_pct),
+                **({"note": position.note} if admin else {}),
+            }
+            for position in signal.positions
+        ],
+    }
+
+
 def _flags(valuation: PortfolioValuation) -> dict:
     result = valuation.result
     return {
@@ -101,25 +105,27 @@ def _flags(valuation: PortfolioValuation) -> dict:
 
 
 def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations) -> dict:
+    """Managed-track summary retained for admin callers and public ranking."""
     portfolio = valuation.portfolio
-    allocations = portfolio.allocations
     age = age_days(valuation, valuations.current_date)
     return {
+        "kind": "managed",
         "id": portfolio.id,
         "slug": portfolio.slug,
         "name": portfolio.name,
         "agent": agent_ref(portfolio),
         "prompt": prompt_ref(portfolio),
         "prompt_mode": portfolio.prompt_mode,
-        "is_benchmark": portfolio.is_benchmark,
         "status": portfolio.status,
+        "rank": None,
         "cost_bps": portfolio.cost_bps,
-        "inception": valuation.result.series[0]["date"]
-        if valuation.result and valuation.result.series
-        else None,
+        "inception": (
+            valuation.result.series[0]["date"] if valuation.result and valuation.result.series else None
+        ),
         "age_days": age,
-        "too_early": too_early(age),
-        "allocation_count": len(allocations),
+        "allocation_count": len(portfolio.allocations),
+        "evidence": valuation.metrics.get("evidence", "pending"),
+        "rank_score": valuation.metrics.get("ci_lower"),
         "metrics": valuation.metrics,
         "sparkline": downsample(valuation.result.series) if valuation.result else [],
         **_flags(valuation),
@@ -132,30 +138,18 @@ def serialize_detail(
     admin: bool = False,
     wrapper_prompt: str | None = None,
 ) -> dict:
+    """Managed detail, including preserved allocations and current holdings."""
     portfolio = valuation.portfolio
     result = valuation.result
     now = datetime.now(UTC)
-
-    applied_by_date: dict[str, AppliedAllocation] = {}
-    if result:
-        for applied in result.allocations:
-            applied_by_date[applied.effective_date] = applied
-
+    applied_by_date = {applied.effective_date: applied for applied in (result.allocations if result else [])}
     series = result.series if result else []
-    spy_overlay = []
-    if series:
-        spy_overlay = rebase_series(valuations.spy_series, series[0]["date"], series[-1]["date"])
-
+    spy_overlay = (
+        rebase_series(valuations.spy_series, series[0]["date"], series[-1]["date"]) if series else []
+    )
     return {
         **serialize_summary(valuation, valuations),
-        "execution_prompt": (
-            None
-            if portfolio.is_benchmark
-            else manual_execution_prompt(
-                portfolio,
-                wrapper_prompt or "",
-            )
-        ),
+        "execution_prompt": manual_execution_prompt(portfolio, wrapper_prompt or ""),
         "series": series,
         "spy_series": spy_overlay,
         "holdings": [
@@ -163,7 +157,6 @@ def serialize_detail(
                 "symbol": holding.symbol,
                 "weight_pct": holding.weight_pct,
                 "target_weight_pct": holding.target_weight_pct,
-                # Buy/current price and per-stock note are admin-only handoff fields.
                 **(
                     {
                         "entry_price": holding.entry_price,
@@ -179,8 +172,242 @@ def serialize_detail(
         "stale_days": result.stale_days if result else {},
         "allocations": [
             serialize_allocation(
-                allocation, applied_by_date.get(allocation.effective_date.isoformat()), now, admin
+                allocation,
+                applied_by_date.get(allocation.effective_date.isoformat()),
+                now,
+                admin,
             )
             for allocation in reversed(portfolio.allocations)
+        ],
+    }
+
+
+def synthetic_spy_row(
+    spy_series: list[dict],
+    start: str | None = None,
+    *,
+    precomputed_nav: bool = False,
+) -> dict:
+    points = [point for point in spy_series if start is None or point["date"] >= start]
+    sparkline = []
+    metrics = {
+        "has_data": bool(points),
+        "itd_return": None,
+        "spy_return": None,
+        "cumulative_excess": 0.0 if points else None,
+        "mean_daily_alpha": 0.0 if len(points) > 1 else None,
+        "ci_lower": 0.0 if len(points) > 1 else None,
+        "ci_upper": 0.0 if len(points) > 1 else None,
+        "evidence": "inconclusive" if len(points) > 1 else "pending",
+    }
+    if points:
+        value_key = "nav" if precomputed_nav else "close"
+        base = float(points[0][value_key])
+        navs = [float(point[value_key]) / base * 100.0 for point in points]
+        sparkline = downsample(
+            [{"date": point["date"], "nav": nav} for point, nav in zip(points, navs, strict=True)]
+        )
+        metrics.update(
+            {
+                "start_date": points[0]["date"],
+                "end_date": points[-1]["date"],
+                "itd_return": navs[-1] / 100.0 - 1.0,
+                "spy_return": navs[-1] / 100.0 - 1.0,
+            }
+        )
+    return {
+        "kind": "benchmark",
+        "id": None,
+        "slug": "spy",
+        "name": "SPY",
+        "status": "reference",
+        "rank": None,
+        "evidence": metrics["evidence"],
+        "rank_score": None,
+        "metrics": metrics,
+        "sparkline": sparkline,
+    }
+
+
+def rank_rows(rows: list[dict]) -> list[dict]:
+    """Rank active, evidenced contestants by adjusted lower confidence bound."""
+    eligible = sorted(
+        (
+            row
+            for row in rows
+            if row.get("kind") != "benchmark"
+            and row.get("status") == "active"
+            and row.get("rank_score") is not None
+        ),
+        key=lambda row: (-row["rank_score"], row["name"].casefold(), row["id"]),
+    )
+    for rank, row in enumerate(eligible, start=1):
+        row["rank"] = rank
+    return rows
+
+
+def _public_horizon(item: dict) -> dict:
+    payload = {key: value for key, value in item.items() if key != "completed_cohorts"}
+    payload["has_data"] = bool(item.get("complete_count") or item.get("open_count"))
+    return payload
+
+
+def _selected_policy_payload(
+    policy: PolicyResult | None,
+    objective: str,
+    displayed_metrics: dict,
+) -> dict | None:
+    if policy is None:
+        return None
+    return {
+        "horizon": policy.horizon,
+        "exposure_pct": policy.exposure_pct,
+        "objective_score": selected_objective_score(displayed_metrics, objective),
+    }
+
+
+def serialize_rebuilt_summary(
+    analysis: RebuiltPortfolioAnalysis,
+    arena: RebuiltArena,
+    *,
+    view: str,
+    horizon: int | None = None,
+) -> dict:
+    portfolio = analysis.portfolio
+    policy: PolicyResult | None
+    direct: dict | None = None
+    common_admitted = portfolio.id in arena.common_member_ids
+    displayed_series: list[dict] = []
+    common_pair = arena.common_policy if view == "common" else None
+    if view == "common":
+        policy = (
+            analysis.policies.get((common_pair["horizon"], common_pair["exposure_pct"]))
+            if common_pair and common_admitted
+            else None
+        )
+        if policy is not None:
+            displayed_series = arena.common_series_by_portfolio_id.get(portfolio.id, [])
+    elif view == "tuned":
+        policy = analysis.selected
+        displayed_series = policy.series if policy else []
+    elif view == "signal":
+        direct = next(
+            (item for item in analysis.signal_horizons if item["horizon"] == horizon),
+            None,
+        )
+        policy = analysis.policies.get((horizon, 100)) if horizon is not None else None
+        displayed_series = policy.series if policy else []
+    else:
+        raise ValueError(f"Unknown rebuilt view: {view}")
+
+    if view == "common":
+        metrics = (
+            arena.common_metrics_by_portfolio_id.get(portfolio.id) if policy is not None else None
+        ) or {
+            "has_data": False,
+            "eligible": False,
+            "evidence": "pending",
+            "ci_lower": None,
+            "ci_upper": None,
+        }
+    else:
+        metrics = (_public_horizon(direct) if direct is not None else None) or (
+            policy.metrics if policy else {"has_data": False, "evidence": "pending"}
+        )
+    selected_horizon = (
+        direct
+        if direct is not None
+        else next(
+            (
+                item
+                for item in analysis.signal_horizons
+                if (
+                    (policy and item["horizon"] == policy.horizon)
+                    or (view == "common" and common_pair and item["horizon"] == common_pair["horizon"])
+                )
+            ),
+            None,
+        )
+    )
+    rank_score = (
+        metrics.get("ci_lower")
+        if metrics.get("eligible") is True and metrics.get("evidence") != "pending"
+        else None
+    )
+    completion = {
+        key: selected_horizon.get(key) if selected_horizon else default
+        for key, default in (
+            ("complete_count", 0),
+            ("open_count", 0),
+            ("completion_ratio", 0.0),
+            ("eligible", False),
+        )
+    }
+    return {
+        "kind": "rebuilt",
+        "id": portfolio.id,
+        "slug": portfolio.slug,
+        "name": portfolio.name,
+        "agent": agent_ref(portfolio),
+        "prompt": prompt_ref(portfolio),
+        "prompt_mode": "rebuilt",
+        "status": portfolio.status,
+        "cost_bps": portfolio.cost_bps,
+        "founding_v2": portfolio.founding_v2,
+        "common_admitted": common_admitted,
+        "rank": None,
+        "evidence": metrics.get("evidence", "pending"),
+        "rank_score": rank_score,
+        "metrics": metrics,
+        "selected_policy": _selected_policy_payload(policy, arena.objective, metrics),
+        "completion": completion,
+        "signal_horizons": [_public_horizon(item) for item in analysis.signal_horizons],
+        "sparkline": downsample(displayed_series),
+        "error": analysis.error,
+        "stale_data": analysis.stale_data,
+        "frozen_symbols": analysis.frozen_symbols,
+    }
+
+
+def serialize_rebuilt_detail(
+    analysis: RebuiltPortfolioAnalysis,
+    arena: RebuiltArena,
+    *,
+    view: str,
+    horizon: int | None,
+    admin: bool = False,
+    wrapper_prompt: str = "",
+) -> dict:
+    summary = serialize_rebuilt_summary(analysis, arena, view=view, horizon=horizon)
+    selected = summary["selected_policy"]
+    policy = analysis.policies.get((selected["horizon"], selected["exposure_pct"])) if selected else None
+    recent_signals = sorted(analysis.portfolio.signals, key=lambda signal: signal.id, reverse=True)[:20]
+    if view == "common":
+        series = arena.common_series_by_portfolio_id.get(analysis.portfolio.id, []) if policy else []
+        spy_series = arena.common_spy_series if policy else []
+    else:
+        series = policy.series if policy else []
+        spy_series = policy.spy_series if policy else []
+    return {
+        **summary,
+        "execution_prompt": manual_execution_prompt(analysis.portfolio, wrapper_prompt),
+        "series": series,
+        "spy_series": spy_series,
+        "holdings": policy.holdings if policy else [],
+        "active_cohorts": policy.active_cohorts if policy else [],
+        "signals": [serialize_signal(signal, admin=admin) for signal in recent_signals],
+        "signals_next_cursor": (
+            recent_signals[-1].id if len(analysis.portfolio.signals) > len(recent_signals) else None
+        ),
+        "policy_matrix": [
+            {
+                "horizon": item.horizon,
+                "exposure_pct": item.exposure_pct,
+                "metrics": item.metrics,
+            }
+            for item in sorted(
+                analysis.policies.values(),
+                key=lambda item: (item.horizon, item.exposure_pct),
+            )
         ],
     }

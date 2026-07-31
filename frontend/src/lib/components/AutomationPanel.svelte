@@ -164,6 +164,8 @@
   }
 
   function toggleWeekday(portfolioId: number, weekday: number) {
+    const config = dashboard?.portfolios.find((item) => item.portfolio.id === portfolioId);
+    if (config?.portfolio.prompt_mode === "rebuilt") return;
     const draft = configDrafts[portfolioId];
     if (!draft) return;
     draft.weekdays = draft.weekdays.includes(weekday)
@@ -414,8 +416,8 @@
         <div>
           <h2>Portfolio automation</h2>
           <p class="muted">
-            Integrated automation currently supports Codex agents. Selected weekdays shift to the next trading
-            day on market holidays; no weekdays means manual-only.
+            Rebuilt portfolios run every trading day. Managed portfolios retain a configurable weekday
+            cadence; selected weekdays shift to the next trading day on market holidays.
           </p>
         </div>
       </div>
@@ -450,6 +452,10 @@
                         type="button"
                         class={["weekday", { selected: draft.weekdays.includes(weekday.value) }]}
                         aria-pressed={draft.weekdays.includes(weekday.value)}
+                        disabled={config.portfolio.prompt_mode === "rebuilt"}
+                        title={config.portfolio.prompt_mode === "rebuilt"
+                          ? "Rebuilt signals are required every trading day"
+                          : undefined}
                         onclick={() => toggleWeekday(config.portfolio.id, weekday.value)}
                       >
                         {weekday.label}
@@ -558,14 +564,17 @@
               <td class="right num">{run.attempt_count}/{run.max_attempts}</td>
               <td class="num">{fmtDateTime(run.finished_at)}</td>
               <td>
+                {#if run.result}
+                  <span class="muted">
+                    {run.result.kind === "allocation" ? "Allocation" : "Signal"} #{run.result.id}
+                  </span>
+                {/if}
                 {#if run.report || run.error}
                   <details>
                     <summary>{run.error ? "Details" : "Report"}</summary>
                     <pre class={{ "error-report": Boolean(run.error) }}>{run.error ?? run.report}</pre>
                   </details>
-                {:else if run.allocation_id}
-                  <span class="muted">Allocation #{run.allocation_id}</span>
-                {:else}
+                {:else if !run.result}
                   <span class="muted">—</span>
                 {/if}
               </td>

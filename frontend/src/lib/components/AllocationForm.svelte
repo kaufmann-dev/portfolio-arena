@@ -27,6 +27,7 @@
     submitLabel: string;
     onSubmit: (payload: AllocationPayload) => Promise<void>;
     policy?: AllocationPolicy;
+    entryKind?: "allocation" | "signal";
   }
 
   const {
@@ -36,6 +37,7 @@
     submitLabel,
     onSubmit,
     policy,
+    entryKind = "allocation",
   }: Props = $props();
 
   let nextRowId = 1;
@@ -307,17 +309,22 @@
     </fieldset>
   {:else}
     <p class="muted locked-note">
-      Positions are locked — the effective close has passed. Only the note can change.
+      Positions are locked — the effective close has passed. Only the {entryKind} note can change.
     </p>
   {/if}
 
   <div class="field">
-    <label for="alloc-note">Allocation handoff <span class="muted">optional</span></label>
+    <label for="alloc-note">
+      {entryKind === "signal" ? "Signal rationale" : "Allocation handoff"}
+      <span class="muted">optional</span>
+    </label>
     <textarea
       id="alloc-note"
       bind:value={note}
       rows="4"
-      placeholder="Summarize the thesis, changes, and what the next evaluation should watch."></textarea>
+      placeholder={entryKind === "signal"
+        ? "Summarize the independent thesis and evidence behind this signal."
+        : "Summarize the thesis, changes, and what the next evaluation should watch."}></textarea>
   </div>
 
   {#if formError}

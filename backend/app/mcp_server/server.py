@@ -29,21 +29,24 @@ INTERNAL_READ_TOOLS = frozenset(
 )
 
 INSTRUCTIONS = """\
-Portfolio Arena tracks AI-managed stock portfolios against SPY/RSP benchmarks.
-NAVs are recomputed from locked allocations plus cached prices — nothing is
-snapshotted. Typical rebalance workflow for one portfolio:
+Portfolio Arena measures managed allocations and independent daily rebuilt
+signals against a synthetic SPY reference. Results are recomputed from inputs
+and cached prices; NAVs are never snapshotted.
 
 1. `get_portfolio(slug_or_id)` — read its canonical prompt, prompt mode, and
 allowed evaluation context. Managed portfolios include holdings, notes, history,
-and performance; rebuilt portfolios intentionally expose none of that state.
+and performance. Rebuilt portfolios intentionally expose none of their prior
+signals, notes, holdings, costs, or performance.
 2. Follow the returned prompt allocation policy. Weights must sum to exactly
    100 across USD-denominated equities and ETFs. Validate unfamiliar tickers
    with `validate_symbol` / `search_symbols`.
-3. `create_allocation(portfolio_id, positions, note)` — the per-position `note`
-   and the general `note` are the handoff to the next rebalance. Entry time is
-   server-set and the allocation freezes after its effective market close.
+3. Managed: call `create_allocation(...)` exactly once. Rebuilt: call
+   `create_signal(...)` exactly once. Entry time and the first future effective
+   close are server-set. Rebuilt signals are complete independent portfolios;
+   never infer or preserve a previous signal.
 
-`get_arena_overview()` compares every portfolio's performance at once.
+`get_arena_overview()` returns separate managed and rebuilt summaries.
+`get_rebuilt_analysis(...)` exposes the rebuilt Common, Tuned, and Signal views.
 """
 
 mcp = FastMCP(

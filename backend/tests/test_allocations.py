@@ -32,8 +32,8 @@ class TestCreation:
         portfolio = created.json()
         assert "allocation" not in portfolio
 
-        # It shows up on the leaderboard with no track record yet.
-        rows = client.get("/api/leaderboard").json()["portfolios"]
+        # It shows up in the managed arena with no track record yet.
+        rows = client.get("/api/arena/managed").json()["portfolios"]
         row = next(p for p in rows if p["id"] == portfolio["id"])
         assert row["allocation_count"] == 0
         assert row["metrics"]["has_data"] is False
@@ -250,7 +250,7 @@ class TestLockEnforcement:
         response = client.delete(f"/api/allocations/{allocation_id}", headers=admin_headers)
         assert response.status_code == 403
 
-    def test_delete_last_pending_allocation_clears_benchmarks(
+    def test_delete_last_pending_allocation_clears_managed_history(
         self,
         client,
         admin_headers,
@@ -262,10 +262,12 @@ class TestLockEnforcement:
         )
         assert response.status_code == 200, response.text
 
-        benchmarks = [
-            row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]
-        ]
-        assert all(row["allocation_count"] == 0 for row in benchmarks)
+        rows = client.get("/api/arena/managed").json()["portfolios"]
+        portfolio = next(row for row in rows if row["id"] == sample_portfolio["id"])
+        spy = next(row for row in rows if row["kind"] == "benchmark")
+        assert portfolio["allocation_count"] == 0
+        assert portfolio["metrics"]["has_data"] is False
+        assert spy["id"] is None
 
     def test_locked_metadata_still_editable(self, client, admin_headers, sample_portfolio):
         allocation_id = sample_portfolio["allocation"]["id"]
@@ -280,32 +282,6 @@ class TestLockEnforcement:
         payload = response.json()
         assert payload["note"] == "regime call: risk-on"
         assert payload["locked"] is True
-
-    def test_benchmark_allocations_untouchable(self, client, admin_headers, sample_portfolio):
-        backdate_allocation(sample_portfolio["allocation"]["id"])
-        client.get("/api/leaderboard")  # triggers benchmark allocation seeding
-
-        from sqlalchemy import select
-
-        from app.db import session_factory
-        from app.models import Allocation, Portfolio
-
-        with session_factory()() as session:
-            benchmark_allocation = session.scalars(
-                select(Allocation).join(Portfolio).where(Portfolio.is_benchmark.is_(True))
-            ).first()
-        assert benchmark_allocation is not None
-
-        response = client.put(
-            f"/api/allocations/{benchmark_allocation.id}",
-            json={"note": "tamper"},
-            headers=admin_headers,
-        )
-        assert response.status_code == 403
-        assert (
-            client.delete(f"/api/allocations/{benchmark_allocation.id}", headers=admin_headers).status_code
-            == 403
-        )
 
 
 class TestSymbolEndpoint:

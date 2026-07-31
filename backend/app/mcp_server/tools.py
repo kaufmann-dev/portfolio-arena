@@ -13,17 +13,20 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..config import BENCHMARK_STRATEGY
 from ..db import session_factory
 from ..models import Agent, ModelDefinition, Portfolio, Prompt
 from ..schemas import AllocationPolicyIn, PositionIn
 from ..services import admin_ops, evaluator
 from ..services.admin_ops import AdminOpError
-from ..services.arena import compute_valuations, load_portfolios
-from ..services.benchmarks import reconcile_benchmark_allocations
+from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
 from ..services.harnesses import harnesses_out
 from ..services.model_catalog import agent_out
-from ..services.serialize import serialize_summary
+from ..services.serialize import (
+    rank_rows,
+    serialize_rebuilt_summary,
+    serialize_summary,
+    synthetic_spy_row,
+)
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
 from ..services.trading_calendar import effective_date_for
 from .server import mcp
@@ -75,7 +78,27 @@ def get_portfolio(slug_or_id: str) -> dict:
     the canonical strategy, allocation policy, prompt mode, and next effective
     date. Accepts a slug or a numeric id."""
     with _session() as session:
-        portfolio_id = _resolve_portfolio(session, slug_or_id).id
+        portfolio = _resolve_portfolio(session, slug_or_id)
+        if portfolio.prompt_mode == "rebuilt":
+            now = datetime.now(UTC)
+            return {
+                "as_of": None,
+                "market_data_status": None,
+                "portfolio": {
+                    "id": portfolio.id,
+                    "slug": portfolio.slug,
+                    "name": portfolio.name,
+                    "agent": agent_out(portfolio.agent),
+                    "prompt": admin_ops.prompt_out(portfolio.prompt),
+                    "prompt_mode": "rebuilt",
+                    "status": portfolio.status,
+                    "next_entry": {
+                        "entered_at": now.isoformat(),
+                        "effective_date": effective_date_for(now).isoformat(),
+                    },
+                },
+            }
+        portfolio_id = portfolio.id
         detail = _guard(admin_ops.portfolio_admin_detail, session, portfolio_id)
         payload = detail["portfolio"]
         # Drop presentation data and the caller-facing manual prompt. Automated
@@ -87,27 +110,6 @@ def get_portfolio(slug_or_id: str) -> dict:
         prompt = session.get(Prompt, prompt_id) if prompt_id is not None else None
         if prompt is not None:
             payload["prompt"] = admin_ops.prompt_out(prompt)
-        elif payload["is_benchmark"]:
-            payload["prompt"] = {
-                **prompt_payload,
-                "text": BENCHMARK_STRATEGY["text"],
-                "notes": "Hardcoded benchmark strategy.",
-            }
-        if payload.get("prompt_mode") == "rebuilt":
-            for key in (
-                "cost_bps",
-                "inception",
-                "age_days",
-                "too_early",
-                "allocation_count",
-                "metrics",
-                "stale_data",
-                "frozen_symbols",
-                "error",
-                "holdings",
-                "allocations",
-            ):
-                payload.pop(key, None)
         now = datetime.now(UTC)
         payload["next_entry"] = {
             "entered_at": now.isoformat(),
@@ -122,26 +124,136 @@ def get_portfolio(slug_or_id: str) -> dict:
 
 @mcp.tool()
 def get_arena_overview() -> dict:
-    """Compare every portfolio (contestants and benchmarks) at once: performance
-    metrics, return vs SPY, volatility, age, and allocation count — the
-    leaderboard view, for judging which portfolios are performing."""
+    """Separate managed and default rebuilt (Common/Canonical/Net) summaries."""
     with _session() as session:
-        if reconcile_benchmark_allocations(session):
-            session.commit()
         portfolios = load_portfolios(session)
         valuations = compute_valuations(session, portfolios)
-        rows = []
+        managed_rows = []
         for portfolio in portfolios:
             valuation = valuations.by_portfolio_id.get(portfolio.id)
             if valuation is None:
                 continue
             summary = serialize_summary(valuation, valuations)
             summary.pop("sparkline", None)
-            rows.append(summary)
+            managed_rows.append(summary)
+        rank_rows(managed_rows)
+
+        rebuilt = compute_rebuilt_arena(
+            session,
+            portfolios,
+            objective="canonical",
+            cost_basis="net",
+        )
+        rebuilt_rows = [
+            serialize_rebuilt_summary(analysis, rebuilt, view="common")
+            for analysis in rebuilt.by_portfolio_id.values()
+        ]
+        for row in rebuilt_rows:
+            row.pop("sparkline", None)
+        rank_rows(rebuilt_rows)
         return {
-            "as_of": valuations.as_of,
-            "market_data_status": valuations.market_data_status,
-            "portfolios": rows,
+            "managed": {
+                "as_of": valuations.as_of,
+                "market_data_status": valuations.market_data_status,
+                "portfolios": [
+                    synthetic_spy_row(valuations.spy_series),
+                    *managed_rows,
+                ],
+            },
+            "rebuilt": {
+                "as_of": rebuilt.as_of,
+                "market_data_status": rebuilt.market_data_status,
+                "context": {
+                    "view": "common",
+                    "objective": "canonical",
+                    "cost_basis": "net",
+                    "horizon": None,
+                },
+                "common_policy": rebuilt.common_policy,
+                "portfolios": [
+                    (
+                        synthetic_spy_row(rebuilt.common_spy_series, precomputed_nav=True)
+                        if rebuilt.common_spy_series
+                        else synthetic_spy_row(rebuilt.spy_series)
+                    ),
+                    *rebuilt_rows,
+                ],
+            },
+        }
+
+
+@mcp.tool()
+def get_rebuilt_analysis(
+    view: str = "common",
+    objective: str = "canonical",
+    cost_basis: str = "net",
+    horizon: int | None = None,
+) -> dict:
+    """Analyze rebuilt portfolios in Common, Tuned, or direct Signal view.
+
+    Signal view requires a 1-20 horizon, canonical objective, and gross basis.
+    Common/Tuned do not accept a horizon.
+    """
+    allowed_views = {"common", "tuned", "signal"}
+    allowed_objectives = {
+        "canonical",
+        "max_alpha",
+        "max_information_ratio",
+        "max_sharpe",
+    }
+    if view not in allowed_views:
+        raise ValueError("view must be common, tuned, or signal")
+    if objective not in allowed_objectives:
+        raise ValueError("objective must be canonical, max_alpha, max_information_ratio, or max_sharpe")
+    if cost_basis not in {"net", "gross"}:
+        raise ValueError("cost_basis must be net or gross")
+    if view == "signal":
+        if horizon is None or horizon < 1 or horizon > 20:
+            raise ValueError("signal view requires horizon between 1 and 20")
+        if objective != "canonical" or cost_basis != "gross":
+            raise ValueError("signal view requires objective=canonical and cost_basis=gross")
+    elif horizon is not None:
+        raise ValueError("horizon is valid only for signal view")
+
+    with _session() as session:
+        portfolios = load_portfolios(session)
+        arena = compute_rebuilt_arena(
+            session,
+            portfolios,
+            objective=objective,
+            cost_basis=cost_basis,
+        )
+        rows = [
+            serialize_rebuilt_summary(
+                analysis,
+                arena,
+                view=view,
+                horizon=horizon,
+            )
+            for analysis in arena.by_portfolio_id.values()
+        ]
+        for row in rows:
+            row.pop("sparkline", None)
+        rank_rows(rows)
+        spy_row = (
+            synthetic_spy_row(arena.common_spy_series, precomputed_nav=True)
+            if view == "common" and arena.common_spy_series
+            else synthetic_spy_row(arena.spy_series)
+        )
+        return {
+            "as_of": arena.as_of,
+            "market_data_status": arena.market_data_status,
+            "context": {
+                "view": view,
+                "objective": objective,
+                "cost_basis": cost_basis,
+                "horizon": horizon,
+            },
+            "common_policy": arena.common_policy,
+            "portfolios": [
+                spy_row,
+                *rows,
+            ],
         }
 
 
@@ -242,8 +354,8 @@ def validate_symbol(symbol: str) -> dict:
 
 @mcp.tool()
 def get_effective_date() -> dict:
-    """The effective market-close date a new allocation entered right now would
-    take (the no-backdating rule: first close strictly after entry)."""
+    """The effective market-close date a new allocation or signal entered right
+    now would take (the no-backdating rule: first close strictly after entry)."""
     now = datetime.now(UTC)
     return {"entered_at": now.isoformat(), "effective_date": effective_date_for(now).isoformat()}
 
@@ -440,16 +552,15 @@ def update_portfolio(
 
 @mcp.tool()
 def delete_portfolio(portfolio_id: int) -> dict:
-    """Delete a portfolio and all of its allocations. Irreversible."""
+    """Delete a portfolio and all of its mode-specific history. Irreversible."""
     with _session() as session:
         return _guard(admin_ops.delete_portfolio, session, portfolio_id)
 
 
 @mcp.tool()
 def reset_portfolio(portfolio_id: int) -> dict:
-    """Reset a portfolio to its never-started state by deleting all allocations
-    and performance history. The portfolio identity, evaluator configuration,
-    and evaluator audit records are preserved. Irreversible."""
+    """Delete the portfolio's mode-specific managed allocations or rebuilt
+    signals. Identity, evaluator configuration, and evaluator audit remain."""
     with _session() as session:
         return _guard(admin_ops.reset_portfolio, session, portfolio_id)
 
@@ -459,7 +570,7 @@ def reset_portfolio(portfolio_id: int) -> dict:
 
 @mcp.tool()
 def create_allocation(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
-    """Enter a rebalance (or the first allocation). Weights must sum to exactly
+    """Enter a managed rebalance (or first allocation). Weights must sum to exactly
     100 and satisfy the portfolio prompt's position limits. Each position's
     `note` and the general `note` are the handoff to the next rebalance. Entry
     time is server-set; the allocation freezes after its effective close."""
@@ -484,6 +595,45 @@ def delete_allocation(allocation_id: int) -> dict:
     """Delete a pending (unlocked) allocation. Locked allocations cannot be deleted."""
     with _session() as session:
         return _guard(admin_ops.delete_allocation, session, allocation_id)
+
+
+# --- Writes: rebuilt signals -----------------------------------------------
+
+
+@mcp.tool()
+def create_signal(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
+    """Enter one independent rebuilt signal portfolio for the next effective
+    close. Weights must total 100 and satisfy the prompt policy. The server sets
+    entry/effective time; do not use this for managed portfolios."""
+    with _session() as session:
+        return _guard(
+            admin_ops.create_signal,
+            session,
+            portfolio_id,
+            _positions(positions),
+            note,
+            provenance="mcp",
+        )
+
+
+@mcp.tool()
+def update_signal(
+    signal_id: int,
+    positions: list[PositionIn] | None = None,
+    note: str | None = None,
+) -> dict:
+    """Edit a pending rebuilt signal. A signal is wholly immutable after its
+    effective close."""
+    with _session() as session:
+        pos = _positions(positions) if positions is not None else None
+        return _guard(admin_ops.update_signal, session, signal_id, pos, note)
+
+
+@mcp.tool()
+def delete_signal(signal_id: int) -> dict:
+    """Delete a pending rebuilt signal. Locked signals cannot be deleted."""
+    with _session() as session:
+        return _guard(admin_ops.delete_signal, session, signal_id)
 
 
 # --- Evaluator control -----------------------------------------------------
@@ -525,7 +675,8 @@ def configure_portfolio_evaluator(
     enabled: bool,
     weekdays: list[int],
 ) -> dict:
-    """Enable or disable one eligible portfolio and choose weekdays 0-4."""
+    """Enable or disable one eligible portfolio. Managed portfolios accept
+    selected weekdays 0-4; rebuilt portfolios always run Monday-Friday."""
     with _session() as session:
         return _guard(
             evaluator.update_portfolio_config,

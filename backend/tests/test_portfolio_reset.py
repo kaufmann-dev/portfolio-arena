@@ -49,6 +49,7 @@ def test_reset_removes_locked_and_pending_history_and_allows_fresh_start(
     assert response.json() == {
         "ok": True,
         "deleted_allocations": 2,
+        "deleted_signals": 0,
         "cancelled_queued_runs": 0,
         "cancellation_requested_runs": 0,
     }
@@ -72,7 +73,7 @@ def test_reset_removes_locked_and_pending_history_and_allows_fresh_start(
     assert first.json()["turnover_pct"] is None
 
 
-def test_reset_is_idempotent_admin_only_and_rejects_benchmarks(
+def test_reset_is_idempotent_admin_only_and_rejects_missing_portfolio(
     client,
     admin_headers,
     sample_portfolio,
@@ -90,38 +91,7 @@ def test_reset_is_idempotent_admin_only_and_rejects_benchmarks(
     assert first.json()["deleted_allocations"] == 1
     assert second.json()["deleted_allocations"] == 0
 
-    benchmark = next(
-        row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]
-    )
-    assert (
-        client.post(
-            f"/api/portfolios/{benchmark['id']}/reset",
-            headers=admin_headers,
-        ).status_code
-        == 403
-    )
     assert client.post("/api/portfolios/999999/reset", headers=admin_headers).status_code == 404
-
-
-def test_reset_last_contestant_history_clears_benchmarks(
-    client,
-    admin_headers,
-    sample_portfolio,
-):
-    backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-    seeded = client.get("/api/leaderboard").json()["portfolios"]
-    assert all(row["allocation_count"] == 1 for row in seeded if row["is_benchmark"])
-
-    response = client.post(
-        f"/api/portfolios/{sample_portfolio['id']}/reset",
-        headers=admin_headers,
-    )
-    assert response.status_code == 200, response.text
-
-    benchmarks = [row for row in client.get("/api/leaderboard").json()["portfolios"] if row["is_benchmark"]]
-    assert all(row["allocation_count"] == 0 for row in benchmarks)
-    assert all(row["inception"] is None for row in benchmarks)
-    assert all(row["metrics"]["has_data"] is False for row in benchmarks)
 
 
 def test_reset_keeps_automation_enabled_and_cancels_queued_work(

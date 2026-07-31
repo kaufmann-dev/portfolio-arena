@@ -94,6 +94,18 @@ class AllocationUpdate(BaseModel):
     note: str | None = None
 
 
+class SignalCreate(BaseModel):
+    positions: list[PositionIn] = Field(min_length=1)
+    note: str = Field(default="", max_length=4000)
+
+
+class SignalUpdate(BaseModel):
+    """A pending signal may be replaced as a complete immutable snapshot."""
+
+    positions: list[PositionIn] | None = Field(default=None, min_length=1)
+    note: str | None = Field(default=None, max_length=4000)
+
+
 class PortfolioCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None

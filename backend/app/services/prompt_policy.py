@@ -47,21 +47,22 @@ Research all decision-relevant current information with Massive and live web sea
 {{submission_instructions}}"""
 
 DEFAULT_REBUILT_WRAPPER_PROMPT = """\
-Evaluate the Portfolio Arena portfolio `{{portfolio_slug}}` and produce its next allocation.
+Evaluate the Portfolio Arena portfolio `{{portfolio_slug}}` and produce its next independent signal
+allocation.
 
-Call the Portfolio Arena `get_portfolio` tool first. Treat its prompt mode, strategy, allocation
-policy, and effective date as authoritative. The response intentionally excludes current holdings,
-allocation history, prior notes, portfolio performance, turnover, and transaction costs.
+Call the Portfolio Arena `get_portfolio` tool first. Treat its prompt mode, strategy, allocation policy,
+and effective date as authoritative. The response intentionally excludes current holdings, signal
+history, prior notes, performance, turnover, and transaction costs.
 
 Act as a US equity portfolio manager aiming to outperform SPY. Search across the full eligible US
 market rather than defaulting to index constituents, household names, or recent winners. Do not mirror
 SPY. Select a stock or ETF only when it has a distinct, falsifiable, security-specific investment
 thesis supported by current evidence.
 
-At every evaluation, rebuild the complete target portfolio independently from scratch across the full
-eligible universe using current evidence and the strategy. Evaluate every candidate without regard to
-the previous portfolio. Select each security only if it independently qualifies as one of the best
-current opportunities. Produce a complete target allocation at every evaluation.
+At every evaluation, construct the complete signal portfolio independently from scratch. Evaluate
+every candidate without regard to previous signals. Select each security only if it independently
+qualifies as one of the strongest current opportunities under the strategy, and produce a complete
+target allocation.
 
 Strategy:
 {{strategy_text}}
@@ -73,7 +74,7 @@ Research all decision-relevant current information with Massive and live web sea
 
 {{submission_instructions}}"""
 
-AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
+MANAGED_AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
 Do not call any write tool: the worker will validate and submit the final structured proposal
 atomically.
 
@@ -84,10 +85,147 @@ Return `status` as `proposal` with an empty `error` for a valid allocation. If `
 or no valid allocation can be produced, return `status` as `blocked`, no positions, and a concise
 `error`; never invent a placeholder symbol."""
 
-MANUAL_SUBMISSION_INSTRUCTIONS = """\
+REBUILT_AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
+Do not call any write tool: the worker will validate and submit the final structured proposal
+atomically.
+
+The report should briefly explain the signal-level decision, key evidence, material risks, and what
+would change the next evaluation. Position notes should be concise signal context.
+
+Return `status` as `proposal` with an empty `error` for a valid signal allocation. If `get_portfolio`
+fails or no valid signal allocation can be produced, return `status` as `blocked`, no positions, and
+a concise `error`; never invent a placeholder symbol."""
+
+MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS = """\
 When the analysis is complete, call `create_allocation` exactly once with the portfolio id returned by
 `get_portfolio`. Include a concise portfolio-level note and useful per-position notes so the next
 evaluation can understand the decision."""
+
+REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS = """\
+When the analysis is complete, call `create_signal` exactly once with the portfolio id returned by
+`get_portfolio`. Include a concise portfolio-level note and useful per-position notes that explain
+the independent signal."""
+
+V2_REBUILT_PROMPTS = {
+    "barebones-weekly": {
+        "slug": "unrestricted-selection",
+        "name": "Unrestricted Selection",
+        "text": """\
+Select the strongest evidence-backed opportunities for expected total return relative to SPY without
+restricting the source of the edge.
+
+For every candidate, identify the new, changing, or underprocessed fact; the market's apparent current
+expectation; why that expectation is wrong; the causal path from the fact to earnings, cash flow,
+valuation, or capital returns; why the gap remains unpriced; and the strongest contrary evidence and
+downside. Rank candidates comparatively using quantitative evidence wherever possible.
+
+Reject generic claims that a company is great, cheap, exposed to AI, oversold, or showing momentum
+unless a specific and falsifiable mispricing explains why it should outperform. Avoid hidden
+concentration in the same economic dependency across different securities.""",
+    },
+    "weekly-economic-read-through": {
+        "slug": "economic-read-through",
+        "name": "Economic Read-Through",
+        "text": """\
+Select opportunities where fresh external economic, industry, supply-chain, demand, pricing, or
+competitive evidence has a direct and underprocessed implication for a specific security.
+
+State the full causal chain from the external evidence to the company's exposure, financial impact,
+and expected repricing. Verify the exposure's size, contract structure, hedges, and reporting lags,
+and explain why the market has not yet incorporated the implication.
+
+Reject broad themes, stale correlations, indirect or immaterial exposures, and signals neutralized by
+hedging, contract terms, mix, or an offsetting business effect.""",
+    },
+    "weekly-fresh-information-repricing": {
+        "slug": "fresh-information-repricing",
+        "name": "Fresh Information Repricing",
+        "text": """\
+Select opportunities driven by newly public, material company-specific information that the market
+has not fully processed.
+
+Identify the publication and timestamp, the assumption or economic outcome it changes, why the
+information remains underprocessed, and which audience or recognition process should close the gap.
+Test the strongest alternative interpretation and distinguish new information from a restatement of
+what investors already knew.
+
+Reject stale, immaterial, speculative, fully priced, or causally remote information.""",
+    },
+    "weekly-policy-and-geopolitical-anticipation": {
+        "slug": "policy-and-geopolitical-anticipation",
+        "name": "Policy and Geopolitical Anticipation",
+        "text": """\
+Select opportunities where observable policy or geopolitical developments create a differentiated,
+evidence-backed expectation for a specific security.
+
+Start with the concrete event. Analyze the relevant actors, incentives, constraints, precursors,
+credible alternative outcomes, and the market's apparent expectation. Separate the probability of
+the event from the security's likely reaction, then map the transmission mechanism and show why the
+financial exposure is direct, material, and asymmetric.
+
+Reject rumors, rhetoric without implementation evidence, generic thematic baskets, and broad outcome
+guesses without a security-specific valuation gap.""",
+    },
+    "weekly-post-earnings-underreaction": {
+        "slug": "post-earnings-underreaction",
+        "name": "Post-Earnings Underreaction",
+        "text": """\
+Select opportunities where a recent earnings release contains durable information that the market
+has not fully incorporated.
+
+Review the complete earnings materials rather than the headline. Identify the change in underlying
+economics, its quality and durability, what the market emphasized, the facts it underprocessed, and
+the recognition mechanism that can close the gap. Distinguish recurring operating evidence from
+one-offs, accounting effects, and temporary timing.
+
+Reject simple earnings-beat buying, headline or price momentum, low-quality surprises, and results
+whose implications are already reflected in expectations and valuation.""",
+    },
+    "weekly-pre-earnings-variant": {
+        "slug": "pre-earnings-variant",
+        "name": "Pre-Earnings Variant",
+        "text": """\
+Select opportunities with a confirmed upcoming earnings report where a differentiated, testable
+expectation creates favorable asymmetry.
+
+Reconstruct the true market bar from consensus estimates, guidance, segment assumptions, valuation,
+and current channel or operating evidence. State the differentiated assumption, the metric most
+likely to reveal it, how investors are likely to interpret the result, and the downside if the view
+is wrong.
+
+Reject routine previews, unknowable binary bets, crowded variants, and setups whose plausible upside
+does not compensate for the downside.""",
+    },
+    "weekly-scheduled-catalysts": {
+        "slug": "scheduled-catalysts",
+        "name": "Scheduled Catalysts",
+        "text": """\
+Select opportunities with a confirmed, dated, non-earnings catalyst that can materially change a
+security's expected economics or valuation.
+
+Identify the event and date, decision makers, prerequisites, plausible outcomes, priced expectation,
+security-specific consequence, and downside. Prefer primary documentation and verify that the event
+is actually scheduled and that its impact is not already reflected in price.
+
+Reject rumors, undated possibilities, immaterial events, catalysts without an expectation gap, and
+binary setups with unattractive asymmetry.""",
+    },
+    "weekly-temporary-price-dislocation": {
+        "slug": "temporary-price-dislocation",
+        "name": "Temporary Price Dislocation",
+        "text": """\
+Select opportunities where forced, mechanical, or economically indifferent trading—or an excessive
+reaction to a temporary event—has moved price away from a defensible value anchor.
+
+Identify the source and trigger of the selling, its likely scale and duration, the value anchor, the
+natural buyer or correction mechanism, and clear invalidation evidence. Demonstrate that the
+underlying impairment is temporary rather than structural.
+
+Reject squeeze theses, short-interest stories, generic oversold claims, falling knives, unresolved
+accounting or financing risk, permanently impaired liquidity, and price declines justified by a
+lasting deterioration in business value.""",
+    },
+}
 
 
 def allocation_policy_from_limits(minimum: float, maximum: float) -> dict:
@@ -164,7 +302,7 @@ def render_execution_prompt(
     """Render one wrapper in a single pass so inserted text is never re-expanded."""
     prompt = portfolio.prompt
     if prompt is None:
-        raise ValueError("Benchmark portfolios do not have execution prompts")
+        raise ValueError("Portfolio does not have an execution prompt")
     values = {
         "portfolio_slug": portfolio.slug,
         "strategy_text": prompt.text.strip(),
@@ -177,9 +315,19 @@ def render_execution_prompt(
 
 def manual_execution_prompt(portfolio: Portfolio, wrapper_prompt: str) -> str:
     """Build the complete prompt copied from a portfolio's public detail page."""
-    return render_execution_prompt(portfolio, wrapper_prompt, MANUAL_SUBMISSION_INSTRUCTIONS)
+    submission_instructions = (
+        REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS
+        if portfolio.prompt_mode == "rebuilt"
+        else MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS
+    )
+    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions)
 
 
 def automated_execution_prompt(portfolio: Portfolio, wrapper_prompt: str) -> str:
     """Build the complete prompt sent to an integrated evaluator worker."""
-    return render_execution_prompt(portfolio, wrapper_prompt, AUTOMATED_SUBMISSION_INSTRUCTIONS)
+    submission_instructions = (
+        REBUILT_AUTOMATED_SUBMISSION_INSTRUCTIONS
+        if portfolio.prompt_mode == "rebuilt"
+        else MANAGED_AUTOMATED_SUBMISSION_INSTRUCTIONS
+    )
+    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions)

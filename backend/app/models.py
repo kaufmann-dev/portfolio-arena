@@ -154,40 +154,37 @@ class Portfolio(Base):
         CheckConstraint("status IN ('active', 'archived')", name="portfolios_status_check"),
         CheckConstraint("cost_bps >= 0", name="portfolios_cost_bps_check"),
         CheckConstraint(
-            "prompt_mode IS NULL OR prompt_mode IN ('managed', 'rebuilt')",
+            "prompt_mode IN ('managed', 'rebuilt')",
             name="portfolios_prompt_mode_check",
-        ),
-        CheckConstraint(
-            "(is_benchmark AND agent_id IS NULL AND prompt_id IS NULL) OR "
-            "(NOT is_benchmark AND agent_id IS NOT NULL AND prompt_id IS NOT NULL)",
-            name="portfolios_identity_assignment_check",
-        ),
-        CheckConstraint(
-            "(is_benchmark AND prompt_mode IS NULL) OR (NOT is_benchmark AND prompt_mode IS NOT NULL)",
-            name="portfolios_prompt_mode_assignment_check",
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    agent_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"), nullable=True)
-    prompt_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=True)
-    prompt_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
+    prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
+    prompt_mode: Mapped[str] = mapped_column(Text, nullable=False)
     cost_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
-    is_benchmark: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    founding_v2: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    agent: Mapped[Agent | None] = relationship(back_populates="portfolios")
-    prompt: Mapped[Prompt | None] = relationship(back_populates="portfolios")
+    agent: Mapped[Agent] = relationship(back_populates="portfolios")
+    prompt: Mapped[Prompt] = relationship(back_populates="portfolios")
     allocations: Mapped[list["Allocation"]] = relationship(
         back_populates="portfolio",
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="(Allocation.effective_date, Allocation.entered_at)",
+    )
+    signals: Mapped[list["Signal"]] = relationship(
+        back_populates="portfolio",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="(Signal.effective_date, Signal.entered_at)",
     )
     evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(
         back_populates="portfolio",
@@ -250,6 +247,64 @@ class Position(Base):
     allocation: Mapped[Allocation] = relationship(back_populates="positions")
 
 
+class Signal(Base):
+    """One independent rebuilt-portfolio signal for one effective close."""
+
+    __tablename__ = "signals"
+    __table_args__ = (
+        CheckConstraint(
+            "provenance IN ('integrated', 'browser_admin', 'mcp')",
+            name="signals_provenance_check",
+        ),
+        UniqueConstraint(
+            "portfolio_id",
+            "effective_date",
+            name="signals_portfolio_id_effective_date_key",
+        ),
+        Index("idx_signals_portfolio_id", "portfolio_id"),
+        Index("idx_signals_effective_date_id", "effective_date", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
+    )
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    provenance: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    portfolio: Mapped[Portfolio] = relationship(back_populates="signals")
+    positions: Mapped[list["SignalPosition"]] = relationship(
+        back_populates="signal",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="SignalPosition.id",
+    )
+
+
+class SignalPosition(Base):
+    __tablename__ = "signal_positions"
+    __table_args__ = (
+        CheckConstraint("weight_pct >= 0", name="signal_positions_weight_pct_check"),
+        UniqueConstraint("signal_id", "symbol", name="signal_positions_signal_id_symbol_key"),
+        Index("idx_signal_positions_signal_id", "signal_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id", ondelete="CASCADE"), nullable=False
+    )
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+    signal: Mapped[Signal] = relationship(back_populates="positions")
+
+
 class EvaluationRun(Base):
     __tablename__ = "evaluation_runs"
     __table_args__ = (
@@ -265,6 +320,10 @@ class EvaluationRun(Base):
         CheckConstraint("attempt_count >= 0", name="evaluation_runs_attempt_count_check"),
         CheckConstraint("max_attempts BETWEEN 1 AND 5", name="evaluation_runs_max_attempts_check"),
         CheckConstraint("timeout_seconds BETWEEN 60 AND 7200", name="evaluation_runs_timeout_check"),
+        CheckConstraint(
+            "NOT (allocation_id IS NOT NULL AND signal_id IS NOT NULL)",
+            name="evaluation_runs_result_exclusive_check",
+        ),
         Index("idx_evaluation_runs_scheduled_id", "scheduled_for", "id"),
         Index(
             "evaluation_runs_portfolio_session_key",
@@ -307,6 +366,9 @@ class EvaluationRun(Base):
     allocation_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("allocations.id", ondelete="SET NULL"), nullable=True
     )
+    signal_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True
+    )
     report: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -320,6 +382,7 @@ class EvaluationRun(Base):
     agent: Mapped[Agent] = relationship(back_populates="evaluation_runs")
     model: Mapped[ModelDefinition] = relationship(back_populates="evaluation_runs")
     allocation: Mapped[Allocation | None] = relationship()
+    signal: Mapped[Signal | None] = relationship()
 
 
 class EvaluatorSettings(Base):

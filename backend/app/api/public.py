@@ -1,129 +1,373 @@
 """Public read endpoints (no auth, rate-limited)."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from __future__ import annotations
+
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_session
-from ..models import Agent, ModelDefinition, Portfolio, Prompt
+from ..models import Agent, ModelDefinition, Portfolio, Prompt, Signal
 from ..ratelimit import limiter
 from ..services import admin_ops
-from ..services.arena import compute_valuations, load_portfolios
-from ..services.benchmarks import reconcile_benchmark_allocations
+from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
 from ..services.model_catalog import agent_out
 from ..services.prompt_policy import allocation_policy_out
-from ..services.serialize import serialize_detail, serialize_summary
+from ..services.serialize import (
+    rank_rows,
+    serialize_detail,
+    serialize_rebuilt_detail,
+    serialize_rebuilt_summary,
+    serialize_signal,
+    serialize_summary,
+    synthetic_spy_row,
+)
 from ..services.valuation import rebase_series
 
 router = APIRouter(prefix="/api")
+RebuiltView = Literal["common", "tuned", "signal"]
+Objective = Literal["canonical", "max_alpha", "max_information_ratio", "max_sharpe"]
+CostBasis = Literal["net", "gross"]
+Track = Literal["managed", "rebuilt"]
 
 
-def _valuations(session: Session):
-    """Benchmark reconciliation must precede loading so changes are included."""
-    if reconcile_benchmark_allocations(session):
-        session.commit()
-    portfolios = load_portfolios(session)
-    return portfolios, compute_valuations(session, portfolios)
+def _validate_rebuilt_context(
+    view: RebuiltView,
+    objective: Objective,
+    cost_basis: CostBasis,
+    horizon: int | None,
+) -> None:
+    if view == "signal":
+        if horizon is None:
+            raise HTTPException(422, "Signal view requires horizon=1..20.")
+        if objective != "canonical":
+            raise HTTPException(422, "Signal view supports objective=canonical only.")
+        if cost_basis != "gross":
+            raise HTTPException(422, "Signal alpha is cost-independent; use cost_basis=gross.")
+    elif horizon is not None:
+        raise HTTPException(422, "horizon is valid only for signal view.")
 
 
-@router.get("/leaderboard")
+def _context(
+    view: RebuiltView,
+    objective: Objective,
+    cost_basis: CostBasis,
+    horizon: int | None,
+) -> dict:
+    return {
+        "view": view,
+        "objective": objective,
+        "cost_basis": cost_basis,
+        "horizon": horizon,
+    }
+
+
+@router.get("/arena/managed")
 @limiter.limit("30/minute")
-def leaderboard(request: Request, session: Session = Depends(get_session)):
-    portfolios, valuations = _valuations(session)
+def managed_arena(request: Request, session: Session = Depends(get_session)):
+    portfolios = load_portfolios(session)
+    valuations = compute_valuations(session, portfolios)
     rows = [
         serialize_summary(valuations.by_portfolio_id[portfolio.id], valuations)
         for portfolio in portfolios
-        if portfolio.id in valuations.by_portfolio_id
+        if portfolio.prompt_mode == "managed" and portfolio.id in valuations.by_portfolio_id
     ]
+    rank_rows(rows)
     return {
+        "track": "managed",
         "as_of": valuations.as_of,
         "market_data_status": valuations.market_data_status,
-        "portfolios": rows,
+        "ranking": {
+            "metric": "search_adjusted_lower_95_ci",
+            "alpha": "daily_excess_vs_spy",
+            "hac_bandwidth": "automatic",
+        },
+        "portfolios": [synthetic_spy_row(valuations.spy_series), *rows],
+    }
+
+
+@router.get("/arena/rebuilt")
+@limiter.limit("30/minute")
+def rebuilt_arena(
+    request: Request,
+    view: RebuiltView = "common",
+    objective: Objective = "canonical",
+    cost_basis: CostBasis = "net",
+    horizon: int | None = Query(default=None, ge=1, le=20),
+    session: Session = Depends(get_session),
+):
+    _validate_rebuilt_context(view, objective, cost_basis, horizon)
+    portfolios = load_portfolios(session)
+    arena = compute_rebuilt_arena(
+        session,
+        portfolios,
+        objective=objective,
+        cost_basis=cost_basis,
+    )
+    rows = [
+        serialize_rebuilt_summary(
+            arena.by_portfolio_id[portfolio.id],
+            arena,
+            view=view,
+            horizon=horizon,
+        )
+        for portfolio in portfolios
+        if portfolio.prompt_mode == "rebuilt" and portfolio.id in arena.by_portfolio_id
+    ]
+    rank_rows(rows)
+    if view == "common" and arena.common_spy_series:
+        spy_row = synthetic_spy_row(arena.common_spy_series, precomputed_nav=True)
+    else:
+        spy_row = synthetic_spy_row(arena.spy_series)
+    return {
+        "track": "rebuilt",
+        "as_of": arena.as_of,
+        "market_data_status": arena.market_data_status,
+        "context": _context(view, objective, cost_basis, horizon),
+        "common_policy": arena.common_policy,
+        "ranking": {
+            "metric": "search_adjusted_lower_95_ci",
+            "alpha": "daily_excess_vs_spy",
+            "hac_lag": "holding_period_minus_one",
+        },
+        "portfolios": [spy_row, *rows],
     }
 
 
 @router.get("/portfolios/{slug}")
 @limiter.limit("60/minute")
-def portfolio_detail(slug: str, request: Request, session: Session = Depends(get_session)):
-    portfolios, valuations = _valuations(session)
-    match = next((p for p in portfolios if p.slug == slug), None)
+def portfolio_detail(
+    slug: str,
+    request: Request,
+    track: Track | None = None,
+    view: RebuiltView = "common",
+    objective: Objective = "canonical",
+    cost_basis: CostBasis = "net",
+    horizon: int | None = Query(default=None, ge=1, le=20),
+    session: Session = Depends(get_session),
+):
+    portfolios = load_portfolios(session)
+    match = next((portfolio for portfolio in portfolios if portfolio.slug == slug), None)
     if match is None:
         raise HTTPException(404, "Portfolio not found")
-    valuation = valuations.by_portfolio_id.get(match.id)
-    if valuation is None:
+    selected_track = track or match.prompt_mode
+    if selected_track != match.prompt_mode:
+        raise HTTPException(422, f"{match.name} belongs to the {match.prompt_mode} track.")
+    wrapper = admin_ops.wrapper_prompt_for_portfolio(session, match)
+    if selected_track == "managed":
+        if view != "common" or objective != "canonical" or cost_basis != "net" or horizon is not None:
+            raise HTTPException(422, "Rebuilt analysis context is not valid for managed portfolios.")
+        valuations = compute_valuations(session, portfolios)
+        valuation = valuations.by_portfolio_id.get(match.id)
+        if valuation is None:
+            raise HTTPException(404, "Portfolio not found")
+        return {
+            "track": "managed",
+            "as_of": valuations.as_of,
+            "market_data_status": valuations.market_data_status,
+            "context": None,
+            "portfolio": serialize_detail(
+                valuation,
+                valuations,
+                wrapper_prompt=wrapper,
+            ),
+        }
+
+    _validate_rebuilt_context(view, objective, cost_basis, horizon)
+    arena = compute_rebuilt_arena(
+        session,
+        portfolios,
+        objective=objective,
+        cost_basis=cost_basis,
+    )
+    analysis = arena.by_portfolio_id.get(match.id)
+    if analysis is None:
         raise HTTPException(404, "Portfolio not found")
     return {
-        "as_of": valuations.as_of,
-        "market_data_status": valuations.market_data_status,
-        "portfolio": serialize_detail(
-            valuation,
-            valuations,
-            wrapper_prompt=admin_ops.wrapper_prompt_for_portfolio(session, match),
+        "track": "rebuilt",
+        "as_of": arena.as_of,
+        "market_data_status": arena.market_data_status,
+        "context": _context(view, objective, cost_basis, horizon),
+        "common_policy": arena.common_policy,
+        "portfolio": serialize_rebuilt_detail(
+            analysis,
+            arena,
+            view=view,
+            horizon=horizon,
+            wrapper_prompt=wrapper,
         ),
+    }
+
+
+@router.get("/portfolios/{slug}/signals")
+@limiter.limit("60/minute")
+def signal_history(
+    slug: str,
+    request: Request,
+    cursor: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    session: Session = Depends(get_session),
+):
+    portfolio = session.scalar(select(Portfolio).where(Portfolio.slug == slug))
+    if portfolio is None or portfolio.prompt_mode != "rebuilt":
+        raise HTTPException(404, "Rebuilt portfolio not found")
+    query = (
+        select(Signal)
+        .where(Signal.portfolio_id == portfolio.id)
+        .options(selectinload(Signal.positions))
+        .order_by(Signal.id.desc())
+        .limit(limit + 1)
+    )
+    if cursor is not None:
+        query = query.where(Signal.id < cursor)
+    signals = list(session.scalars(query))
+    has_more = len(signals) > limit
+    page = signals[:limit]
+    return {
+        "signals": [serialize_signal(signal) for signal in page],
+        "next_cursor": page[-1].id if has_more and page else None,
     }
 
 
 @router.get("/compare")
 @limiter.limit("30/minute")
-def compare(slugs: str, request: Request, session: Session = Depends(get_session)):
-    """Overlaid base-100 series, rebased to the latest common inception so
-    every line starts at 100 on the same day."""
-    wanted = [part.strip() for part in slugs.split(",") if part.strip()]
+def compare(
+    slugs: str,
+    request: Request,
+    track: Track,
+    view: RebuiltView = "common",
+    objective: Objective = "canonical",
+    cost_basis: CostBasis = "net",
+    horizon: int | None = Query(default=None, ge=1, le=20),
+    session: Session = Depends(get_session),
+):
+    wanted = list(dict.fromkeys(part.strip() for part in slugs.split(",") if part.strip()))
     if not wanted or len(wanted) > 8:
         raise HTTPException(422, "Pass 1-8 portfolio slugs.")
+    portfolios = load_portfolios(session)
+    by_slug = {portfolio.slug: portfolio for portfolio in portfolios}
+    missing = [slug for slug in wanted if slug not in by_slug]
+    if missing:
+        raise HTTPException(404, f"Portfolio not found: {', '.join(missing)}")
+    wrong_track = [slug for slug in wanted if by_slug[slug].prompt_mode != track]
+    if wrong_track:
+        raise HTTPException(422, f"Portfolio belongs to the other track: {', '.join(wrong_track)}")
+    selected = [by_slug[slug] for slug in wanted]
 
-    portfolios, valuations = _valuations(session)
-    selected = [p for p in portfolios if p.slug in wanted]
-    if not selected:
-        raise HTTPException(404, "No matching portfolios")
+    output = []
+    spy_raw = []
+    as_of = None
+    status = "fresh"
+    context = None
+    spy_is_precomputed = False
+    if track == "managed":
+        if view != "common" or objective != "canonical" or cost_basis != "net" or horizon is not None:
+            raise HTTPException(422, "Rebuilt analysis context is not valid for managed comparisons.")
+        valuations = compute_valuations(session, portfolios)
+        as_of = valuations.as_of
+        status = valuations.market_data_status
+        spy_raw = valuations.spy_series
+        for portfolio in selected:
+            result = valuations.by_portfolio_id[portfolio.id].result
+            if result and result.series:
+                output.append((portfolio, result.series))
+    else:
+        _validate_rebuilt_context(view, objective, cost_basis, horizon)
+        context = _context(view, objective, cost_basis, horizon)
+        arena = compute_rebuilt_arena(
+            session,
+            portfolios,
+            objective=objective,
+            cost_basis=cost_basis,
+        )
+        as_of = arena.as_of
+        status = arena.market_data_status
+        if view == "common" and arena.common_spy_series:
+            spy_raw = arena.common_spy_series
+            spy_is_precomputed = True
+        else:
+            spy_raw = arena.spy_series
+        for portfolio in selected:
+            analysis = arena.by_portfolio_id[portfolio.id]
+            summary = serialize_rebuilt_summary(analysis, arena, view=view, horizon=horizon)
+            policy = summary["selected_policy"]
+            if policy:
+                if view == "common":
+                    series = arena.common_series_by_portfolio_id.get(portfolio.id, [])
+                else:
+                    result = analysis.policies[(policy["horizon"], policy["exposure_pct"])]
+                    series = result.series
+                if series:
+                    output.append((portfolio, series))
 
-    with_data = [
-        (p, valuations.by_portfolio_id[p.id].result)
-        for p in selected
-        if valuations.by_portfolio_id.get(p.id) and valuations.by_portfolio_id[p.id].result
-    ]
-    with_data = [(p, r) for p, r in with_data if r.series]
-    if not with_data:
+    if not output:
         return {
-            "as_of": valuations.as_of,
-            "market_data_status": valuations.market_data_status,
+            "track": track,
+            "as_of": as_of,
+            "market_data_status": status,
+            "context": context,
             "start": None,
             "series": [],
+            "spy_series": [],
         }
-
-    common_start = max(result.series[0]["date"] for _, result in with_data)
-    out = []
-    for portfolio, result in with_data:
-        window = [point for point in result.series if point["date"] >= common_start]
+    common_start = max(series[0]["date"] for _, series in output)
+    lines = []
+    for portfolio, series in output:
+        window = [point for point in series if point["date"] >= common_start]
         if not window or window[0]["nav"] <= 0:
             continue
         base = window[0]["nav"]
-        out.append(
+        lines.append(
             {
                 "slug": portfolio.slug,
                 "name": portfolio.name,
-                "is_benchmark": portfolio.is_benchmark,
+                "kind": track,
                 "series": [{"date": point["date"], "nav": point["nav"] / base * 100.0} for point in window],
             }
         )
-    spy = rebase_series(valuations.spy_series, common_start, valuations.as_of or common_start)
+    spy_output = (
+        [
+            {"date": point["date"], "nav": point["nav"]}
+            for point in spy_raw
+            if common_start <= point["date"] <= (as_of or common_start)
+        ]
+        if spy_is_precomputed
+        else rebase_series(spy_raw, common_start, as_of or common_start)
+    )
     return {
-        "as_of": valuations.as_of,
-        "market_data_status": valuations.market_data_status,
+        "track": track,
+        "as_of": as_of,
+        "market_data_status": status,
+        "context": context,
         "start": common_start,
-        "series": out,
-        "spy_series": spy,
+        "series": lines,
+        "spy_series": spy_output,
     }
+
+
+def _portfolio_refs(portfolios: list[Portfolio]) -> list[dict]:
+    return [
+        {
+            "id": portfolio.id,
+            "slug": portfolio.slug,
+            "name": portfolio.name,
+            "status": portfolio.status,
+            "prompt_mode": portfolio.prompt_mode,
+        }
+        for portfolio in portfolios
+    ]
 
 
 @router.get("/prompts")
 @limiter.limit("60/minute")
 def list_prompts(request: Request, session: Session = Depends(get_session)):
     prompts = session.scalars(select(Prompt).order_by(Prompt.slug)).all()
+    portfolios = list(session.scalars(select(Portfolio)))
     usage: dict[int, int] = {}
-    for portfolio in session.scalars(select(Portfolio)):
-        if portfolio.prompt_id is not None:
-            usage[portfolio.prompt_id] = usage.get(portfolio.prompt_id, 0) + 1
+    for portfolio in portfolios:
+        usage[portfolio.prompt_id] = usage.get(portfolio.prompt_id, 0) + 1
     return {
         "prompts": [
             {
@@ -144,15 +388,11 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
 @router.get("/prompts/{slug}")
 @limiter.limit("60/minute")
 def prompt_detail(slug: str, request: Request, session: Session = Depends(get_session)):
-    prompt = session.scalars(select(Prompt).where(Prompt.slug == slug)).first()
+    prompt = session.scalar(select(Prompt).where(Prompt.slug == slug))
     if prompt is None:
         raise HTTPException(404, "Prompt not found")
-
-    portfolios, valuations = _valuations(session)
-    users = [p for p in portfolios if p.prompt_id == prompt.id]
+    users = list(session.scalars(select(Portfolio).where(Portfolio.prompt_id == prompt.id)))
     return {
-        "as_of": valuations.as_of,
-        "market_data_status": valuations.market_data_status,
         "prompt": {
             "id": prompt.id,
             "slug": prompt.slug,
@@ -163,11 +403,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
             "created_at": prompt.created_at.isoformat(),
             "updated_at": prompt.updated_at.isoformat(),
         },
-        "portfolios": [
-            serialize_summary(valuations.by_portfolio_id[p.id], valuations)
-            for p in users
-            if p.id in valuations.by_portfolio_id
-        ],
+        "portfolios": _portfolio_refs(users),
     }
 
 
@@ -179,18 +415,15 @@ def list_agents(request: Request, session: Session = Depends(get_session)):
         .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
         .order_by(Agent.slug)
     ).all()
-    portfolios = session.scalars(select(Portfolio)).all()
-    by_agent: dict[int | None, list[Portfolio]] = {}
+    portfolios = list(session.scalars(select(Portfolio)))
+    by_agent: dict[int, list[Portfolio]] = {}
     for portfolio in portfolios:
         by_agent.setdefault(portfolio.agent_id, []).append(portfolio)
     return {
         "agents": [
             {
                 **agent_out(agent),
-                "portfolios": [
-                    {"id": p.id, "slug": p.slug, "name": p.name, "status": p.status}
-                    for p in by_agent.get(agent.id, [])
-                ],
+                "portfolios": _portfolio_refs(by_agent.get(agent.id, [])),
             }
             for agent in agents
         ]
@@ -200,23 +433,15 @@ def list_agents(request: Request, session: Session = Depends(get_session)):
 @router.get("/agents/{slug}")
 @limiter.limit("60/minute")
 def agent_detail(slug: str, request: Request, session: Session = Depends(get_session)):
-    agent = session.scalars(
+    agent = session.scalar(
         select(Agent)
         .where(Agent.slug == slug)
         .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
-    ).first()
+    )
     if agent is None:
         raise HTTPException(404, "Agent not found")
-
-    portfolios, valuations = _valuations(session)
-    own = [p for p in portfolios if p.agent_id == agent.id]
+    own = list(session.scalars(select(Portfolio).where(Portfolio.agent_id == agent.id)))
     return {
-        "as_of": valuations.as_of,
-        "market_data_status": valuations.market_data_status,
         "agent": {**agent_out(agent), "created_at": agent.created_at.isoformat()},
-        "portfolios": [
-            serialize_summary(valuations.by_portfolio_id[p.id], valuations)
-            for p in own
-            if p.id in valuations.by_portfolio_id
-        ],
+        "portfolios": _portfolio_refs(own),
     }

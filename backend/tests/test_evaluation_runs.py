@@ -19,6 +19,7 @@ def _enable(session, portfolio, weekdays=None):
 
 def test_manual_run_claim_and_submission_use_submission_effective_date(sample_portfolio):
     from app.db import session_factory
+    from app.models import Allocation
 
     backdate_allocation(sample_portfolio["allocation"]["id"])
     now = datetime(2026, 7, 20, 13, tzinfo=UTC)
@@ -70,13 +71,12 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
             report="Both theses remain intact.",
             now=now + timedelta(minutes=5),
         )
+        allocation = session.get(Allocation, submitted["result"]["id"])
 
     assert submitted["run"]["status"] == "succeeded"
     assert submitted["run"]["trigger_kind"] == "manual"
-    assert (
-        submitted["allocation"]["effective_date"]
-        == effective_date_for(now + timedelta(minutes=5)).isoformat()
-    )
+    assert submitted["result"]["kind"] == "allocation"
+    assert allocation.effective_date == effective_date_for(now + timedelta(minutes=5))
 
 
 def test_scheduled_run_is_created_only_during_configured_window(sample_portfolio):
@@ -125,6 +125,7 @@ def test_scheduled_run_is_not_backfilled_after_market_close(sample_portfolio):
 
 def test_queued_scheduled_run_retries_and_submits_after_market_close(sample_portfolio):
     from app.db import session_factory
+    from app.models import Allocation
 
     backdate_allocation(sample_portfolio["allocation"]["id"])
     scheduled_for = date(2026, 7, 20)
@@ -180,10 +181,11 @@ def test_queued_scheduled_run_retries_and_submits_after_market_close(sample_port
             report="The scheduled session remains authoritative.",
             now=after_close + timedelta(minutes=3),
         )
+        allocation = session.get(Allocation, submitted["result"]["id"])
 
     assert submitted["run"]["status"] == "succeeded"
-    assert submitted["allocation"]["effective_date"] == scheduled_for.isoformat()
-    assert submitted["allocation"]["locked"] is True
+    assert submitted["result"]["kind"] == "allocation"
+    assert allocation.effective_date == scheduled_for
 
 
 def test_pause_keeps_queued_work_and_stops_claiming(sample_portfolio):

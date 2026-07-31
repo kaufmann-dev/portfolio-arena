@@ -1,8 +1,7 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { AgentOut, MarketDataStatus, PortfolioSummary } from "../api/types";
-  import MarketDataWarning from "../components/MarketDataWarning.svelte";
-  import PortfolioTable from "../components/PortfolioTable.svelte";
+  import type { AgentOut, PortfolioRefOut } from "../api/types";
+  import PortfolioRefTable from "../components/PortfolioRefTable.svelte";
   import { link } from "../stores/router.svelte";
 
   interface Props {
@@ -12,10 +11,8 @@
   const { slug }: Props = $props();
 
   interface Payload {
-    as_of: string | null;
-    market_data_status: MarketDataStatus;
     agent: AgentOut & { created_at: string };
-    portfolios: PortfolioSummary[];
+    portfolios: PortfolioRefOut[];
   }
 
   function requestErrorMessage(error: unknown): string {
@@ -40,8 +37,6 @@
           <p class="muted notes">{data.agent.notes}</p>
         {/if}
       </header>
-
-      <MarketDataWarning status={data.market_data_status} asOf={data.as_of} />
 
       <dl class="execution-grid" aria-label="Agent execution profile">
         <div>
@@ -71,7 +66,7 @@
           Portfolios by this agent
           <span class="muted">— does it work across prompts?</span>
         </h2>
-        <PortfolioTable rows={data.portfolios} />
+        <PortfolioRefTable rows={data.portfolios} />
       </section>
     </article>
   {:catch error}
