@@ -119,7 +119,7 @@ def clean_db(client):
     from app.oidc import get_oidc_client
     from app.ratelimit import limiter
     from app.seed import run_seed
-    from app.services import price_cache
+    from app.services import arena, price_cache
 
     limiter.reset()
 
@@ -137,6 +137,7 @@ def clean_db(client):
         run_seed(session)
     with price_cache._failure_cache_lock:
         price_cache._failure_cache.clear()
+    arena.clear_analysis_caches()
     get_oidc_client.cache_clear()
     client.cookies.clear()
     yield

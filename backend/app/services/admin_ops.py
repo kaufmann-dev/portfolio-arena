@@ -1047,7 +1047,12 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
             for portfolio in portfolios
             if portfolio.prompt_mode == "rebuilt" and portfolio.direction == match.direction
         ]
-        arena = compute_rebuilt_arena(session, same_direction)
+        arena = compute_rebuilt_arena(
+            session,
+            same_direction,
+            view="tuned",
+            include_policy_matrix=True,
+        )
         analysis = arena.by_portfolio_id.get(match.id)
         if analysis is None:
             raise AdminOpError(404, "Portfolio not found")

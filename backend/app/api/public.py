@@ -123,8 +123,10 @@ def rebuilt_arena(
     arena = compute_rebuilt_arena(
         session,
         selected,
+        view=view,
         objective=objective,
         cost_basis=cost_basis,
+        horizon=horizon,
     )
     rows = [
         serialize_rebuilt_summary(
@@ -211,8 +213,11 @@ def portfolio_detail(
     arena = compute_rebuilt_arena(
         session,
         same_direction,
+        view=view,
         objective=objective,
         cost_basis=cost_basis,
+        horizon=horizon,
+        include_policy_matrix=True,
     )
     analysis = arena.by_portfolio_id.get(match.id)
     if analysis is None:
@@ -324,8 +329,10 @@ def compare(
         arena = compute_rebuilt_arena(
             session,
             direction_universe,
+            view=view,
             objective=objective,
             cost_basis=cost_basis,
+            horizon=horizon,
         )
         as_of = arena.as_of
         status = arena.market_data_status

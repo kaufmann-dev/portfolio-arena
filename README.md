@@ -28,9 +28,11 @@ _arena_: honest, deterministic measurement — not trading and not advice.
   opaque server-side sessions. Public leaderboard and detail views remain anonymous.
 - **Prices** — Massive daily stock aggregates, fetched in parallel with httpx and converted to a
   split-and-dividend total-return basis. Series are cached in Postgres with a ~1h TTL.
-- **No stored NAVs.** Managed NAVs are recomputed from allocations; rebuilt NAVs are recomputed from
-  immutable daily signals and overlapping cohorts. Corporate-action adjustments change
-  retroactively, so recomputation is _more_ correct than snapshotting.
+- **No persistent NAV snapshots.** Managed NAVs derive from allocations; rebuilt NAVs derive from
+  immutable daily signals and overlapping cohorts. Exact-input analytics are memoized in a bounded
+  in-process cache, and any portfolio or price-content change selects a new result automatically.
+  Corporate-action adjustments change retroactively, so deterministic recomputation remains _more_
+  correct than database snapshots.
 - **Last-known-data fallback.** An expired cache row remains available until a Massive refresh
   succeeds. The cache refreshes after its TTL and when a newly closed session should be available
   after Massive's 15-minute delay. Responses label market data `fresh`, `stale`, or `unavailable`;
