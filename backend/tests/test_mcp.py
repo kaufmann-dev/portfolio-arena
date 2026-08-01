@@ -88,6 +88,7 @@ class TestMcpTools:
             "update_model",
             "delete_model",
             "create_allocation",
+            "create_meta_portfolio_set",
             "create_signal",
             "update_signal",
             "delete_signal",
@@ -391,6 +392,37 @@ class TestMcpTools:
         detail = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers).json()
         assert detail["portfolio"]["allocations"] == []
 
+    def test_create_meta_portfolio_set(self, client, mcp_headers, sample_agent):
+        prompt = _call_tool(
+            client,
+            mcp_headers,
+            "create_prompt",
+            {
+                "name": "MCP Arena Synthesis",
+                "context_scope": "arena",
+                "mode": "both",
+                "direction": "both",
+                "managed_long_text": "Managed long synthesis.",
+                "managed_short_text": "Managed short synthesis.",
+                "rebuilt_long_text": "Rebuilt long synthesis.",
+                "rebuilt_short_text": "Rebuilt short synthesis.",
+            },
+        )
+        assert prompt["context_scope"] == "arena"
+
+        created = _call_tool(
+            client,
+            mcp_headers,
+            "create_meta_portfolio_set",
+            {
+                "family_name": "MCP Confluence",
+                "agent_id": sample_agent["id"],
+                "prompt_id": prompt["id"],
+            },
+        )
+        assert len(created["portfolios"]) == 4
+        assert all(portfolio["evaluator"]["enabled"] for portfolio in created["portfolios"])
+
     def test_generic_prompt_exposes_both_fields_but_archive_hides_it(self, client, mcp_headers):
         created = _call_tool(
             client,
@@ -422,6 +454,8 @@ class TestMcpTools:
         assert generic["allocation_policies"]["managed"]["max_position_weight_pct"] == 25
         assert generic["allocation_policies"]["rebuilt"]["max_position_weight_pct"] == 100
         assert "text" not in generic
+
+        assert generic["context_scope"] == "portfolio"
 
         _call_tool(
             client,

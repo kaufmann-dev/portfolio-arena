@@ -23,6 +23,7 @@
         <th scope="col">Portfolio</th>
         <th scope="col">Direction</th>
         <th scope="col">Track</th>
+        <th scope="col">Scope</th>
         <th scope="col">Status</th>
         <th scope="col"><span class="visually-hidden">Actions</span></th>
       </tr>
@@ -35,6 +36,7 @@
           </th>
           <td><span class="badge">{row.direction}</span></td>
           <td><span class="badge">{row.prompt_mode}</span></td>
+          <td><span class="badge">{row.context_scope === "arena" ? "Meta" : "Arena"}</span></td>
           <td>
             {row.status}
             {#if row.is_liquidated}
@@ -48,7 +50,7 @@
           </td>
         </tr>
       {:else}
-        <tr><td colspan="5" class="table-empty">No portfolios use this record.</td></tr>
+        <tr><td colspan="6" class="table-empty">No portfolios use this record.</td></tr>
       {/each}
     </tbody>
   </table>
@@ -56,7 +58,7 @@
 
 <style>
   table {
-    min-width: 560px;
+    min-width: 640px;
   }
 
   th[scope="row"] a {

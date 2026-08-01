@@ -570,6 +570,7 @@ def test_admin_list_has_status_history_and_usage_metadata(
     assert set(row) == {
         "id",
         "slug",
+        "context_scope",
         "status",
         "archived_at",
         "created_at",

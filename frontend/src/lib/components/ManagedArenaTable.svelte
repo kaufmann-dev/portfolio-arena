@@ -1,14 +1,19 @@
 <script lang="ts">
   import { ChevronDown, ChevronUp } from "@lucide/svelte";
 
-  import type { BenchmarkArenaPortfolio, ManagedArenaPortfolio, ManagedArenaResponse } from "../api/types";
+  import type {
+    BenchmarkArenaPortfolio,
+    ManagedArenaPortfolio,
+    ManagedArenaResponse,
+    ManagedMetaControl,
+  } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
   import { num, pct, pctPoints, pctSignClass } from "../format";
   import { link } from "../stores/router.svelte";
   import EvidenceBadge from "./EvidenceBadge.svelte";
   import SelectField from "./ui/SelectField.svelte";
 
-  type Row = ManagedArenaResponse["portfolios"][number];
+  type Row = ManagedArenaResponse["portfolios"][number] | ManagedMetaControl;
   type SortKey =
     | "rank_score"
     | "mean_daily_alpha"
@@ -60,6 +65,7 @@
   }
 
   const benchmark = $derived(rows.find((row): row is BenchmarkArenaPortfolio => row.kind === "benchmark"));
+  const control = $derived(rows.find((row): row is ManagedMetaControl => row.kind === "control"));
   const contestants = $derived(
     [...rows.filter((row): row is ManagedArenaPortfolio => row.kind === "managed")].sort(compareRows),
   );
@@ -159,7 +165,9 @@
   >
     <table class="data-table">
       <caption>
-        Managed portfolio rankings. SPY is a pinned reference; portfolio rows are sorted by {currentSortLabel}
+        Managed portfolio rankings. {control
+          ? "SPY and Consensus Control are pinned references"
+          : "SPY is a pinned reference"}; portfolio rows are sorted by {currentSortLabel}
         {sortDesc ? " descending" : " ascending"}.
       </caption>
       <thead>
@@ -196,6 +204,31 @@
             <td class="right num">{num(benchmark.metrics.sharpe)}</td>
             <td class="right num">{pct(benchmark.metrics.max_drawdown)}</td>
             <td class="right num">0%</td>
+          </tr>
+        {/if}
+        {#if control}
+          <tr class="benchmark">
+            <td></td>
+            <td class="rank-col"><span class="badge">REF</span></td>
+            <th scope="row">
+              {control.name}
+              <span class="badge">same-cell average · {control.contributor_count} sources</span>
+              {#if control.stale_data}<span class="badge warn">stale data</span>{/if}
+              {#if control.error}<span class="badge neg" title={control.error}>error</span>{/if}
+            </th>
+            <td>—</td>
+            <td>Equal-weight normal portfolios</td>
+            <td class="right num">—</td>
+            <td class="right num {pctSignClass(control.metrics.mean_daily_alpha, 2)}">
+              {pct(control.metrics.mean_daily_alpha, 2)}
+            </td>
+            <td class="right num {pctSignClass(control.metrics.cumulative_excess)}">
+              {pct(control.metrics.cumulative_excess)}
+            </td>
+            <td class="right num">{num(control.metrics.information_ratio)}</td>
+            <td class="right num">{num(control.metrics.sharpe)}</td>
+            <td class="right num">{pct(control.metrics.max_drawdown)}</td>
+            <td class="right num">{pctPoints(control.metrics.turnover_pct, 0)}</td>
           </tr>
         {/if}
         {#each contestants as row (row.id)}
@@ -266,6 +299,17 @@
         <p>
           Zero-alpha benchmark · {benchmark.direction === "short" ? "daily −1× SPY" : "buy and hold SPY"}
         </p>
+      </article>
+    {/if}
+
+    {#if control}
+      <article class="mobile-card benchmark-card">
+        <header>
+          <span class="rank">REF</span><strong>{control.name}</strong><span class="badge"
+            >{control.contributor_count} sources</span
+          >
+        </header>
+        <p>Equal-weight normal portfolios · unranked consensus reference</p>
       </article>
     {/if}
 

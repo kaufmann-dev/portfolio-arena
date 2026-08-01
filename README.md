@@ -9,11 +9,12 @@ harness-specific capabilities, combines them into reusable Agents, and controls 
 concurrency, immediate runs, cancellation, retries, and history. Manual submissions and authenticated
 MCP workflows remain available.
 
-The app maintains two separate experiments. Managed portfolios are stateful paper portfolios whose
+The app maintains two normal experiments. Managed portfolios are stateful paper portfolios whose
 models decide when to rebalance. Rebuilt portfolios submit an independent signal every trading day;
 the arena measures every 1–20-session holding period and 10–100% exposure policy. Each track is
-split into Long and Short arenas and ranked against its direction-matched SPY reference. It is an
-_arena_: honest, deterministic measurement — not trading and not advice.
+split into Long and Short arenas and ranked against its direction-matched SPY reference. A separate
+Meta arena measures agents that synthesize the normal arena's same-session reasoning after its daily
+runs finish. It is an _arena_: honest, deterministic measurement — not trading and not advice.
 
 ## Architecture
 
@@ -42,6 +43,9 @@ _arena_: honest, deterministic measurement — not trading and not advice.
   endpoint exposing the operational arena surface as tools, including evaluator administration.
   API-key management and archived prompt recovery stay browser-only; the worker-only queue and
   submission protocol is private to the deployment.
+- **Meta synthesis** — arena-scoped prompts create atomic Managed/Rebuilt × Long/Short portfolio
+  families. One frozen daily batch records the active normal cohort, waits for due source runs to
+  become terminal, and then supplies the same hashed reasoning packet to every Meta evaluator.
 
 ## Experiment-integrity rules (enforced in code)
 
@@ -70,6 +74,14 @@ _arena_: honest, deterministic measurement — not trading and not advice.
   rather than deleted, and restoring an older snapshot creates another new version.
   Archived prompts and version history are browser-admin-only; public and MCP reads expose only the
   current version of active prompts.
+- **Prompt scope is immutable.** Normal `portfolio` prompts and synthesis-only `arena` prompts are
+  separate stable identities. Meta portfolios never enter normal leaderboards, comparisons, or the
+  rebuilt Common-policy source cohort.
+- **Meta evidence is frozen, not performance-selected.** Each batch contains every frozen source's
+  latest portfolio and position notes, with explicit prior-decision fallbacks for failed sources.
+  Performance, ranks, evaluator reports, and older history are excluded. Four unranked controls
+  equally average the complete same-mode, same-direction source decisions without trimming their
+  symbol union.
 - **Mode-level allocation policies.** Admin → Settings defines server-enforced minimum and maximum
   position weights for each track. Managed defaults to 10–25% (4–10 positions); rebuilt defaults to
   10–100% (1–10 positions). Settings changes govern future submissions without rewriting prompt
@@ -140,7 +152,9 @@ admin panel.
   Rebuilt analysis exposes Common Policy, Tuned, and Signal Alpha views. Use `create_allocation` for
   managed portfolios and `create_signal` for rebuilt portfolios.
 - **Prompt tools.** MCP can list, read, create, update, and archive active prompts, including their
-  Managed/Rebuilt/Both and Long/Short/Both support and current mode-and-direction-specific texts. It
+  immutable Portfolio/Arena scope, Managed/Rebuilt/Both and Long/Short/Both support, and current
+  mode-and-direction-specific texts. `create_meta_portfolio_set` atomically creates and enables all
+  four cells of one arena-scoped family. It
   can archive a prompt after every referencing portfolio is archived. It cannot expose archived
   prompt content, immutable history, unarchive, or restore operations; those recovery controls remain
   in the browser admin.
@@ -191,6 +205,13 @@ execution prompt rendered from the portfolio's selected mode-and-direction-speci
 and the editable wrapper for its mode. A liquidated managed short cannot be enabled, queued, claimed,
 retried, or submitted again until its portfolio history is reset.
 
+Arena-scoped scheduled runs are dependent work. The scheduler freezes the active normal cohort when
+the daily window opens, queues normal work first, and waits through automatic retries until every due
+source is terminal. Successful same-session decisions are used directly; failures use clearly marked
+prior-decision fallbacks. Only then are the frozen Meta targets queued for that same scheduled
+session, even if execution finishes after close. The worker receives the packet by server-side prompt
+injection; normal workers retain the same read-only tools and never receive an arena-wide data tool.
+
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
 deployment-only: `MASSIVE_API_KEY` is passed to both the web process for valuations and the worker
@@ -231,6 +252,10 @@ history.
 Migration `0021` replaces each version's per-mode text with four Managed/Rebuilt × Long/Short cells.
 Existing Long and Short versions keep their text in the corresponding direction; Both versions copy
 their former text into both directions so every supported cell remains complete.
+
+Migration `0022` adds immutable prompt context scope, atomic Meta portfolio families, and frozen daily
+Meta batches. Every existing prompt is classified as a normal `portfolio` prompt; no strategy text,
+portfolio history, allocation, signal, or evaluator audit record is rewritten.
 
 ## Development
 

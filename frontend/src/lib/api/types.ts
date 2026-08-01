@@ -24,6 +24,7 @@ export interface PromptRef {
   id: number;
   slug: string;
   name: string;
+  context_scope: PromptContextScope;
   mode: PromptAvailability;
   direction: DirectionAvailability;
   configurable: boolean;
@@ -32,6 +33,7 @@ export interface PromptRef {
 
 export type PromptMode = "managed" | "rebuilt";
 export type PromptAvailability = PromptMode | "both";
+export type PromptContextScope = "portfolio" | "arena";
 export type Direction = "long" | "short";
 export type DirectionAvailability = Direction | "both";
 export type MarketDataStatus = "fresh" | "stale" | "unavailable";
@@ -263,6 +265,77 @@ export interface ManagedArenaResponse {
   portfolios: (ManagedArenaPortfolio | BenchmarkArenaPortfolio)[];
 }
 
+export type MetaBatchStatus = "waiting" | "ready" | "insufficient" | "failed";
+
+export interface MetaBatchSummary {
+  id: number;
+  session_date: string;
+  status: MetaBatchStatus;
+  snapshot_sha256: string | null;
+  sources_finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+  source_count: number;
+  due_count: number;
+  terminal_count: number;
+  success_count: number;
+  fallback_count: number;
+  missing_count: number;
+  target_count: number;
+  error: string | null;
+}
+
+interface MetaControlBase {
+  kind: "control";
+  id: null;
+  slug: string;
+  name: string;
+  direction: Direction;
+  status: "reference";
+  rank: null;
+  evidence: EvidenceState;
+  rank_score: null;
+  cost_bps: number;
+  formula_version: "same_cell_equal_source_v1";
+  batch_session_date: string | null;
+  contributor_count: number;
+  is_liquidated: boolean;
+  liquidated_at: string | null;
+  sparkline: number[];
+  stale_data: boolean;
+  frozen_symbols: string[];
+  error: string | null;
+}
+
+export interface ManagedMetaControl extends MetaControlBase {
+  prompt_mode: "managed";
+  inception: string | null;
+  age_days: number | null;
+  allocation_count: number;
+  metrics: Metrics & AlphaMetrics;
+}
+
+export interface RebuiltMetaControl extends MetaControlBase {
+  prompt_mode: "rebuilt";
+  selected_policy: RebuiltPolicy | null;
+  metrics: AlphaMetrics;
+  completion: RebuiltCompletion;
+  signal_horizons: SignalHorizon[];
+  common_admitted: boolean;
+}
+
+export interface ManagedMetaResponse extends Omit<ManagedArenaResponse, "portfolios"> {
+  batch: MetaBatchSummary | null;
+  control: ManagedMetaControl | null;
+  portfolios: (ManagedArenaPortfolio | ManagedMetaControl | BenchmarkArenaPortfolio)[];
+}
+
+export interface RebuiltMetaResponse extends Omit<RebuiltArenaResponse, "portfolios"> {
+  batch: MetaBatchSummary | null;
+  control: RebuiltMetaControl | null;
+  portfolios: (RebuiltArenaPortfolio | RebuiltMetaControl | BenchmarkArenaPortfolio)[];
+}
+
 export interface RebuiltArenaResponse {
   track: "rebuilt";
   direction: Direction;
@@ -283,6 +356,7 @@ export interface RebuiltAnalysisContext {
 
 export interface ManagedPortfolioDetail extends ManagedArenaPortfolio {
   execution_prompt: string | null;
+  execution_context_notice?: string | null;
   series: SeriesPoint[];
   spy_series: SeriesPoint[];
   holdings: Holding[];
@@ -309,6 +383,7 @@ export interface ActiveCohort {
 
 export interface RebuiltPortfolioDetail extends RebuiltArenaPortfolio {
   execution_prompt: string | null;
+  execution_context_notice?: string | null;
   series: SeriesPoint[];
   spy_series: SeriesPoint[];
   aggregate_policy: RebuiltAggregatePolicy | null;
@@ -347,6 +422,7 @@ export interface PortfolioRefOut {
   direction: Direction;
   status: "active" | "archived";
   prompt_mode: PromptMode;
+  context_scope: PromptContextScope;
   is_liquidated?: boolean;
   liquidated_at?: string | null;
 }
@@ -371,6 +447,7 @@ export interface PromptOut {
   id: number;
   slug: string;
   name: string;
+  context_scope: PromptContextScope;
   mode: PromptAvailability;
   direction: DirectionAvailability;
   managed_long_text: string | null;
@@ -480,6 +557,41 @@ export interface CompareEntry {
   series: SeriesPoint[];
 }
 
+export interface MetaControlSeries {
+  slug: string;
+  name: string;
+  kind: "control";
+  series: SeriesPoint[];
+}
+
+export interface MetaCompareResponse extends CompareResponse {
+  batch: MetaBatchSummary | null;
+  control_series: MetaControlSeries | null;
+}
+
+export interface MetaPortfolioSetMember {
+  id: number;
+  slug: string;
+  name: string;
+  prompt_mode: PromptMode;
+  direction: Direction;
+  cost_bps: number;
+  evaluator: {
+    enabled: boolean;
+    weekdays: number[];
+  };
+}
+
+export interface MetaPortfolioSetCreated {
+  id: number;
+  slug: string;
+  family_name: string;
+  agent_id: number;
+  prompt_id: number;
+  created_at: string;
+  portfolios: MetaPortfolioSetMember[];
+}
+
 export interface CompareResponse {
   track: ArenaTrack;
   direction: Direction;
@@ -567,6 +679,7 @@ export interface EvaluatorDashboard {
 
 export interface EvaluationRun {
   id: number;
+  meta_batch_id: number | null;
   portfolio: Ref & { direction: Direction };
   agent: AgentOut;
   model: Ref;

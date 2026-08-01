@@ -13,6 +13,7 @@ from ..models import (
     EvaluationRun,
     EvaluatorInstance,
     EvaluatorSettings,
+    MetaBatch,
     ModelDefinition,
     Portfolio,
     PortfolioEvaluatorConfig,
@@ -23,6 +24,12 @@ from . import admin_ops
 from .admin_ops import AdminOpError
 from .arena import compute_valuations
 from .harnesses import automation_harness_ids, supports_automation
+from .meta_synthesis import (
+    build_snapshot,
+    render_source_packet,
+    snapshot_hash,
+    sources_are_terminal,
+)
 from .model_catalog import agent_out, agent_snapshot_out, model_ref
 from .prompt_policy import automated_execution_prompt
 from .trading_calendar import close_at, effective_date_for, is_trading_day
@@ -132,6 +139,7 @@ def run_out(run: EvaluationRun) -> dict:
         "model": model_ref(run.model),
         "trigger_kind": run.trigger_kind,
         "retry_of_run_id": run.retry_of_run_id,
+        "meta_batch_id": run.meta_batch_id,
         "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None,
         "harness": run.harness,
         "execution_model_id": run.execution_model_id,
@@ -178,14 +186,20 @@ def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
     wrapper_prompt = app_settings[f"{run.portfolio.prompt_mode}_wrapper_prompt"]
     direction_instructions = app_settings[f"{run.portfolio.direction}_direction_instructions"]
     allocation_policy = app_settings[f"{run.portfolio.prompt_mode}_allocation_policy"]
+    execution_prompt = automated_execution_prompt(
+        run.portfolio,
+        wrapper_prompt,
+        direction_instructions,
+        allocation_policy,
+    )
+    if run.portfolio.prompt.context_scope == "arena":
+        batch = session.get(MetaBatch, run.meta_batch_id) if run.meta_batch_id is not None else None
+        if batch is None or batch.status != "ready" or batch.snapshot is None:
+            raise RuntimeError("Arena-synthesis run has no ready frozen source batch")
+        execution_prompt = f"{execution_prompt}\n\n{render_source_packet(batch.snapshot)}"
     return {
         **run_out(run),
-        "execution_prompt": automated_execution_prompt(
-            run.portfolio,
-            wrapper_prompt,
-            direction_instructions,
-            allocation_policy,
-        ),
+        "execution_prompt": execution_prompt,
     }
 
 
@@ -411,6 +425,7 @@ def _new_run(
     trigger_kind: str,
     scheduled_for: date | None = None,
     retry_of_run_id: int | None = None,
+    meta_batch_id: int | None = None,
 ) -> EvaluationRun:
     portfolio = config.portfolio
     agent = portfolio.agent
@@ -429,6 +444,7 @@ def _new_run(
         scheduled_for=scheduled_for,
         trigger_kind=trigger_kind,
         retry_of_run_id=retry_of_run_id,
+        meta_batch_id=meta_batch_id,
         harness=agent.harness,
         execution_model_id=capability.execution_model_id,
         reasoning_effort=agent.reasoning_effort,
@@ -460,6 +476,15 @@ def _pending_result(
     ).first()
 
 
+def _latest_ready_meta_batch(session: Session) -> MetaBatch | None:
+    return session.scalars(
+        select(MetaBatch)
+        .where(MetaBatch.status == "ready", MetaBatch.snapshot.is_not(None))
+        .order_by(MetaBatch.session_date.desc(), MetaBatch.id.desc())
+        .limit(1)
+    ).first()
+
+
 def enqueue_manual_runs(
     session: Session,
     *,
@@ -477,6 +502,7 @@ def enqueue_manual_runs(
         raise AdminOpError(409, "The evaluator is paused")
 
     items = []
+    latest_meta_batch: MetaBatch | None = None
     for portfolio_id in unique_ids:
         config = session.get(PortfolioEvaluatorConfig, portfolio_id)
         portfolio = session.scalars(
@@ -514,6 +540,18 @@ def enqueue_manual_runs(
                 }
             )
             continue
+        if portfolio.prompt.context_scope == "arena":
+            latest_meta_batch = latest_meta_batch or _latest_ready_meta_batch(session)
+            if latest_meta_batch is None:
+                items.append(
+                    {
+                        "portfolio_id": portfolio_id,
+                        "action": "rejected",
+                        "reason": "No completed Meta batch is available for synthesis.",
+                        "run": None,
+                    }
+                )
+                continue
         active = _active_run(session, portfolio_id)
         if active is not None:
             items.append(
@@ -535,7 +573,12 @@ def enqueue_manual_runs(
                 }
             )
             continue
-        run = _new_run(config, settings, trigger_kind="manual")
+        run = _new_run(
+            config,
+            settings,
+            trigger_kind="manual",
+            meta_batch_id=(latest_meta_batch.id if portfolio.prompt.context_scope == "arena" else None),
+        )
         session.add(run)
         session.flush()
         items.append(
@@ -571,7 +614,18 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
         return {"action": "existing", "run": run_out(active)}
     if _pending_result(session, source.portfolio, current_time) is not None:
         raise AdminOpError(409, "A result already targets the next effective session")
-    run = _new_run(config, settings, trigger_kind="retry", retry_of_run_id=source.id)
+    if source.portfolio.prompt.context_scope == "arena":
+        batch = session.get(MetaBatch, source.meta_batch_id) if source.meta_batch_id else None
+        if batch is None or batch.status != "ready" or batch.snapshot is None:
+            raise AdminOpError(409, "The original Meta source batch is no longer available")
+    run = _new_run(
+        config,
+        settings,
+        trigger_kind="retry",
+        retry_of_run_id=source.id,
+        scheduled_for=(source.scheduled_for if source.portfolio.prompt.context_scope == "arena" else None),
+        meta_batch_id=source.meta_batch_id,
+    )
     session.add(run)
     session.commit()
     return {"action": "queued", "run": run_out(_load_run(session, run.id))}
@@ -616,17 +670,53 @@ def _enqueue_scheduled(
             selectinload(PortfolioEvaluatorConfig.portfolio)
             .selectinload(Portfolio.agent)
             .selectinload(Agent.model)
-            .selectinload(ModelDefinition.capabilities)
+            .selectinload(ModelDefinition.capabilities),
+            selectinload(PortfolioEvaluatorConfig.portfolio).selectinload(Portfolio.prompt),
         )
     ).all()
-    for config in configs:
-        if (
-            config.portfolio.status != "active"
-            or config.portfolio_id in liquidated_ids
-            or not supports_automation(config.portfolio.agent.harness)
-            or not is_due_on(config, local_date)
-        ):
-            continue
+    due_configs = [
+        config
+        for config in configs
+        if config.portfolio.status == "active"
+        and config.portfolio_id not in liquidated_ids
+        and supports_automation(config.portfolio.agent.harness)
+        and is_due_on(config, local_date)
+    ]
+    normal_configs = [
+        config for config in due_configs if config.portfolio.prompt.context_scope == "portfolio"
+    ]
+    meta_configs = [config for config in due_configs if config.portfolio.prompt.context_scope == "arena"]
+
+    batch = session.scalars(
+        select(MetaBatch).where(MetaBatch.session_date == local_date).with_for_update()
+    ).first()
+    if batch is None and meta_configs:
+        source_ids = list(
+            session.scalars(
+                select(Portfolio.id)
+                .join(Portfolio.prompt)
+                .where(
+                    Portfolio.status == "active",
+                    Prompt.context_scope == "portfolio",
+                )
+                .order_by(Portfolio.id)
+            )
+        )
+        batch = MetaBatch(
+            session_date=local_date,
+            status="waiting",
+            source_portfolio_ids=source_ids,
+            due_source_portfolio_ids=sorted(config.portfolio_id for config in normal_configs),
+            target_portfolio_ids=sorted(config.portfolio_id for config in meta_configs),
+        )
+        session.add(batch)
+        session.flush()
+
+    if batch is not None:
+        frozen_due_ids = {int(value) for value in batch.due_source_portfolio_ids}
+        normal_configs = [config for config in configs if config.portfolio_id in frozen_due_ids]
+
+    for config in normal_configs:
         existing = session.scalars(
             select(EvaluationRun).where(
                 EvaluationRun.portfolio_id == config.portfolio_id,
@@ -634,7 +724,16 @@ def _enqueue_scheduled(
                 EvaluationRun.scheduled_for == local_date,
             )
         ).first()
-        if existing is not None or _active_run(session, config.portfolio_id) is not None:
+        if existing is not None:
+            if batch is not None and existing.meta_batch_id is None:
+                existing.meta_batch_id = batch.id
+            continue
+        if (
+            not config.enabled
+            or config.portfolio.status != "active"
+            or not supports_automation(config.portfolio.agent.harness)
+            or _active_run(session, config.portfolio_id) is not None
+        ):
             continue
         session.add(
             _new_run(
@@ -642,8 +741,121 @@ def _enqueue_scheduled(
                 settings,
                 trigger_kind="scheduled",
                 scheduled_for=local_date,
+                meta_batch_id=batch.id if batch is not None else None,
             )
         )
+    session.flush()
+
+
+def _queue_meta_targets(
+    session: Session,
+    batch: MetaBatch,
+    settings: EvaluatorSettings,
+    target_ids: list[int] | None = None,
+) -> list[int]:
+    if target_ids is None:
+        target_ids = [int(value) for value in batch.target_portfolio_ids]
+    if not target_ids:
+        return []
+    configs = session.scalars(
+        select(PortfolioEvaluatorConfig)
+        .where(PortfolioEvaluatorConfig.portfolio_id.in_(target_ids))
+        .options(
+            selectinload(PortfolioEvaluatorConfig.portfolio)
+            .selectinload(Portfolio.agent)
+            .selectinload(Agent.model)
+            .selectinload(ModelDefinition.capabilities),
+            selectinload(PortfolioEvaluatorConfig.portfolio).selectinload(Portfolio.prompt),
+        )
+    ).all()
+    by_id = {config.portfolio_id: config for config in configs}
+    pending: list[int] = []
+    for portfolio_id in target_ids:
+        config = by_id.get(portfolio_id)
+        if (
+            config is None
+            or not config.enabled
+            or config.portfolio.status != "active"
+            or config.portfolio.prompt.context_scope != "arena"
+            or not supports_automation(config.portfolio.agent.harness)
+        ):
+            continue
+        existing = session.scalars(
+            select(EvaluationRun).where(
+                EvaluationRun.portfolio_id == portfolio_id,
+                EvaluationRun.trigger_kind == "scheduled",
+                EvaluationRun.scheduled_for == batch.session_date,
+            )
+        ).first()
+        if existing is not None:
+            if existing.meta_batch_id is None:
+                existing.meta_batch_id = batch.id
+            continue
+        if _active_run(session, portfolio_id) is not None:
+            pending.append(portfolio_id)
+            continue
+        session.add(
+            _new_run(
+                config,
+                settings,
+                trigger_kind="scheduled",
+                scheduled_for=batch.session_date,
+                meta_batch_id=batch.id,
+            )
+        )
+    return pending
+
+
+def _reconcile_pending_meta_targets(
+    session: Session,
+    settings: EvaluatorSettings,
+) -> None:
+    batches = session.scalars(
+        select(MetaBatch)
+        .where(MetaBatch.status == "ready")
+        .order_by(MetaBatch.session_date, MetaBatch.id)
+        .with_for_update(skip_locked=True)
+    ).all()
+    for batch in batches:
+        pending = [int(value) for value in batch.pending_target_portfolio_ids]
+        if pending:
+            batch.pending_target_portfolio_ids = _queue_meta_targets(
+                session,
+                batch,
+                settings,
+                pending,
+            )
+    session.flush()
+
+
+def _advance_meta_batches(
+    session: Session,
+    settings: EvaluatorSettings,
+    now: datetime,
+) -> None:
+    batches = session.scalars(
+        select(MetaBatch)
+        .where(MetaBatch.status == "waiting")
+        .order_by(MetaBatch.session_date, MetaBatch.id)
+        .with_for_update(skip_locked=True)
+    ).all()
+    for batch in batches:
+        if not sources_are_terminal(session, batch, now):
+            continue
+        snapshot = build_snapshot(session, batch, now)
+        batch.snapshot = snapshot
+        batch.snapshot_sha256 = snapshot_hash(snapshot)
+        batch.sources_finished_at = now
+        usable_count = snapshot["counts"]["source_total"] - snapshot["counts"]["missing_total"]
+        batch.status = "ready" if usable_count > 0 else "insufficient"
+        if batch.status == "ready":
+            try:
+                render_source_packet(snapshot)
+            except RuntimeError as exc:
+                batch.status = "failed"
+                batch.error = str(exc)
+            else:
+                batch.pending_target_portfolio_ids = _queue_meta_targets(session, batch, settings)
     session.flush()
 
 
@@ -743,6 +955,8 @@ def claim_runs(
     _cancel_archived_queued_runs(session, current_time)
     _cancel_liquidated_queued_runs(session, liquidated_ids, current_time)
     _enqueue_scheduled(session, settings, current_time, liquidated_ids)
+    _advance_meta_batches(session, settings, current_time)
+    _reconcile_pending_meta_targets(session, settings)
 
     claimed: list[EvaluationRun] = []
     if settings.enabled:
@@ -859,7 +1073,16 @@ def submit_run(
 
     allocation_policy = admin_ops.get_app_settings(session)[f"{run.portfolio.prompt_mode}_allocation_policy"]
     normalized = admin_ops._normalize_positions(allocation_policy, positions)
-    effective = run.scheduled_for if run.trigger_kind == "scheduled" else effective_date_for(current_time)
+    uses_frozen_meta_session = (
+        run.portfolio.prompt.context_scope == "arena"
+        and run.meta_batch_id is not None
+        and run.scheduled_for is not None
+    )
+    effective = (
+        run.scheduled_for
+        if run.trigger_kind == "scheduled" or uses_frozen_meta_session
+        else effective_date_for(current_time)
+    )
     assert effective is not None
     if run.portfolio.prompt_mode == "managed":
         allocation = session.scalars(

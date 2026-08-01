@@ -964,6 +964,55 @@ def _select_common_policy(
     return selection
 
 
+def extend_common_policy(
+    selection: CommonDirectionState,
+    analyses: dict[int, RebuiltPortfolioAnalysis],
+    objective: Objective,
+    direction: Direction,
+) -> CommonDirectionState:
+    """Apply an already-selected Common policy to additional portfolios.
+
+    The selection's policy and aggregate metrics remain those of its source
+    cohort.  This lets a separate comparison cohort use the Arena's Common
+    policy without influencing which policy the Arena selected.
+    """
+    if selection.policy is None or not selection.spy_series:
+        return selection
+
+    admitted = _common_admitted_member_ids(analyses, direction)
+    selection.member_ids.update(admitted)
+    if not admitted:
+        return selection
+
+    horizon = int(selection.policy["horizon"])
+    exposure = int(selection.policy["exposure_pct"])
+    baseline = str(selection.policy["scoring_start"])
+    dates = [point["date"] for point in selection.spy_series if point["date"] > baseline]
+    family_size = int(
+        (selection.policy.get("metrics") or {}).get(
+            "family_size",
+            len(HORIZONS) if objective == "canonical" else len(HORIZONS) * len(EXPOSURES),
+        )
+    )
+    for portfolio_id in sorted(admitted):
+        analysis = analyses.get(portfolio_id)
+        if analysis is None or (horizon, exposure) not in analysis.policies:
+            continue
+        candidate = _common_candidate_data(
+            [analysis],
+            horizon,
+            exposure,
+            family_size,
+            dates,
+            baseline,
+        )
+        if candidate is None:
+            continue
+        selection.member_metrics.update(candidate.member_metrics)
+        selection.member_series.update(candidate.member_series)
+    return selection
+
+
 def _rebuilt_market_flags(
     portfolio: Portfolio,
     series: dict[str, Series],
@@ -1022,6 +1071,7 @@ def _rebuilt_cache_key(
     cost_basis: CostBasis,
     horizon: int | None,
     include_policy_matrix: bool,
+    common_source_ids: set[int] | None,
 ) -> str:
     return fingerprint(
         {
@@ -1033,6 +1083,7 @@ def _rebuilt_cache_key(
                 "cost_basis": cost_basis,
                 "horizon": horizon,
                 "include_policy_matrix": include_policy_matrix,
+                "common_source_ids": sorted(common_source_ids) if common_source_ids is not None else None,
             },
             "as_of": as_of,
             "calendar": calendar,
@@ -1172,6 +1223,7 @@ def compute_rebuilt_arena(
     cost_basis: CostBasis = "net",
     horizon: int | None = None,
     include_policy_matrix: bool = False,
+    common_source_ids: set[int] | None = None,
     now: datetime | None = None,
 ) -> RebuiltArena:
     """Load prices once and evaluate every rebuilt portfolio deterministically."""
@@ -1184,6 +1236,10 @@ def compute_rebuilt_arena(
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     rebuilt = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "rebuilt"]
+    if common_source_ids is None:
+        common_source_ids = {
+            portfolio.id for portfolio in rebuilt if portfolio.prompt.context_scope == "portfolio"
+        }
     signals = [signal for portfolio in rebuilt for signal in portfolio.signals]
     requirements = signal_pricing_requirements(
         signals,
@@ -1203,6 +1259,7 @@ def compute_rebuilt_arena(
         cost_basis=cost_basis,
         horizon=horizon,
         include_policy_matrix=include_policy_matrix,
+        common_source_ids=common_source_ids,
     )
 
     def build() -> _CachedRebuiltArena:
@@ -1261,14 +1318,21 @@ def compute_rebuilt_arena(
                 arena.market_data_status = "unavailable"
             if stale_data and arena.market_data_status == "fresh":
                 arena.market_data_status = "stale"
-        arena.common_by_direction = {
-            direction: _select_common_policy(
-                arena.by_portfolio_id,
-                objective,
-                direction,
-            )
-            for direction in ("long", "short")
+        common_sources = {
+            portfolio_id: analysis
+            for portfolio_id, analysis in arena.by_portfolio_id.items()
+            if portfolio_id in common_source_ids
         }
+        arena.common_by_direction = {}
+        for direction in ("long", "short"):
+            selection = _select_common_policy(common_sources, objective, direction)
+            comparison = {
+                portfolio_id: analysis
+                for portfolio_id, analysis in arena.by_portfolio_id.items()
+                if portfolio_id not in common_source_ids
+            }
+            extend_common_policy(selection, comparison, objective, direction)
+            arena.common_by_direction[direction] = selection
         logger.info(
             "computed rebuilt analytics portfolios=%d policies=%d view=%s matrix=%s duration_ms=%.1f",
             len(rebuilt),

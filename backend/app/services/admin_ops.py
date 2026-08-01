@@ -17,6 +17,7 @@ from ..models import (
     Allocation,
     EvaluationRun,
     EvaluatorSettings,
+    MetaPortfolioSet,
     ModelDefinition,
     ModelHarnessCapability,
     Portfolio,
@@ -89,6 +90,14 @@ MANAGED_MIN_POSITION_WEIGHT_PCT_FALLBACK = 10.0
 MANAGED_MAX_POSITION_WEIGHT_PCT_FALLBACK = 25.0
 REBUILT_MIN_POSITION_WEIGHT_PCT_FALLBACK = 10.0
 REBUILT_MAX_POSITION_WEIGHT_PCT_FALLBACK = 100.0
+PROMPT_CONTEXT_SCOPES = {"portfolio", "arena"}
+META_PORTFOLIO_COST_BPS = 10
+META_PORTFOLIO_CELLS = (
+    ("Core", "managed", "long"),
+    ("Pulse", "rebuilt", "long"),
+    ("Shadow", "managed", "short"),
+    ("Probe", "rebuilt", "short"),
+)
 
 
 def unique_slug(session: Session, model, wanted: str) -> str:
@@ -109,6 +118,11 @@ def _validate_prompt_mode(prompt_mode: str) -> None:
 def _validate_direction(direction: str) -> None:
     if direction not in PROMPT_DIRECTIONS:
         raise AdminOpError(422, "Direction must be 'long' or 'short'.")
+
+
+def _validate_prompt_context_scope(context_scope: str) -> None:
+    if context_scope not in PROMPT_CONTEXT_SCOPES:
+        raise AdminOpError(422, "Prompt context scope must be 'portfolio' or 'arena'.")
 
 
 # --- Models and agents ------------------------------------------------------
@@ -349,6 +363,7 @@ def prompt_out(prompt: Prompt, settings: dict) -> dict:
     return {
         "id": prompt.id,
         "slug": prompt.slug,
+        "context_scope": prompt.context_scope,
         "name": prompt.name,
         "mode": prompt.mode,
         "direction": prompt.direction,
@@ -392,6 +407,7 @@ def _admin_prompt_out(
     return {
         "id": prompt.id,
         "slug": prompt.slug,
+        "context_scope": prompt.context_scope,
         "status": prompt.status,
         "archived_at": prompt.archived_at.isoformat() if prompt.archived_at is not None else None,
         "created_at": prompt.created_at.isoformat(),
@@ -656,11 +672,13 @@ def create_prompt(
     managed_short_text: str | None,
     rebuilt_long_text: str | None,
     rebuilt_short_text: str | None,
+    context_scope: str = "portfolio",
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
     if not name.strip():
         raise AdminOpError(422, "Prompt name is required")
+    _validate_prompt_context_scope(context_scope)
     _validate_prompt_direction(direction)
     _validate_prompt_text_contract(
         mode,
@@ -672,6 +690,7 @@ def create_prompt(
     )
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
+        context_scope=context_scope,
         status="active",
         archived_at=None,
         current_version_id=None,
@@ -929,6 +948,11 @@ def create_portfolio(
     if agent is None:
         raise AdminOpError(422, "Agent not found")
     prompt = _active_prompt_for_portfolio(session, prompt_id)
+    if prompt.context_scope != "portfolio":
+        raise AdminOpError(
+            422,
+            "Arena-scoped prompts can only be used through meta portfolio set creation.",
+        )
     _ensure_prompt_supports_portfolio_mode(prompt, prompt_mode)
     _ensure_prompt_supports_portfolio_direction(prompt, direction)
     clean_name = name.strip()
@@ -955,6 +979,117 @@ def create_portfolio(
         "direction": portfolio.direction,
         "cost_bps": portfolio.cost_bps,
     }
+
+
+def _meta_portfolio_set_out(meta_set: MetaPortfolioSet) -> dict:
+    return {
+        "id": meta_set.id,
+        "slug": meta_set.slug,
+        "family_name": meta_set.family_name,
+        "agent_id": meta_set.agent_id,
+        "prompt_id": meta_set.prompt_id,
+        "created_at": meta_set.created_at.isoformat(),
+        "portfolios": [
+            {
+                "id": portfolio.id,
+                "slug": portfolio.slug,
+                "name": portfolio.name,
+                "prompt_mode": portfolio.prompt_mode,
+                "direction": portfolio.direction,
+                "cost_bps": portfolio.cost_bps,
+                "evaluator": {
+                    "enabled": portfolio.evaluator_config.enabled,
+                    "weekdays": portfolio.evaluator_config.weekdays,
+                },
+            }
+            for portfolio in meta_set.portfolios
+        ],
+    }
+
+
+def create_meta_portfolio_set(
+    session: Session,
+    *,
+    family_name: str,
+    agent_id: int,
+    prompt_id: int,
+) -> dict:
+    """Atomically create and automate all four synthesis cells for one family."""
+    clean_family_name = family_name.strip()
+    if not clean_family_name:
+        raise AdminOpError(422, "Meta portfolio family name is required.")
+    if len(clean_family_name) > 180:
+        raise AdminOpError(422, "Meta portfolio family name must be at most 180 characters.")
+
+    # Serialize identity checks and creation so two concurrent requests cannot
+    # each pass the friendly conflict checks before inserting.
+    session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
+
+    agent = session.get(Agent, agent_id)
+    if agent is None:
+        raise AdminOpError(422, "Agent not found")
+    if not supports_automation(agent.harness):
+        raise AdminOpError(422, "The selected agent does not support integrated automation.")
+
+    prompt = _active_prompt_for_portfolio(session, prompt_id)
+    if prompt.context_scope != "arena":
+        raise AdminOpError(422, "Meta portfolio sets require an arena-scoped prompt.")
+    if prompt.mode != "both" or prompt.direction != "both":
+        raise AdminOpError(
+            422,
+            "Meta portfolio sets require a prompt supporting managed and rebuilt, long and short.",
+        )
+
+    family_slug = slugify(clean_family_name)
+    if session.scalar(select(MetaPortfolioSet.id).where(MetaPortfolioSet.slug == family_slug)):
+        raise AdminOpError(409, "A meta portfolio set with this family name already exists.")
+
+    members = [
+        {
+            "name": f"{clean_family_name} {suffix}",
+            "slug": slugify(f"{clean_family_name} {suffix}"),
+            "prompt_mode": prompt_mode,
+            "direction": direction,
+        }
+        for suffix, prompt_mode, direction in META_PORTFOLIO_CELLS
+    ]
+    member_slugs = [member["slug"] for member in members]
+    member_names = [member["name"].casefold() for member in members]
+    conflicting_portfolio = session.scalar(
+        select(Portfolio.id).where(
+            (Portfolio.slug.in_(member_slugs)) | (func.lower(Portfolio.name).in_(member_names))
+        )
+    )
+    if conflicting_portfolio is not None:
+        raise AdminOpError(409, "One or more meta portfolio member identities already exist.")
+
+    meta_set = MetaPortfolioSet(
+        slug=family_slug,
+        family_name=clean_family_name,
+        agent_id=agent.id,
+        prompt_id=prompt.id,
+    )
+    session.add(meta_set)
+    session.flush()
+    for member in members:
+        portfolio = Portfolio(
+            slug=member["slug"],
+            name=member["name"],
+            agent_id=agent.id,
+            prompt_id=prompt.id,
+            meta_set_id=meta_set.id,
+            prompt_mode=member["prompt_mode"],
+            direction=member["direction"],
+            cost_bps=META_PORTFOLIO_COST_BPS,
+        )
+        portfolio.evaluator_config = PortfolioEvaluatorConfig(
+            enabled=True,
+            weekdays=[0, 1, 2, 3, 4],
+        )
+        session.add(portfolio)
+
+    session.commit()
+    return _meta_portfolio_set_out(meta_set)
 
 
 def update_portfolio(
@@ -984,6 +1119,26 @@ def update_portfolio(
         final_prompt = _active_prompt_for_portfolio(session, final_prompt_id)
     else:
         final_prompt = portfolio.prompt
+    if portfolio.meta_set_id is None:
+        if final_prompt.context_scope != "portfolio":
+            raise AdminOpError(
+                422,
+                "Arena-scoped prompts can only be used through meta portfolio set creation.",
+            )
+    else:
+        meta_set = session.get(MetaPortfolioSet, portfolio.meta_set_id)
+        if meta_set is None:
+            raise RuntimeError(f"Portfolio {portfolio.id} references a missing meta portfolio set")
+        if (
+            final_prompt.id != meta_set.prompt_id
+            or final_prompt_mode != portfolio.prompt_mode
+            or final_direction != portfolio.direction
+            or (agent_id is not None and agent_id != meta_set.agent_id)
+        ):
+            raise AdminOpError(
+                409,
+                "A meta portfolio's prompt, mode, direction, and agent are managed by its set.",
+            )
     _ensure_prompt_supports_portfolio_mode(final_prompt, final_prompt_mode)
     _ensure_prompt_supports_portfolio_direction(final_prompt, final_direction)
     changing_prompt = prompt_id is not None and prompt_id != portfolio.prompt_id
@@ -1077,6 +1232,11 @@ def update_portfolio(
 
 def delete_portfolio(session: Session, portfolio_id: int) -> dict:
     portfolio = writable_portfolio(session, portfolio_id)
+    if portfolio.meta_set_id is not None:
+        raise AdminOpError(
+            409,
+            "Meta portfolio members cannot be deleted individually; archive the member instead.",
+        )
     session.delete(portfolio)
     session.commit()
     return {"ok": True}
