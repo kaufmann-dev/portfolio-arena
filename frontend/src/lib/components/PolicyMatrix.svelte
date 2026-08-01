@@ -27,14 +27,16 @@
 </script>
 
 <section class="matrix-section" aria-labelledby="policy-matrix-title">
-  <header>
-    <h2 id="policy-matrix-title">Policy matrix</h2>
-    <p>Mean daily alpha for every holding-period and total-exposure pair.</p>
+  <header class="section-head">
+    <div>
+      <h2 id="policy-matrix-title">Policy matrix</h2>
+      <p>Mean daily alpha for every holding-period and total-exposure pair.</p>
+    </div>
   </header>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="matrix-scroll" role="region" aria-labelledby="policy-matrix-title" tabindex="0">
-    <table>
-      <caption>
+  <div class="table-scroll" role="region" aria-labelledby="policy-matrix-title" tabindex="0">
+    <table class="matrix-table">
+      <caption class="visually-hidden">
         Holding-period rows by ten through one hundred percent exposure columns. Every cell contains its
         numeric result or pending state.
       </caption>
@@ -70,92 +72,13 @@
 </section>
 
 <style>
-  .matrix-section {
-    min-width: 0;
-    display: grid;
-    gap: 12px;
+  .matrix-table {
+    --matrix-table-min: 980px;
+    --matrix-cell-width: 88px;
+    --matrix-label-width: 80px;
   }
 
-  header {
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 16px;
-  }
-
-  p {
-    margin-top: 5px;
-    color: var(--text-secondary);
-    font-size: 11px;
-  }
-
-  .matrix-scroll {
-    overflow-x: auto;
-    border: 1px solid var(--border-subtle);
-  }
-
-  table {
-    min-width: 980px;
-    table-layout: fixed;
-  }
-
-  caption {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  th,
-  td {
-    width: 88px;
-    padding: 8px 7px;
-    border-right: 1px solid var(--border-subtle);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    text-align: center;
-    white-space: nowrap;
-  }
-
-  th:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 2;
-    width: 80px;
-    background: var(--bg-surface);
-  }
-
-  td.positive {
-    color: var(--pos);
-    background: color-mix(in srgb, var(--pos) 9%, transparent);
-  }
-
-  td.negative {
-    color: var(--neg);
-    background: color-mix(in srgb, var(--neg) 9%, transparent);
-  }
-
-  td.inconclusive {
-    color: var(--warn);
-    background: var(--warn-bg);
-  }
-
-  td.pending {
-    color: var(--text-tertiary);
-    font-family: var(--font-sans);
-    font-size: 9px;
-  }
-
-  td.selected {
+  .matrix-table td.selected {
     box-shadow: inset 0 0 0 2px var(--accent);
   }
 </style>

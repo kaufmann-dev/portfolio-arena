@@ -98,15 +98,15 @@
       </div>
       <span class="num">{portfolio.allocations.length}</span>
     </header>
-    <div class="history-list">
+    <div class="disclosure-list">
       {#each portfolio.allocations as allocation, index (allocation.id)}
         <details>
           <summary>
-            <span class="history-primary">
+            <span class="disclosure-primary">
               <strong class="num">{fmtDate(allocation.effective_date)}</strong>
               <span>{allocationTitle(index, portfolio.allocations.length)}</span>
             </span>
-            <span class="history-meta">
+            <span class="disclosure-meta">
               {#if !allocation.applied_date}
                 Pending
               {:else if allocation.turnover_pct !== null}
@@ -116,12 +116,15 @@
               {/if}
             </span>
           </summary>
-          <div class="history-body">
+          <div class="disclosure-body">
             <p class="muted num">Entered {fmtDateTime(allocation.entered_at)}</p>
             {#if allocation.note}<p>{allocation.note}</p>{/if}
             <div class="table-scroll">
-              <table>
-                <thead><tr><th>Symbol</th><th class="right">Weight</th></tr></thead>
+              <table class="data-table">
+                <caption class="visually-hidden">
+                  Positions for the allocation effective {fmtDate(allocation.effective_date)}
+                </caption>
+                <thead><tr><th scope="col">Symbol</th><th scope="col" class="right">Weight</th></tr></thead>
                 <tbody>
                   {#each allocation.positions as position (position.symbol)}
                     <tr>
@@ -135,7 +138,7 @@
           </div>
         </details>
       {:else}
-        <div class="empty-state">No allocations entered yet.</div>
+        <div class="empty-state compact">No allocations entered yet.</div>
       {/each}
     </div>
   </section>
@@ -157,7 +160,7 @@
     {@const series = chartSeries(portfolio)}
     {@const markers = markersFor(data)}
     <article class="portfolio-detail">
-      <header class="detail-head">
+      <header class="detail-head split">
         <div>
           <nav class="crumbs" aria-label="Breadcrumb">
             <a href={arenaHref} onclick={(event) => link(event, arenaHref)}>Portfolio Arena</a>
@@ -350,12 +353,14 @@
             </div>
           </header>
           <div class="table-scroll">
-            <table>
+            <table class="data-table">
+              <caption class="visually-hidden">Current holdings for {managedPortfolio.name}</caption>
               <thead
                 ><tr
-                  ><th>Symbol</th><th class="right">Weight</th><th class="right">Target</th><th class="right"
-                    >Drift</th
-                  ></tr
+                  ><th scope="col">Symbol</th><th scope="col" class="right">Weight</th><th
+                    scope="col"
+                    class="right">Target</th
+                  ><th scope="col" class="right">Drift</th></tr
                 ></thead
               >
               <tbody>
@@ -369,7 +374,7 @@
                     </td>
                   </tr>
                 {:else}
-                  <tr><td colspan="4" class="muted">No current holdings.</td></tr>
+                  <tr><td colspan="4" class="table-empty">No current holdings.</td></tr>
                 {/each}
               </tbody>
             </table>
@@ -387,9 +392,10 @@
               </p>
             </div>
           </header>
-          <div class="table-scroll compact-table">
-            <table>
-              <thead><tr><th>Symbol</th><th class="right">Weight</th></tr></thead>
+          <div class="table-scroll">
+            <table class="data-table">
+              <caption class="visually-hidden">Aggregate holdings for {rebuiltPortfolio.name}</caption>
+              <thead><tr><th scope="col">Symbol</th><th scope="col" class="right">Weight</th></tr></thead>
               <tbody>
                 {#each rebuiltPortfolio.holdings as holding (holding.symbol)}
                   <tr>
@@ -397,7 +403,7 @@
                     <td class="right num">{pctPoints(holding.weight_pct, 2)}</td>
                   </tr>
                 {:else}
-                  <tr><td colspan="2" class="muted">No active policy holdings.</td></tr>
+                  <tr><td colspan="2" class="table-empty">No active policy holdings.</td></tr>
                 {/each}
               </tbody>
             </table>
@@ -412,22 +418,28 @@
             </div>
             <span class="num">{rebuiltPortfolio.active_cohorts.length}</span>
           </header>
-          <div class="history-list">
+          <div class="disclosure-list">
             {#each rebuiltPortfolio.active_cohorts as cohort (cohort.signal_id)}
               <details>
                 <summary>
-                  <span class="history-primary">
+                  <span class="disclosure-primary">
                     <strong class="num">{fmtDate(cohort.start_date)}</strong>
                     <span>Signal #{cohort.signal_id}</span>
                   </span>
-                  <span class="history-meta">
+                  <span class="disclosure-meta">
                     {cohort.age_sessions} sessions · ends {fmtDate(cohort.end_date)}
                   </span>
                 </summary>
-                <div class="history-body">
-                  <div class="table-scroll compact-table">
-                    <table>
-                      <thead><tr><th>Symbol</th><th class="right">Signal weight</th></tr></thead>
+                <div class="disclosure-body">
+                  <div class="table-scroll">
+                    <table class="data-table">
+                      <caption class="visually-hidden">
+                        Positions for signal {cohort.signal_id}, effective {fmtDate(cohort.start_date)}
+                      </caption>
+                      <thead
+                        ><tr><th scope="col">Symbol</th><th scope="col" class="right">Signal weight</th></tr
+                        ></thead
+                      >
                       <tbody>
                         {#each cohort.positions as position (position.symbol)}
                           <tr>
@@ -441,7 +453,7 @@
                 </div>
               </details>
             {:else}
-              <div class="empty-state">No cohorts are active in the selected policy.</div>
+              <div class="empty-state compact">No cohorts are active in the selected policy.</div>
             {/each}
           </div>
         </section>
@@ -471,35 +483,6 @@
     min-width: 0;
     display: grid;
     gap: 22px;
-  }
-
-  .detail-head {
-    display: flex;
-    align-items: start;
-    justify-content: space-between;
-    gap: 18px;
-    padding-bottom: 22px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .crumbs {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 10px;
-    color: var(--text-tertiary);
-    font-size: 11px;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: clamp(30px, 7vw, 48px);
-    letter-spacing: -0.045em;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 16px;
   }
 
   .identity {
@@ -577,17 +560,6 @@
     font-weight: 700;
   }
 
-  .section-head {
-    margin: 0;
-  }
-
-  .section-head p,
-  .section-head > span {
-    margin-top: 5px;
-    color: var(--text-secondary);
-    font-size: 11px;
-  }
-
   .chart-card,
   .data-section,
   .history-section {
@@ -606,64 +578,6 @@
     font-size: 12px;
   }
 
-  .table-scroll {
-    overflow-x: auto;
-  }
-
-  .compact-table table {
-    width: min(100%, 620px);
-  }
-
-  .history-list {
-    display: grid;
-    border-top: 1px solid var(--border-subtle);
-  }
-
-  details {
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  summary {
-    min-height: 54px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 10px 4px;
-    cursor: pointer;
-  }
-
-  .history-primary {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-  }
-
-  .history-primary strong {
-    font-size: 12px;
-  }
-
-  .history-primary span,
-  .history-meta {
-    color: var(--text-secondary);
-    font-size: 10px;
-  }
-
-  .history-meta {
-    text-align: right;
-  }
-
-  .history-body {
-    display: grid;
-    gap: 10px;
-    padding: 4px 4px 16px;
-    font-size: 12px;
-  }
-
-  .history-body table {
-    min-width: 360px;
-  }
-
   @media (max-width: 960px) {
     .metric-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -671,10 +585,6 @@
   }
 
   @media (max-width: 680px) {
-    .detail-head {
-      flex-direction: column;
-    }
-
     .head-badges {
       justify-content: flex-start;
     }
@@ -693,16 +603,6 @@
 
     .metric-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    summary {
-      align-items: start;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .history-meta {
-      text-align: left;
     }
   }
 </style>

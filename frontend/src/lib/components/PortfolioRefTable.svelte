@@ -14,11 +14,18 @@
   }
 </script>
 
-<div class="table-scroll">
-  <table>
-    <caption>Portfolios associated with this record</caption>
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<div class="table-scroll" role="region" aria-label="Portfolios associated with this record" tabindex="0">
+  <table class="data-table">
+    <caption class="visually-hidden">Portfolios associated with this record</caption>
     <thead>
-      <tr><th>Portfolio</th><th>Direction</th><th>Track</th><th>Status</th><th></th></tr>
+      <tr>
+        <th scope="col">Portfolio</th>
+        <th scope="col">Direction</th>
+        <th scope="col">Track</th>
+        <th scope="col">Status</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
     </thead>
     <tbody>
       {#each rows as row (row.id)}
@@ -41,36 +48,15 @@
           </td>
         </tr>
       {:else}
-        <tr><td colspan="5" class="muted">No portfolios use this record.</td></tr>
+        <tr><td colspan="5" class="table-empty">No portfolios use this record.</td></tr>
       {/each}
     </tbody>
   </table>
 </div>
 
 <style>
-  .table-scroll {
-    overflow-x: auto;
-    border: 1px solid var(--border-subtle);
-  }
-
   table {
     min-width: 560px;
-  }
-
-  caption {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  th[scope="row"] {
-    text-align: left;
   }
 
   th[scope="row"] a {

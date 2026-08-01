@@ -172,9 +172,15 @@
   </div>
 {/snippet}
 
-<div class="arena-rankings">
-  <div class="desktop-table">
-    <table>
+<div class="arena-rankings rebuilt-rankings">
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div
+    class="desktop-table table-scroll"
+    role="region"
+    aria-label="Rebuilt portfolio rankings table"
+    tabindex="0"
+  >
+    <table class="data-table">
       <caption>
         Rebuilt portfolio rankings in {view} view. SPY is a pinned reference; portfolio rows are sorted by
         {currentSortLabel}
@@ -264,8 +270,8 @@
           </tr>
         {:else}
           <tr>
-            <td colspan={view === "signal" ? 10 : 13}>
-              <div class="empty-state">No rebuilt portfolios match these filters.</div>
+            <td colspan={view === "signal" ? 10 : 13} class="table-empty">
+              No rebuilt portfolios match these filters.
             </td>
           </tr>
         {/each}
@@ -338,219 +344,3 @@
     {/each}
   </section>
 </div>
-
-<style>
-  .arena-rankings {
-    min-width: 0;
-  }
-
-  .desktop-table {
-    overflow-x: auto;
-    border: 1px solid var(--border-subtle);
-  }
-
-  table {
-    min-width: 1320px;
-  }
-
-  caption {
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border-subtle);
-    caption-side: top;
-    color: var(--text-tertiary);
-    font-size: 10px;
-    text-align: left;
-  }
-
-  th[scope="row"] {
-    text-align: left;
-  }
-
-  tbody tr:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  .benchmark {
-    color: var(--text-secondary);
-    background: var(--bg-inset);
-  }
-
-  .rank-col {
-    width: 52px;
-    text-align: center;
-  }
-
-  .compare-col {
-    width: 42px;
-    text-align: center;
-  }
-
-  .portfolio-col {
-    min-width: 190px;
-  }
-
-  .portfolio-link {
-    font-weight: 700;
-  }
-
-  .badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 5px;
-  }
-
-  .sortable {
-    padding: 0;
-  }
-
-  .sortable button {
-    display: inline-flex;
-    width: 100%;
-    min-height: 42px;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 3px;
-    padding: 9px 12px;
-    color: inherit;
-    font: inherit;
-    letter-spacing: inherit;
-    text-transform: inherit;
-    white-space: nowrap;
-  }
-
-  .sortable button:hover,
-  .sortable button:focus-visible {
-    color: var(--text-primary);
-    background: var(--bg-surface-hover);
-  }
-
-  .score {
-    font-weight: 760;
-  }
-
-  .compare {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin: 0;
-  }
-
-  .compare input {
-    width: 17px;
-    height: 17px;
-    min-height: 0;
-    accent-color: var(--accent);
-  }
-
-  .compare span {
-    color: var(--text-tertiary);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .mobile-rankings {
-    display: none;
-  }
-
-  @media (max-width: 960px) {
-    .desktop-table {
-      display: none;
-    }
-
-    .mobile-rankings {
-      display: grid;
-      gap: 10px;
-    }
-
-    .mobile-sort {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: end;
-      gap: 8px;
-      margin-bottom: 2px;
-    }
-
-    .direction {
-      min-height: 38px;
-      padding: 7px 10px;
-      border: 1px solid var(--border-strong);
-      color: var(--text-secondary);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-
-    .mobile-card {
-      padding: 14px;
-      border: 1px solid var(--border-subtle);
-      background: var(--bg-surface);
-    }
-
-    .mobile-card header {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
-      align-items: start;
-      gap: 10px;
-    }
-
-    .rank {
-      color: var(--accent);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 750;
-    }
-
-    .context,
-    .benchmark-card p {
-      margin: 10px 0;
-      color: var(--text-secondary);
-      font-size: 11px;
-    }
-
-    dl {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 1px;
-      margin: 0;
-      background: var(--border-subtle);
-    }
-
-    dl div {
-      padding: 8px;
-      background: var(--bg-surface);
-    }
-
-    dt {
-      color: var(--text-tertiary);
-      font-size: 8px;
-      font-weight: 740;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-    }
-
-    dd {
-      margin: 3px 0 0;
-      font-size: 12px;
-      font-weight: 650;
-    }
-  }
-
-  @media (max-width: 520px) {
-    .mobile-card header {
-      grid-template-columns: auto minmax(0, 1fr);
-    }
-
-    .mobile-card header .labelled {
-      grid-column: 2;
-      justify-self: start;
-    }
-
-    dl {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-</style>

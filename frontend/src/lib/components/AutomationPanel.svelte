@@ -303,7 +303,7 @@
 
 <div class="automation-stack">
   <section class="card">
-    <div class="panel-head">
+    <div class="section-head panel-head">
       <div>
         <h2>Evaluator runtime</h2>
         <p class="muted">The website, scheduler, and Codex worker are deployed as one application.</p>
@@ -358,13 +358,13 @@
         </button>
       </div>
     {:else if loading}
-      <div class="loading-block"><span class="spinner" aria-hidden="true"></span></div>
+      <div class="loading-block compact"><span class="spinner" aria-hidden="true"></span></div>
     {/if}
   </section>
 
   {#if settingsDraft}
     <section class="card">
-      <div class="panel-head">
+      <div class="section-head panel-head">
         <div>
           <h2>Global evaluator settings</h2>
           <p class="muted">
@@ -424,7 +424,7 @@
 
   {#if dashboard}
     <section class="card">
-      <div class="panel-head">
+      <div class="section-head panel-head">
         <div>
           <h2>Portfolio automation</h2>
           <p class="muted">
@@ -524,7 +524,7 @@
   {/if}
 
   <section class="card">
-    <div class="panel-head">
+    <div class="section-head panel-head">
       <div>
         <h2>Evaluation history</h2>
         <p class="muted">Scheduled, immediate, and retry runs share one auditable queue.</p>
@@ -534,7 +534,7 @@
       >
     </div>
 
-    <div class="filters" aria-label="Evaluation run filters">
+    <div class="filters" role="group" aria-label="Evaluation run filters">
       <SelectField
         id="run-portfolio"
         label="Portfolio"
@@ -560,19 +560,20 @@
       <div class="error-box" role="alert">{error}</div>
     {/if}
 
-    <div class="table-scroll">
-      <table>
-        <caption>Automated portfolio evaluation runs, newest first</caption>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="table-scroll" role="region" aria-label="Automated portfolio evaluation runs" tabindex="0">
+      <table class="data-table runs-table">
+        <caption class="visually-hidden">Automated portfolio evaluation runs, newest first</caption>
         <thead>
           <tr>
-            <th>Run</th>
-            <th>Portfolio</th>
-            <th>Model</th>
-            <th>Status</th>
-            <th class="right">Attempts</th>
-            <th>Finished</th>
-            <th>Result</th>
-            <th>Actions</th>
+            <th scope="col">Run</th>
+            <th scope="col">Portfolio</th>
+            <th scope="col">Model</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="right">Attempts</th>
+            <th scope="col">Finished</th>
+            <th scope="col">Result</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody aria-live="polite">
@@ -606,7 +607,12 @@
                 {#if run.report || run.error}
                   <details>
                     <summary>{run.error ? "Details" : "Report"}</summary>
-                    <pre class={{ "error-report": Boolean(run.error) }}>{run.error ?? run.report}</pre>
+                    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                    <pre
+                      class={{ "error-report": Boolean(run.error) }}
+                      tabindex="0"
+                      aria-label={`${run.error ? "Error details" : "Evaluation report"} for run ${run.id}`}>{run.error ??
+                        run.report}</pre>
                   </details>
                 {:else if !run.result}
                   <span class="muted">—</span>
@@ -642,11 +648,11 @@
             </tr>
           {:else}
             {#if !loading}
-              <tr><td colspan="8" class="muted empty">No evaluation runs match these filters.</td></tr>
+              <tr><td colspan="8" class="table-empty">No evaluation runs match these filters.</td></tr>
             {/if}
           {/each}
           {#if loading && runs.length === 0}
-            <tr><td colspan="8" class="muted empty">Loading evaluation runs…</td></tr>
+            <tr><td colspan="8" class="table-empty">Loading evaluation runs…</td></tr>
           {/if}
         </tbody>
       </table>
@@ -683,7 +689,6 @@
     min-width: 0;
   }
 
-  .panel-head,
   .config-head,
   .runtime-actions,
   .config-actions,
@@ -695,15 +700,7 @@
   }
 
   .panel-head {
-    padding-bottom: 14px;
     margin-bottom: 18px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  h2 {
-    margin: 0 0 5px;
-    font-size: 16px;
-    letter-spacing: -0.02em;
   }
 
   .runtime-grid {
@@ -839,33 +836,12 @@
     margin-bottom: 16px;
   }
 
-  .notice-box {
-    padding: 10px 12px;
-    margin-bottom: 12px;
-    color: var(--pos);
-    border: 1px solid var(--pos);
-    background: color-mix(in srgb, var(--pos) 8%, transparent);
+  .runs-table {
+    min-width: 1080px;
   }
 
-  caption {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  td {
+  .runs-table td {
     vertical-align: top;
-  }
-
-  .badge.success {
-    color: var(--pos);
-    border-color: var(--pos);
   }
 
   summary {
@@ -892,11 +868,6 @@
 
   .row-actions {
     justify-content: flex-start;
-  }
-
-  .empty {
-    padding: 24px;
-    text-align: center;
   }
 
   .more {

@@ -46,7 +46,7 @@
   .evidence.positive {
     border-color: color-mix(in srgb, var(--pos) 55%, var(--border-strong));
     color: var(--pos);
-    background: color-mix(in srgb, var(--pos) 9%, transparent);
+    background: color-mix(in srgb, var(--pos) 5%, transparent);
   }
 
   .evidence.negative {
