@@ -119,6 +119,10 @@
     return promptSupportsTrack(prompt.mode, mode) && promptSupportsDirection(prompt.direction, direction);
   }
 
+  function promptHasActivePortfolio(promptId: number): boolean {
+    return portfolios.some((portfolio) => portfolio.status === "active" && portfolio.prompt.id === promptId);
+  }
+
   function promptSupportsCell(
     mode: PromptAvailability,
     direction: DirectionAvailability,
@@ -2314,9 +2318,9 @@
                     class="btn small"
                     onclick={() => setPromptArchived(prompt, prompt.status === "active")}
                     disabled={promptAction.endsWith(`-${prompt.id}`) ||
-                      (prompt.status === "active" && prompt.portfolio_count > 0)}
-                    title={prompt.status === "active" && prompt.portfolio_count > 0
-                      ? "A prompt used by a portfolio cannot be archived"
+                      (prompt.status === "active" && promptHasActivePortfolio(prompt.id))}
+                    title={prompt.status === "active" && promptHasActivePortfolio(prompt.id)
+                      ? "Archive every portfolio using this prompt first"
                       : ""}
                   >
                     {promptAction.endsWith(`-${prompt.id}`)

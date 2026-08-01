@@ -43,7 +43,37 @@ class TestArchivePrompt:
             headers=admin_headers,
         )
         assert response.status_code == 409
-        assert "portfolio" in response.json()["detail"].lower()
+        assert response.json()["detail"] == (
+            "Archive every portfolio using this prompt before archiving the prompt."
+        )
+
+    def test_archive_prompt_preserves_archived_portfolio_history(
+        self,
+        client,
+        admin_headers,
+        sample_portfolio,
+        sample_prompt,
+    ):
+        archived_portfolio = client.patch(
+            f"/api/portfolios/{sample_portfolio['id']}",
+            json={"status": "archived"},
+            headers=admin_headers,
+        )
+        assert archived_portfolio.status_code == 200, archived_portfolio.text
+
+        response = client.post(
+            f"/api/admin/prompts/{sample_prompt['id']}/archive",
+            headers=admin_headers,
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "archived"
+        assert response.json()["portfolio_count"] == 1
+
+        detail = client.get(f"/api/portfolios/{sample_portfolio['slug']}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["portfolio"]["status"] == "archived"
+        assert detail.json()["portfolio"]["prompt"]["id"] == sample_prompt["id"]
 
     def test_archive_missing_prompt(self, client, admin_headers):
         assert client.post("/api/admin/prompts/999999/archive", headers=admin_headers).status_code == 404
