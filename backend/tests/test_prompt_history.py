@@ -592,7 +592,7 @@ def test_admin_list_has_status_history_and_usage_metadata(
     assert row["portfolio_count"] == 1
 
 
-def test_archive_is_blocked_while_any_portfolio_references_prompt(
+def test_archive_is_blocked_while_an_active_portfolio_references_prompt(
     client,
     admin_headers,
     sample_agent,
@@ -606,7 +606,9 @@ def test_archive_is_blocked_while_any_portfolio_references_prompt(
     )
 
     assert response.status_code == 409
-    assert "existing portfolio" in response.json()["detail"]
+    assert response.json()["detail"] == (
+        "Archive every portfolio using this prompt before archiving the prompt."
+    )
 
 
 def test_restore_appends_version_and_preserves_archive_status(client, admin_headers):

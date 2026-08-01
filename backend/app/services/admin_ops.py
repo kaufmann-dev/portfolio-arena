@@ -800,11 +800,16 @@ def update_prompt(
 
 def archive_prompt(session: Session, prompt_id: int) -> dict:
     prompt = _locked_prompt(session, prompt_id)
-    count = session.scalar(
-        select(func.count()).select_from(Portfolio).where(Portfolio.prompt_id == prompt_id)
+    active_count = session.scalar(
+        select(func.count())
+        .select_from(Portfolio)
+        .where(
+            Portfolio.prompt_id == prompt_id,
+            Portfolio.status == "active",
+        )
     )
-    if count:
-        raise AdminOpError(409, "This prompt is used by an existing portfolio and cannot be archived.")
+    if active_count:
+        raise AdminOpError(409, "Archive every portfolio using this prompt before archiving the prompt.")
     if prompt.status == "active":
         prompt.status = "archived"
         prompt.archived_at = datetime.now(UTC)

@@ -608,7 +608,7 @@ def update_prompt(
 
 @mcp.tool()
 def archive_prompt(prompt_id: int) -> dict:
-    """Archive an active prompt. Fails while any portfolio still uses it.
+    """Archive an active prompt after all portfolios using it are archived.
     Archived content and version history are browser-admin-only."""
     with _session() as session:
         prompt = session.scalars(
