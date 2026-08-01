@@ -700,9 +700,16 @@
 
   .filter-context,
   .compare-status {
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 10px;
+  }
+
+  .filter-context > *,
+  .comparison-panel header > *,
+  .load-error > * {
+    min-width: 0;
   }
 
   .filter-context {

@@ -204,7 +204,7 @@
             style:--swatch-color={color(idx, entry)}
             aria-hidden="true"
           ></span>
-          {entry.name}
+          <span class="legend-name">{entry.name}</span>
           {#if hoverDate}
             {@const value = valueAt(entry, hoverDate)}
             <span class="num">{value === null ? "—" : value.toFixed(1)}</span>
@@ -259,12 +259,22 @@
   }
 
   .legend-item {
+    min-width: 0;
+    max-width: 100%;
     display: inline-flex;
     align-items: center;
     gap: 6px;
   }
 
+  .legend-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .swatch {
+    flex: 0 0 auto;
     width: 14px;
     height: 2px;
     display: inline-block;

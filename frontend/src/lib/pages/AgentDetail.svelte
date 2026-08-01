@@ -130,10 +130,13 @@
 
   dd {
     margin: 0;
-    overflow-wrap: anywhere;
+    min-width: 0;
+    overflow: hidden;
     color: var(--text-primary);
     font-size: 14px;
     font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .portfolios-section {

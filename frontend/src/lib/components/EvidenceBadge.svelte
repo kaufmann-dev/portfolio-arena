@@ -23,17 +23,21 @@
 
 <style>
   .evidence {
-    display: inline-flex;
+    display: inline-block;
+    min-width: 0;
+    max-width: 100%;
     min-height: 22px;
-    align-items: center;
     padding: 3px 7px;
     border: 1px solid var(--border-strong);
     color: var(--text-secondary);
     font-size: 9px;
     font-weight: 760;
     letter-spacing: 0.08em;
-    line-height: 1;
+    line-height: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     text-transform: uppercase;
+    vertical-align: middle;
     white-space: nowrap;
   }
 
@@ -41,6 +45,7 @@
     min-height: 19px;
     padding: 2px 5px;
     font-size: 8px;
+    line-height: 13px;
   }
 
   .evidence.positive {

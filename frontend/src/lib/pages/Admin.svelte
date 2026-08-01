@@ -130,11 +130,6 @@
     return true;
   }
 
-  function promptPreview(text: string, length: number): string {
-    const compact = text.trim();
-    return `${compact.slice(0, length)}${compact.length > length ? "…" : ""}`;
-  }
-
   function flash(message: string) {
     notice = message;
     clearTimeout(noticeTimer);
@@ -1640,18 +1635,19 @@
               </form>
             {:else}
               <div class="manage-row">
-                <div>
-                  <strong>{portfolio.name}</strong>
-                  <span class="muted">
-                    · {portfolio.direction} · {portfolio.agent.name} · {portfolio.prompt_mode} ·
-                    {portfolio.cost_bps} bps ·
-                    {portfolio.status}</span
-                  >
-                  {#if portfolio.is_liquidated}
-                    <span class="badge neg"
-                      >{portfolio.kind === "rebuilt" ? "policy liquidated" : "liquidated"}</span
-                    >
-                  {/if}
+                <div class="manage-copy">
+                  <div class="manage-summary">
+                    <strong class="manage-name">{portfolio.name}</strong>
+                    {#if portfolio.is_liquidated}
+                      <span class="badge neg"
+                        >{portfolio.kind === "rebuilt" ? "policy liquidated" : "liquidated"}</span
+                      >
+                    {/if}
+                    <span class="manage-meta muted">
+                      · {portfolio.direction} · {portfolio.agent.name} · {portfolio.prompt_mode} ·
+                      {portfolio.cost_bps} bps · {portfolio.status}
+                    </span>
+                  </div>
                 </div>
                 <div class="row-actions">
                   <button
@@ -1810,18 +1806,20 @@
               </form>
             {:else}
               <div class="manage-row">
-                <div>
-                  <strong>{model.name}</strong>
-                  <span class="muted"> · {model.agent_count} agent(s)</span>
+                <div class="manage-copy">
+                  <div class="manage-summary">
+                    <strong class="manage-name">{model.name}</strong>
+                    <span class="manage-meta muted"> · {model.agent_count} agent(s)</span>
+                  </div>
                   {#each model.capabilities as capability (capability.harness)}
-                    <div class="muted num">
+                    <div class="truncate muted num">
                       {capability.harness_name}: {capability.execution_model_id}
                       · {capability.reasoning_efforts.length
                         ? capability.reasoning_efforts.join(", ")
                         : "no reasoning control"}
                     </div>
                   {/each}
-                  {#if model.notes}<p class="muted preview">{model.notes}</p>{/if}
+                  {#if model.notes}<p class="truncate muted preview">{model.notes}</p>{/if}
                 </div>
                 <div class="row-actions">
                   <button
@@ -1935,10 +1933,12 @@
             {:else}
               {@const used = agent.portfolios?.length ?? agent.portfolio_count ?? 0}
               <div class="manage-row">
-                <div>
-                  <strong>{agent.name}</strong>
-                  <span class="muted"> · {used} portfolio(s)</span>
-                  {#if agent.notes}<p class="muted preview">{agent.notes}</p>{/if}
+                <div class="manage-copy">
+                  <div class="manage-summary">
+                    <strong class="manage-name">{agent.name}</strong>
+                    <span class="manage-meta muted"> · {used} portfolio(s)</span>
+                  </div>
+                  {#if agent.notes}<p class="truncate muted preview">{agent.notes}</p>{/if}
                 </div>
                 <div class="row-actions">
                   <button
@@ -2111,33 +2111,31 @@
                 </div>
               </form>
             {:else}
-              <div class={["manage-row", "prompt-row", prompt.status === "archived" && "archived-row"]}>
-                <div>
-                  <strong>{prompt.name}</strong>
-                  <span class={["badge", prompt.status === "archived" && "warn"]}>{prompt.status}</span>
-                  <span class="badge">{promptModeLabel(prompt.mode)}</span>
-                  <span class="badge">{promptDirectionLabel(prompt.direction)}</span>
-                  <span class="muted"> · {prompt.portfolio_count} portfolio(s)</span>
-                  <span class="muted">
-                    · current v{prompt.current_version} · {prompt.version_count} version{prompt.version_count ===
-                    1
-                      ? ""
-                      : "s"}
-                  </span>
-                  {#if prompt.archived_at}
-                    <span class="muted"> · archived {fmtDate(prompt.archived_at)}</span>
-                  {/if}
+              <div class="manage-row prompt-row">
+                <div class="manage-copy">
+                  <div class="manage-summary">
+                    <strong class="manage-name">{prompt.name}</strong>
+                    <span class={["badge", prompt.status === "archived" && "warn"]}>{prompt.status}</span>
+                    <span class="badge">{promptModeLabel(prompt.mode)}</span>
+                    <span class="badge">{promptDirectionLabel(prompt.direction)}</span>
+                    <span class="manage-meta muted">
+                      · {prompt.portfolio_count} portfolio(s) · current v{prompt.current_version} ·
+                      {prompt.version_count} version{prompt.version_count === 1 ? "" : "s"}{prompt.archived_at
+                        ? ` · archived ${fmtDate(prompt.archived_at)}`
+                        : ""}
+                    </span>
+                  </div>
                   <div class="prompt-previews">
                     {#if prompt.managed_text}
                       <p class="muted preview">
                         <strong>Managed:</strong>
-                        {promptPreview(prompt.managed_text, 140)}
+                        <span class="preview-text">{prompt.managed_text}</span>
                       </p>
                     {/if}
                     {#if prompt.rebuilt_text}
                       <p class="muted preview">
                         <strong>Rebuilt:</strong>
-                        {promptPreview(prompt.rebuilt_text, 140)}
+                        <span class="preview-text">{prompt.rebuilt_text}</span>
                       </p>
                     {/if}
                   </div>
@@ -2231,13 +2229,13 @@
                                   {#if version.managed_text}
                                     <p class="muted preview">
                                       <strong>Managed:</strong>
-                                      {promptPreview(version.managed_text, 120)}
+                                      <span class="preview-text">{version.managed_text}</span>
                                     </p>
                                   {/if}
                                   {#if version.rebuilt_text}
                                     <p class="muted preview">
                                       <strong>Rebuilt:</strong>
-                                      {promptPreview(version.rebuilt_text, 120)}
+                                      <span class="preview-text">{version.rebuilt_text}</span>
                                     </p>
                                   {/if}
                                 </div>
@@ -2468,7 +2466,7 @@
               <code>{"{{allocation_policy}}"}</code>, and
               <code>{"{{submission_instructions}}"}</code>. Unknown placeholders are rejected.
             </p>
-            <button class="btn primary" type="submit">Save settings</button>
+            <button class="btn primary settings-submit" type="submit">Save settings</button>
           </form>
           {#if settingsError}
             <div class="error-box" role="alert">{settingsError}</div>
@@ -2639,6 +2637,39 @@
     min-width: 0;
   }
 
+  .manage-copy {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .manage-summary {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .manage-name {
+    min-width: 0;
+    max-width: 40%;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .manage-meta {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .manage-row > .row-actions {
+    flex: 0 0 auto;
+  }
+
   .manage-row:last-child {
     border-bottom: none;
   }
@@ -2663,10 +2694,6 @@
   .prompt-filter {
     width: 180px;
     margin-bottom: 0;
-  }
-
-  .archived-row {
-    opacity: 0.78;
   }
 
   .prompt-history {
@@ -2698,11 +2725,18 @@
 
   .version-snapshot {
     min-width: 300px;
+    max-width: 520px;
   }
 
   .version-snapshot > strong,
   .version-snapshot > span {
     display: block;
+  }
+
+  .version-snapshot > strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .prompt-previews {
@@ -2712,7 +2746,22 @@
   }
 
   .prompt-previews .preview {
+    min-width: 0;
+    display: flex;
+    gap: 4px;
     margin: 0;
+  }
+
+  .prompt-previews .preview > strong {
+    flex: 0 0 auto;
+  }
+
+  .preview-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .preview {
@@ -2738,6 +2787,10 @@
     margin-bottom: 10px;
   }
 
+  .settings-submit {
+    margin-top: 16px;
+  }
+
   .key-reveal {
     padding: 14px;
     margin: 16px 0;
@@ -2759,7 +2812,8 @@
   .key-value code {
     flex: 1;
     min-width: 0;
-    overflow-x: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
     padding: 9px 10px;
     background: var(--bg-inset);
@@ -2790,6 +2844,14 @@
       align-items: stretch;
       flex-direction: column;
       gap: 12px;
+    }
+
+    .manage-summary {
+      flex-wrap: wrap;
+    }
+
+    .manage-meta {
+      flex: 1 0 100%;
     }
 
     .row-actions {

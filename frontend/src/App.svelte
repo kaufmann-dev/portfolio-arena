@@ -90,7 +90,7 @@
       <div class="topbar-inner">
         <a href="/" class="brand" onclick={(event) => link(event, "/")}>
           <span class="brand-mark" aria-hidden="true"><Landmark size={19} strokeWidth={1.8} /></span>
-          <span>Portfolio Arena</span>
+          <span class="brand-name">Portfolio Arena</span>
         </a>
 
         <nav class="desktop-nav" aria-label="Main navigation">
@@ -306,6 +306,7 @@
   }
 
   .brand {
+    min-width: 0;
     min-height: 44px;
     display: inline-flex;
     align-items: center;
@@ -324,8 +325,16 @@
   }
 
   .brand-mark {
+    flex: 0 0 auto;
     display: inline-flex;
     color: var(--accent);
+  }
+
+  .brand-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .desktop-nav,
@@ -407,7 +416,13 @@
     color: var(--text-primary);
   }
 
+  :global(.account-trigger > svg) {
+    flex: 0 0 auto;
+  }
+
   .account-name {
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -543,6 +558,13 @@
     font-weight: 650;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  .mobile-session strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .mobile-session-action {

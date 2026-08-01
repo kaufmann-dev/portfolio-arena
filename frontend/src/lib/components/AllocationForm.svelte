@@ -461,11 +461,23 @@
     font-size: 12px;
   }
 
+  .resolution > span {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .ok {
     display: inline-flex;
     align-items: center;
     gap: 5px;
     color: var(--pos);
+  }
+
+  .ok :global(svg) {
+    flex: 0 0 auto;
   }
 
   .row-actions {
