@@ -9,7 +9,7 @@
     RebuiltView,
   } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
-  import { num, pct, pctPoints, signClass } from "../format";
+  import { num, pct, pctPoints, pctSignClass } from "../format";
   import { link } from "../stores/router.svelte";
   import EvidenceBadge from "./EvidenceBadge.svelte";
   import SelectField from "./ui/SelectField.svelte";
@@ -250,10 +250,10 @@
             {#if view !== "signal"}
               <td class="right num">{pctPoints(row.selected_policy?.exposure_pct, 0)}</td>
             {/if}
-            <td class="right num score {signClass(row.rank_score)}">
+            <td class="right num score {pctSignClass(row.rank_score, 2)}">
               {pct(row.rank_score, 2)}
             </td>
-            <td class="right num {signClass(row.metrics.mean_daily_alpha)}">
+            <td class="right num {pctSignClass(row.metrics.mean_daily_alpha, 2)}">
               {pct(row.metrics.mean_daily_alpha, 2)}
             </td>
             {#if view !== "signal"}
@@ -327,11 +327,11 @@
           {/if}
         </p>
         <dl>
-          {@render metricTile("Lower 95%", pct(row.rank_score, 2), signClass(row.rank_score))}
+          {@render metricTile("Lower 95%", pct(row.rank_score, 2), pctSignClass(row.rank_score, 2))}
           {@render metricTile(
             "Mean α/day",
             pct(row.metrics.mean_daily_alpha, 2),
-            signClass(row.metrics.mean_daily_alpha),
+            pctSignClass(row.metrics.mean_daily_alpha, 2),
           )}
           {#if view !== "signal"}
             {@render metricTile("Info ratio", num(row.metrics.information_ratio))}

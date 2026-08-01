@@ -165,6 +165,54 @@ def test_rebuilt_detail_bounds_recent_signals_and_public_payload_hides_provenanc
     ]
 
 
+def test_common_detail_exposes_live_h20_book_during_incubation(
+    client,
+    admin_headers,
+    sample_agent,
+    sample_prompt,
+):
+    portfolio = _create_rebuilt(
+        client,
+        admin_headers,
+        sample_agent,
+        sample_prompt,
+        "Incubating Book",
+    )
+    _insert_signals(portfolio["id"], [date(2026, 7, 31)])
+
+    response = client.get(f"/api/portfolios/{portfolio['slug']}")
+    assert response.status_code == 200, response.text
+    detail = response.json()["portfolio"]
+
+    assert detail["common_admitted"] is False
+    assert detail["selected_policy"] is None
+    assert detail["aggregate_policy"] == {
+        "horizon": 20,
+        "exposure_pct": 100,
+        "provisional": True,
+    }
+    assert detail["completion"] == {
+        "complete_count": 0,
+        "open_count": 1,
+        "completion_ratio": 0,
+        "eligible": False,
+    }
+    assert {item["symbol"]: item["weight_pct"] for item in detail["holdings"]} == pytest.approx(
+        {"AAPL": 5, "SPY": 95}
+    )
+    assert len(detail["active_cohorts"]) == 1
+    assert detail["active_cohorts"][0]["positions"] == [{"symbol": "AAPL", "weight_pct": 100.0}]
+    assert detail["rank"] is None
+    assert detail["metrics"]["evidence"] == "pending"
+    assert detail["series"] == []
+    assert detail["spy_series"] == []
+
+    cached = client.get(f"/api/portfolios/{portfolio['slug']}").json()["portfolio"]
+    assert cached["aggregate_policy"] == detail["aggregate_policy"]
+    assert cached["holdings"] == detail["holdings"]
+    assert cached["active_cohorts"] == detail["active_cohorts"]
+
+
 def test_common_rows_and_spy_use_one_shared_scoring_window(
     client,
     admin_headers,
@@ -205,6 +253,11 @@ def test_common_rows_and_spy_use_one_shared_scoring_window(
     )
 
     detail = client.get(f"/api/portfolios/{first['slug']}").json()["portfolio"]
+    assert detail["aggregate_policy"] == {
+        "horizon": detail["selected_policy"]["horizon"],
+        "exposure_pct": detail["selected_policy"]["exposure_pct"],
+        "provisional": False,
+    }
     assert detail["series"][0] == {"date": scoring_start, "nav": 100.0}
     assert detail["spy_series"][0] == {"date": scoring_start, "nav": 100.0}
     assert detail["spy_series"][-1]["nav"] / 100.0 - 1.0 == pytest.approx(detail["metrics"]["spy_return"])

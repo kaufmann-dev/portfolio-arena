@@ -3,7 +3,7 @@
 
   import type { BenchmarkArenaPortfolio, ManagedArenaPortfolio, ManagedArenaResponse } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
-  import { num, pct, pctPoints, signClass } from "../format";
+  import { num, pct, pctPoints, pctSignClass } from "../format";
   import { link } from "../stores/router.svelte";
   import EvidenceBadge from "./EvidenceBadge.svelte";
   import SelectField from "./ui/SelectField.svelte";
@@ -216,13 +216,13 @@
                 {row.prompt.name}
               </a>
             </td>
-            <td class="right num score {signClass(row.rank_score)}">
+            <td class="right num score {pctSignClass(row.rank_score, 2)}">
               {pct(row.rank_score, 2)}
             </td>
-            <td class="right num {signClass(row.metrics.mean_daily_alpha)}">
+            <td class="right num {pctSignClass(row.metrics.mean_daily_alpha, 2)}">
               {pct(row.metrics.mean_daily_alpha, 2)}
             </td>
-            <td class="right num {signClass(row.metrics.cumulative_excess)}">
+            <td class="right num {pctSignClass(row.metrics.cumulative_excess)}">
               {pct(row.metrics.cumulative_excess)}
             </td>
             <td class="right num">{num(row.metrics.information_ratio)}</td>
@@ -278,16 +278,16 @@
         </header>
         <p class="context">{row.agent.name} · {row.prompt.name}</p>
         <dl>
-          {@render metricTile("Lower 95%", pct(row.rank_score, 2), signClass(row.rank_score))}
+          {@render metricTile("Lower 95%", pct(row.rank_score, 2), pctSignClass(row.rank_score, 2))}
           {@render metricTile(
             "Mean α/day",
             pct(row.metrics.mean_daily_alpha, 2),
-            signClass(row.metrics.mean_daily_alpha),
+            pctSignClass(row.metrics.mean_daily_alpha, 2),
           )}
           {@render metricTile(
             "Cum. excess",
             pct(row.metrics.cumulative_excess),
-            signClass(row.metrics.cumulative_excess),
+            pctSignClass(row.metrics.cumulative_excess),
           )}
           {@render metricTile("Info ratio", num(row.metrics.information_ratio))}
           {@render metricTile("Sharpe", num(row.metrics.sharpe))}

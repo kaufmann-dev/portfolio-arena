@@ -12,7 +12,16 @@
   import SignalHistory from "../components/SignalHistory.svelte";
   import SignalMatrix from "../components/SignalMatrix.svelte";
   import { parseDirection } from "../arena";
-  import { ageLabel, fmtDate, fmtDateTime, num, pct, pctPoints, signClass } from "../format";
+  import {
+    ageLabel,
+    fmtDate,
+    fmtDateTime,
+    num,
+    pct,
+    pctPoints,
+    pctPointsSignClass,
+    pctSignClass,
+  } from "../format";
   import { link } from "../stores/router.svelte";
 
   interface Props {
@@ -257,21 +266,29 @@
             >
           </div>
           <div>
-            <span>Selected policy</span>
+            <span>Aggregate book</span>
             <strong class="num">
-              {rebuiltPortfolio.selected_policy
-                ? `H${rebuiltPortfolio.selected_policy.horizon} · ${pctPoints(rebuiltPortfolio.selected_policy.exposure_pct, 0)} exposure`
+              {rebuiltPortfolio.aggregate_policy
+                ? `H${rebuiltPortfolio.aggregate_policy.horizon} · ${pctPoints(rebuiltPortfolio.aggregate_policy.exposure_pct, 0)} exposure${rebuiltPortfolio.aggregate_policy.provisional ? " · provisional" : ""}`
                 : "Pending"}
             </strong>
           </div>
           <div>
-            <span>Selected H completed / open</span>
+            <span
+              >{rebuiltPortfolio.aggregate_policy
+                ? `H${rebuiltPortfolio.aggregate_policy.horizon}`
+                : "Selected H"} completed / open</span
+            >
             <strong class="num"
               >{rebuiltPortfolio.completion.complete_count} / {rebuiltPortfolio.completion.open_count}</strong
             >
           </div>
           <div>
-            <span>Selected H completion</span>
+            <span
+              >{rebuiltPortfolio.aggregate_policy
+                ? `H${rebuiltPortfolio.aggregate_policy.horizon}`
+                : "Selected H"} completion</span
+            >
             <strong class="num">{pct(rebuiltPortfolio.completion.completion_ratio, 0)}</strong>
           </div>
         </section>
@@ -279,16 +296,20 @@
 
       {#if portfolio.metrics.has_data}
         <section class="metric-grid" aria-label="Portfolio metrics">
-          {@render metricTile("Lower 95%", pct(portfolio.rank_score, 2), signClass(portfolio.rank_score))}
+          {@render metricTile(
+            "Lower 95%",
+            pct(portfolio.rank_score, 2),
+            pctSignClass(portfolio.rank_score, 2),
+          )}
           {@render metricTile(
             "Mean α/day",
             pct(portfolio.metrics.mean_daily_alpha, 2),
-            signClass(portfolio.metrics.mean_daily_alpha),
+            pctSignClass(portfolio.metrics.mean_daily_alpha, 2),
           )}
           {@render metricTile(
             "Cumulative excess",
             pct(portfolio.metrics.cumulative_excess),
-            signClass(portfolio.metrics.cumulative_excess),
+            pctSignClass(portfolio.metrics.cumulative_excess),
           )}
           {@render metricTile("Hit rate", pct(portfolio.metrics.hit_rate, 0))}
           {@render metricTile("Information ratio", num(portfolio.metrics.information_ratio))}
@@ -301,7 +322,7 @@
             {@render metricTile(
               "ITD return",
               pct(managedPortfolio.metrics.itd_return),
-              signClass(managedPortfolio.metrics.itd_return),
+              pctSignClass(managedPortfolio.metrics.itd_return),
             )}
             {@render metricTile("Age", ageLabel(managedPortfolio.age_days))}
           {/if}
@@ -369,7 +390,9 @@
                     <td class="num">{holding.symbol}</td>
                     <td class="right num">{pctPoints(holding.weight_pct)}</td>
                     <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
-                    <td class="right num {signClass(holding.weight_pct - holding.target_weight_pct)}">
+                    <td
+                      class="right num {pctPointsSignClass(holding.weight_pct - holding.target_weight_pct)}"
+                    >
                       {pctPoints(holding.weight_pct - holding.target_weight_pct)}
                     </td>
                   </tr>
@@ -386,10 +409,17 @@
           <header class="section-head">
             <div>
               <h2 id="aggregate-holdings-title">Aggregate holdings</h2>
-              <p>
-                Overlapping active {rebuiltPortfolio.direction} cohorts plus the unallocated
-                {benchmarkName} sleeve.
-              </p>
+              {#if rebuiltPortfolio.aggregate_policy?.provisional}
+                <p>
+                  Live H20 incubation book. Each active signal contributes 1/20 of the exposure; the remainder
+                  stays in {benchmarkName}.
+                </p>
+              {:else}
+                <p>
+                  Overlapping active {rebuiltPortfolio.direction} cohorts plus the unallocated
+                  {benchmarkName} sleeve.
+                </p>
+              {/if}
             </div>
           </header>
           <div class="table-scroll">
@@ -403,7 +433,7 @@
                     <td class="right num">{pctPoints(holding.weight_pct, 2)}</td>
                   </tr>
                 {:else}
-                  <tr><td colspan="2" class="table-empty">No active policy holdings.</td></tr>
+                  <tr><td colspan="2" class="table-empty">No aggregate holdings available.</td></tr>
                 {/each}
               </tbody>
             </table>
@@ -414,7 +444,10 @@
           <header class="section-head">
             <div>
               <h2 id="active-cohorts-title">Active cohorts</h2>
-              <p>Signals that are still contributing to the selected aggregate policy.</p>
+              <p>
+                Signals that are still contributing to the
+                {rebuiltPortfolio.aggregate_policy?.provisional ? "incubation" : "selected"} aggregate policy.
+              </p>
             </div>
             <span class="num">{rebuiltPortfolio.active_cohorts.length}</span>
           </header>
@@ -453,7 +486,7 @@
                 </div>
               </details>
             {:else}
-              <div class="empty-state compact">No cohorts are active in the selected policy.</div>
+              <div class="empty-state compact">No cohorts are active in this aggregate policy.</div>
             {/each}
           </div>
         </section>

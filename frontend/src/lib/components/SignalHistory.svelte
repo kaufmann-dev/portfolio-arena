@@ -59,7 +59,7 @@
             <span>{signal.positions.length} positions</span>
           </span>
           <span class="disclosure-meta">
-            {signal.locked ? "Complete" : "Pending"}
+            {signal.locked ? "Locked" : "Pending"}
           </span>
         </summary>
         <div class="disclosure-body">

@@ -20,6 +20,7 @@ from .mcp_server import build_mcp_asgi_app, mcp
 from .migrate import run_migrations
 from .ratelimit import limiter
 from .seed import run_seed
+from .static_files import static_cache_headers
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ def create_app() -> FastAPI:
     @app.get("/{path:path}")
     def serve_static(path: str):
         if not path or path == "/":
-            return FileResponse(static_dir / "index.html")
+            return FileResponse(static_dir / "index.html", headers=static_cache_headers(path, spa=True))
 
         try:
             file_path = (static_dir / path).resolve(strict=False)
@@ -103,8 +104,8 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "Not found") from None
 
         if file_path.is_file():
-            return FileResponse(file_path)
-        return FileResponse(static_dir / "index.html")
+            return FileResponse(file_path, headers=static_cache_headers(path))
+        return FileResponse(static_dir / "index.html", headers=static_cache_headers(path, spa=True))
 
     return app
 

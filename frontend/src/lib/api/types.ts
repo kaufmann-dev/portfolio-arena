@@ -176,6 +176,12 @@ export interface RebuiltPolicy {
   scoring_end?: string | null;
 }
 
+export interface RebuiltAggregatePolicy {
+  horizon: number;
+  exposure_pct: number;
+  provisional: boolean;
+}
+
 export interface SignalHorizon {
   horizon: number;
   mean_daily_alpha: number | null;
@@ -294,6 +300,7 @@ export interface RebuiltPortfolioDetail extends RebuiltArenaPortfolio {
   execution_prompt: string | null;
   series: SeriesPoint[];
   spy_series: SeriesPoint[];
+  aggregate_policy: RebuiltAggregatePolicy | null;
   holdings: AggregateHolding[];
   active_cohorts: ActiveCohort[];
   signals: SignalOut[];
