@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from ..models import Allocation, Portfolio, Signal
 from .arena import (
+    COMMON_INCUBATION_POLICY,
     ArenaValuations,
     PortfolioValuation,
     RebuiltArena,
@@ -299,6 +300,16 @@ def _selected_policy_payload(
     }
 
 
+def _aggregate_policy_payload(policy: PolicyResult | None, *, provisional: bool) -> dict | None:
+    if policy is None:
+        return None
+    return {
+        "horizon": policy.horizon,
+        "exposure_pct": policy.exposure_pct,
+        "provisional": provisional,
+    }
+
+
 def serialize_rebuilt_summary(
     analysis: RebuiltPortfolioAnalysis,
     arena: RebuiltArena,
@@ -346,20 +357,12 @@ def serialize_rebuilt_summary(
         metrics = (_public_horizon(direct) if direct is not None else None) or (
             policy.metrics if policy else {"has_data": False, "evidence": "pending"}
         )
-    selected_horizon = (
-        direct
-        if direct is not None
-        else next(
-            (
-                item
-                for item in analysis.signal_horizons
-                if (
-                    (policy and item["horizon"] == policy.horizon)
-                    or (view == "common" and common_pair and item["horizon"] == common_pair["horizon"])
-                )
-            ),
-            None,
-        )
+    completion_horizon = policy.horizon if policy else None
+    if view == "common" and completion_horizon is None and portfolio.status == "active":
+        completion_horizon = COMMON_INCUBATION_POLICY[0]
+    selected_horizon = direct or next(
+        (item for item in analysis.signal_horizons if item["horizon"] == completion_horizon),
+        None,
     )
     rank_score = (
         metrics.get("ci_lower")
@@ -416,6 +419,11 @@ def serialize_rebuilt_detail(
     summary = serialize_rebuilt_summary(analysis, arena, view=view, horizon=horizon)
     selected = summary["selected_policy"]
     policy = analysis.policies.get((selected["horizon"], selected["exposure_pct"])) if selected else None
+    aggregate_policy = policy
+    aggregate_policy_provisional = False
+    if view == "common" and policy is None and analysis.portfolio.status == "active" and not analysis.error:
+        aggregate_policy = analysis.policies.get(COMMON_INCUBATION_POLICY)
+        aggregate_policy_provisional = aggregate_policy is not None
     recent_signals = sorted(analysis.portfolio.signals, key=lambda signal: signal.id, reverse=True)[:20]
     if view == "common":
         common = arena.common_for(analysis.portfolio.direction)
@@ -429,8 +437,12 @@ def serialize_rebuilt_detail(
         "execution_prompt": manual_execution_prompt(analysis.portfolio, wrapper_prompt),
         "series": series,
         "spy_series": spy_series,
-        "holdings": policy.holdings if policy else [],
-        "active_cohorts": policy.active_cohorts if policy else [],
+        "aggregate_policy": _aggregate_policy_payload(
+            aggregate_policy,
+            provisional=aggregate_policy_provisional,
+        ),
+        "holdings": aggregate_policy.holdings if aggregate_policy else [],
+        "active_cohorts": aggregate_policy.active_cohorts if aggregate_policy else [],
         "signals": [serialize_signal(signal, admin=admin) for signal in recent_signals],
         "signals_next_cursor": (
             recent_signals[-1].id if len(analysis.portfolio.signals) > len(recent_signals) else None

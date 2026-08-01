@@ -77,7 +77,9 @@ _arena_: honest, deterministic measurement — not trading and not advice.
 - **Rebuilt policies are measured, not prompted.** Each daily signal is evaluated at holding
   horizons from 1 through 20 trading sessions. Exposure is tested from 10% through 100%; each active
   session contributes one `exposure / horizon` sleeve. At every close, the aggregate target is the
-  sum of the still-active signal sleeves and the remainder stays in direction-matched SPY.
+  sum of the still-active signal sleeves and the remainder stays in direction-matched SPY. Before a
+  portfolio is admitted to the Common policy, its detail page shows the live H20/100 book as a
+  provisional aggregate while evidence and ranking remain pending.
 - **Short loss is capped at portfolio equity.** Short books use fixed absolute shares between
   rebalances, 100% collateralized exposure, and the same transaction-cost model as long books.
   Borrow and financing fees are not modeled. If NAV reaches zero, liquidation is absorbing: the

@@ -19,7 +19,6 @@
   }
 
   const { series, markers = [], height = 320, ariaLabel = "Performance chart" }: Props = $props();
-  const uid = $props.id();
 
   const PALETTE = ["var(--accent)", "var(--warn)", "var(--pos)", "#c4a7ff", "#67e8f9", "var(--neg)"];
 
@@ -111,7 +110,6 @@
   }
 
   const hoverDate = $derived(hoverIndex === null ? null : dates[hoverIndex]);
-  const dateRange = $derived(dates.length ? `${dates[0]} to ${dates[dates.length - 1]}` : "");
 </script>
 
 <div class="chart" bind:clientWidth={width}>
@@ -195,22 +193,6 @@
       {/if}
     </svg>
 
-    <label class="visually-hidden" for="{uid}-scrubber">Inspect chart date</label>
-    <input
-      id="{uid}-scrubber"
-      class="chart-scrubber"
-      type="range"
-      min="0"
-      max={dates.length - 1}
-      step="1"
-      value={hoverIndex ?? dates.length - 1}
-      aria-valuetext={hoverDate ?? dates.at(-1)}
-      aria-label={`${ariaLabel}. ${dateRange}. Inspect date`}
-      oninput={(event) => (hoverIndex = Number(event.currentTarget.value))}
-      onfocus={() => (hoverIndex = dates.length - 1)}
-      onblur={() => (hoverIndex = null)}
-    />
-
     <div class="legend" aria-live="polite" aria-atomic="true">
       {#if hoverDate}
         <span class="num muted">{hoverDate}</span>
@@ -274,43 +256,6 @@
     color: var(--text-secondary);
     min-height: 30px;
     align-items: center;
-  }
-
-  .chart-scrubber {
-    width: 100%;
-    height: 18px;
-    min-height: 18px;
-    padding: 0;
-    margin-top: 4px;
-    appearance: none;
-    background: transparent;
-    border: 0;
-  }
-
-  .chart-scrubber::-webkit-slider-runnable-track {
-    height: 1px;
-    background: var(--border-strong);
-  }
-
-  .chart-scrubber::-webkit-slider-thumb {
-    width: 9px;
-    height: 15px;
-    margin-top: -7px;
-    appearance: none;
-    background: var(--accent);
-    border: 0;
-  }
-
-  .chart-scrubber::-moz-range-track {
-    height: 1px;
-    background: var(--border-strong);
-  }
-
-  .chart-scrubber::-moz-range-thumb {
-    width: 9px;
-    height: 15px;
-    background: var(--accent);
-    border: 0;
   }
 
   .legend-item {

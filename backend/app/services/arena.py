@@ -56,6 +56,7 @@ SPY_SYMBOL = "SPY"
 MarketDataStatus = Literal["fresh", "stale", "unavailable"]
 AnalysisView = Literal["common", "tuned", "signal"]
 ANALYTICS_ENGINE_VERSION = 1
+COMMON_INCUBATION_POLICY = (20, 100)
 
 
 @dataclass
@@ -1088,6 +1089,8 @@ def _cache_rebuilt_arena(
         common_policy = arena.common_for(analysis.portfolio.direction).policy
         if common_policy is not None:
             retained.add((common_policy["horizon"], common_policy["exposure_pct"]))
+        if view == "common":
+            retained.add(COMMON_INCUBATION_POLICY)
         if view == "signal" and horizon is not None:
             retained.add((horizon, 100))
 

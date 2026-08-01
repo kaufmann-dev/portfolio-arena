@@ -35,7 +35,7 @@
   import AutomationPanel from "../components/AutomationPanel.svelte";
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import ConfirmDialog from "../components/ui/ConfirmDialog.svelte";
-  import { fmtDate, num, pctPoints, signClass } from "../format";
+  import { fmtDate, num, pctPoints, pctPointsSignClass } from "../format";
   import { auth } from "../stores/auth.svelte";
 
   type Tab =
@@ -1260,7 +1260,7 @@
                           <td class="right num"
                             >{holding.current_price != null ? num(holding.current_price) : "—"}</td
                           >
-                          <td class="right num {signClass(positionReturn)}">
+                          <td class="right num {pctPointsSignClass(positionReturn, 2)}">
                             {positionReturn != null ? pctPoints(positionReturn, 2) : "—"}
                           </td>
                           <td class="right num">{pctPoints(holding.weight_pct)}</td>
@@ -1338,7 +1338,7 @@
                         </td>
                         <td>
                           <span class={["badge", !signal.locked && "warn"]}>
-                            {signal.locked ? "complete" : "pending"}
+                            {signal.locked ? "locked" : "pending"}
                           </span>
                         </td>
                         <td class="right muted">
