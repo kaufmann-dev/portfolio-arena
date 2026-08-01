@@ -217,8 +217,8 @@ mode-specific texts. Existing versions are classified from their portfolios' cur
 copied into both fields only for prompts used by both modes or by no portfolio.
 
 Migration `0019` moves position-sizing limits from prompt versions into global Managed and Rebuilt
-settings, installs 10–25% and 10–100% defaults respectively, and updates the default rebuilt wrapper
-without modifying strategy text or portfolio history.
+settings, installs 10–25% and 10–100% defaults respectively, and updates both default evaluation
+wrappers without modifying strategy text or portfolio history.
 
 ## Development
 

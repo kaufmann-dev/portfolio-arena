@@ -71,7 +71,8 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
     assert portfolio.prompt.managed_text not in manual
     assert portfolio.prompt.rebuilt_text in automated
     assert portfolio.prompt.managed_text not in automated
-    assert "A single security may receive 100%" in automated
+    assert "Subject to the allocation policy, a single security may receive 100%" in automated
+    assert "Do not use prior portfolio state from any source" in automated
 
 
 def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_polarity():
