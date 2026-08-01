@@ -11,10 +11,6 @@ def _create_mode_prompt(client, admin_headers, *, name: str, mode: str) -> dict:
             "mode": mode,
             "managed_text": "Managed strategy." if mode in {"managed", "both"} else None,
             "rebuilt_text": "Rebuilt strategy." if mode in {"rebuilt", "both"} else None,
-            "allocation_policy": {
-                "min_position_weight_pct": 10,
-                "max_position_weight_pct": 25,
-            },
         },
         headers=admin_headers,
     )
@@ -306,10 +302,6 @@ class TestEditPortfolio:
                 "name": "weekly-manager-v2",
                 "mode": "managed",
                 "managed_text": "Be bolder.",
-                "allocation_policy": {
-                    "min_position_weight_pct": 10,
-                    "max_position_weight_pct": 25,
-                },
             },
             headers=admin_headers,
         ).json()
@@ -345,10 +337,6 @@ class TestEditPortfolio:
                 "name": "alternate-manager",
                 "mode": "managed",
                 "managed_text": "Use a different strategy.",
-                "allocation_policy": {
-                    "min_position_weight_pct": 10,
-                    "max_position_weight_pct": 25,
-                },
             },
             headers=admin_headers,
         ).json()

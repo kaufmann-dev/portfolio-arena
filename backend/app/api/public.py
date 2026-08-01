@@ -14,7 +14,7 @@ from ..ratelimit import limiter
 from ..services import admin_ops
 from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
 from ..services.model_catalog import agent_out
-from ..services.prompt_policy import allocation_policy_out
+from ..services.prompt_policy import allocation_policies_out, allocation_policy_out
 from ..services.serialize import (
     rank_rows,
     serialize_detail,
@@ -78,9 +78,14 @@ def managed_arena(
         for portfolio in portfolios
         if portfolio.prompt_mode == "managed" and portfolio.direction == direction
     ]
+    allocation_policy = allocation_policy_out(admin_ops.get_app_settings(session), "managed")
     valuations = compute_valuations(session, selected)
     rows = [
-        serialize_summary(valuations.by_portfolio_id[portfolio.id], valuations)
+        serialize_summary(
+            valuations.by_portfolio_id[portfolio.id],
+            valuations,
+            allocation_policy,
+        )
         for portfolio in selected
         if portfolio.id in valuations.by_portfolio_id
     ]
@@ -128,10 +133,12 @@ def rebuilt_arena(
         cost_basis=cost_basis,
         horizon=horizon,
     )
+    allocation_policy = allocation_policy_out(admin_ops.get_app_settings(session), "rebuilt")
     rows = [
         serialize_rebuilt_summary(
             arena.by_portfolio_id[portfolio.id],
             arena,
+            allocation_policy,
             view=view,
             horizon=horizon,
         )
@@ -183,7 +190,9 @@ def portfolio_detail(
     selected_track = track or match.prompt_mode
     if selected_track != match.prompt_mode:
         raise HTTPException(422, f"{match.name} belongs to the {match.prompt_mode} track.")
-    wrapper = admin_ops.wrapper_prompt_for_portfolio(session, match)
+    settings = admin_ops.get_app_settings(session)
+    wrapper = settings[f"{match.prompt_mode}_wrapper_prompt"]
+    allocation_policy = allocation_policy_out(settings, match.prompt_mode)
     if selected_track == "managed":
         if view != "common" or objective != "canonical" or cost_basis != "net" or horizon is not None:
             raise HTTPException(422, "Rebuilt analysis context is not valid for managed portfolios.")
@@ -200,6 +209,7 @@ def portfolio_detail(
             "portfolio": serialize_detail(
                 valuation,
                 valuations,
+                allocation_policy,
                 wrapper_prompt=wrapper,
             ),
         }
@@ -232,6 +242,7 @@ def portfolio_detail(
         "portfolio": serialize_rebuilt_detail(
             analysis,
             arena,
+            allocation_policy,
             view=view,
             horizon=horizon,
             wrapper_prompt=wrapper,
@@ -344,7 +355,14 @@ def compare(
             spy_raw = arena.spy_series
         for portfolio in selected:
             analysis = arena.by_portfolio_id[portfolio.id]
-            summary = serialize_rebuilt_summary(analysis, arena, view=view, horizon=horizon)
+            allocation_policy = allocation_policy_out(admin_ops.get_app_settings(session), "rebuilt")
+            summary = serialize_rebuilt_summary(
+                analysis,
+                arena,
+                allocation_policy,
+                view=view,
+                horizon=horizon,
+            )
             policy = summary["selected_policy"]
             if policy:
                 if view == "common":
@@ -429,6 +447,7 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
     usage: dict[int, int] = {}
     for portfolio in portfolios:
         usage[portfolio.prompt_id] = usage.get(portfolio.prompt_id, 0) + 1
+    settings = admin_ops.get_app_settings(session)
     return {
         "prompts": [
             {
@@ -439,7 +458,7 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
                 "managed_text": prompt.managed_text,
                 "rebuilt_text": prompt.rebuilt_text,
                 "notes": prompt.notes,
-                "allocation_policy": allocation_policy_out(prompt),
+                "allocation_policies": allocation_policies_out(settings, prompt),
                 "updated_at": prompt.updated_at.isoformat(),
                 "portfolio_count": usage.get(prompt.id, 0),
             }
@@ -460,6 +479,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
     if prompt is None:
         raise HTTPException(404, "Prompt not found")
     users = list(session.scalars(select(Portfolio).where(Portfolio.prompt_id == prompt.id)))
+    settings = admin_ops.get_app_settings(session)
     return {
         "prompt": {
             "id": prompt.id,
@@ -469,7 +489,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
             "managed_text": prompt.managed_text,
             "rebuilt_text": prompt.rebuilt_text,
             "notes": prompt.notes,
-            "allocation_policy": allocation_policy_out(prompt),
+            "allocation_policies": allocation_policies_out(settings, prompt),
             "created_at": prompt.created_at.isoformat(),
             "updated_at": prompt.updated_at.isoformat(),
         },

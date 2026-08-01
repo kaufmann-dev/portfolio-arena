@@ -70,7 +70,6 @@ class PromptCreate(BaseModel):
     managed_text: str | None = None
     rebuilt_text: str | None = None
     notes: str = ""
-    allocation_policy: AllocationPolicyIn
 
     @model_validator(mode="after")
     def validate_mode_texts(self):
@@ -86,7 +85,6 @@ class PromptPatch(BaseModel):
     managed_text: str | None = None
     rebuilt_text: str | None = None
     notes: str | None = None
-    allocation_policy: AllocationPolicyIn | None = None
 
 
 class PositionIn(BaseModel):
@@ -143,6 +141,8 @@ class SettingsUpdate(BaseModel):
     default_cost_bps: int = Field(ge=0)
     managed_wrapper_prompt: str = Field(min_length=1)
     rebuilt_wrapper_prompt: str = Field(min_length=1)
+    managed_allocation_policy: AllocationPolicyIn
+    rebuilt_allocation_policy: AllocationPolicyIn
 
     @field_validator("managed_wrapper_prompt", "rebuilt_wrapper_prompt")
     @classmethod

@@ -8,7 +8,6 @@ translate that into their transport's error shape (HTTP status / tool error).
 """
 
 from datetime import UTC, date, datetime
-from decimal import Decimal
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -31,7 +30,11 @@ from ..models import (
 )
 from ..seed import (
     DEFAULT_COST_BPS_KEY,
+    MANAGED_MAX_POSITION_WEIGHT_PCT_KEY,
+    MANAGED_MIN_POSITION_WEIGHT_PCT_KEY,
     MANAGED_WRAPPER_PROMPT_KEY,
+    REBUILT_MAX_POSITION_WEIGHT_PCT_KEY,
+    REBUILT_MIN_POSITION_WEIGHT_PCT_KEY,
     REBUILT_WRAPPER_PROMPT_KEY,
 )
 from ..util import slugify
@@ -51,6 +54,8 @@ from .prompt_policy import (
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
     PROMPT_MODES,
+    allocation_policies_out,
+    allocation_policy_from_limits,
     allocation_policy_out,
     prompt_supports_mode,
     validate_position_weights,
@@ -72,6 +77,10 @@ from .symbols import (
 from .trading_calendar import effective_date_for, is_locked
 
 DEFAULT_COST_BPS_FALLBACK = 10
+MANAGED_MIN_POSITION_WEIGHT_PCT_FALLBACK = 10.0
+MANAGED_MAX_POSITION_WEIGHT_PCT_FALLBACK = 25.0
+REBUILT_MIN_POSITION_WEIGHT_PCT_FALLBACK = 10.0
+REBUILT_MAX_POSITION_WEIGHT_PCT_FALLBACK = 100.0
 
 
 def unique_slug(session: Session, model, wanted: str) -> str:
@@ -328,7 +337,7 @@ def delete_agent(session: Session, agent_id: int) -> dict:
 # --- Prompts ----------------------------------------------------------------
 
 
-def prompt_out(prompt: Prompt) -> dict:
+def prompt_out(prompt: Prompt, settings: dict) -> dict:
     return {
         "id": prompt.id,
         "slug": prompt.slug,
@@ -337,7 +346,7 @@ def prompt_out(prompt: Prompt) -> dict:
         "managed_text": prompt.managed_text,
         "rebuilt_text": prompt.rebuilt_text,
         "notes": prompt.notes,
-        "allocation_policy": allocation_policy_out(prompt),
+        "allocation_policies": allocation_policies_out(settings, prompt),
     }
 
 
@@ -349,7 +358,6 @@ def _prompt_version_out(version: PromptVersion) -> dict:
         "managed_text": version.managed_text,
         "rebuilt_text": version.rebuilt_text,
         "notes": version.notes,
-        "allocation_policy": allocation_policy_out(version),
         "created_at": version.created_at.isoformat(),
         "restored_from_version": (
             version.restored_from.version if version.restored_from is not None else None
@@ -362,6 +370,7 @@ def _admin_prompt_out(
     *,
     version_count: int,
     portfolio_count: int,
+    settings: dict,
 ) -> dict:
     current = prompt.current_version
     if current is None:
@@ -381,7 +390,7 @@ def _admin_prompt_out(
         "managed_text": current.managed_text,
         "rebuilt_text": current.rebuilt_text,
         "notes": current.notes,
-        "allocation_policy": allocation_policy_out(current),
+        "allocation_policies": allocation_policies_out(settings, prompt),
     }
 
 
@@ -401,6 +410,7 @@ def _admin_prompt_with_counts(session: Session, prompt: Prompt) -> dict:
         prompt,
         version_count=version_count,
         portfolio_count=portfolio_count,
+        settings=get_app_settings(session),
     )
 
 
@@ -428,12 +438,14 @@ def list_prompts(session: Session, *, status: str | None = None) -> dict:
             .group_by(Portfolio.prompt_id)
         ).all()
     )
+    settings = get_app_settings(session)
     return {
         "prompts": [
             _admin_prompt_out(
                 prompt,
                 version_count=version_counts.get(prompt.id, 0),
                 portfolio_count=portfolio_counts.get(prompt.id, 0),
+                settings=settings,
             )
             for prompt in prompts
         ]
@@ -540,7 +552,6 @@ def _append_prompt_version(
     managed_text: str | None,
     rebuilt_text: str | None,
     notes: str,
-    allocation_policy: dict,
     restored_from_version_id: int | None = None,
 ) -> PromptVersion:
     current = prompt.current_version
@@ -554,8 +565,6 @@ def _append_prompt_version(
         managed_text=managed_text,
         rebuilt_text=rebuilt_text,
         notes=notes,
-        min_position_weight_pct=allocation_policy["min_position_weight_pct"],
-        max_position_weight_pct=allocation_policy["max_position_weight_pct"],
         restored_from_version_id=restored_from_version_id,
     )
     session.add(version)
@@ -565,10 +574,6 @@ def _append_prompt_version(
     return version
 
 
-def _same_weight(left: float, right: float) -> bool:
-    return Decimal(str(left)) == Decimal(str(right))
-
-
 def create_prompt(
     session: Session,
     *,
@@ -576,7 +581,6 @@ def create_prompt(
     mode: str,
     managed_text: str | None,
     rebuilt_text: str | None,
-    allocation_policy: dict,
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
@@ -599,8 +603,6 @@ def create_prompt(
         managed_text=managed_text,
         rebuilt_text=rebuilt_text,
         notes=notes,
-        min_position_weight_pct=allocation_policy["min_position_weight_pct"],
-        max_position_weight_pct=allocation_policy["max_position_weight_pct"],
     )
     session.add(version)
     session.flush()
@@ -611,6 +613,7 @@ def create_prompt(
         prompt,
         version_count=1,
         portfolio_count=0,
+        settings=get_app_settings(session),
     )
 
 
@@ -623,7 +626,6 @@ def update_prompt(
     managed_text: str | None = None,
     rebuilt_text: str | None = None,
     notes: str | None = None,
-    allocation_policy: dict | None = None,
 ) -> dict:
     prompt = _locked_prompt(session, prompt_id)
     if prompt.status != "active":
@@ -657,28 +659,12 @@ def update_prompt(
     )
     _ensure_prompt_mode_preserves_references(session, prompt.id, next_mode)
     next_notes = notes if notes is not None else current.notes
-    next_policy = (
-        allocation_policy
-        if allocation_policy is not None
-        else {
-            "min_position_weight_pct": current.min_position_weight_pct,
-            "max_position_weight_pct": current.max_position_weight_pct,
-        }
-    )
     changed = (
         next_name != current.name
         or next_mode != current.mode
         or next_managed_text != current.managed_text
         or next_rebuilt_text != current.rebuilt_text
         or next_notes != current.notes
-        or not _same_weight(
-            next_policy["min_position_weight_pct"],
-            current.min_position_weight_pct,
-        )
-        or not _same_weight(
-            next_policy["max_position_weight_pct"],
-            current.max_position_weight_pct,
-        )
     )
     if not changed:
         version_count, portfolio_count = _prompt_counts(session, prompt.id)
@@ -687,6 +673,7 @@ def update_prompt(
             prompt,
             version_count=version_count,
             portfolio_count=portfolio_count,
+            settings=get_app_settings(session),
         )
 
     _append_prompt_version(
@@ -697,7 +684,6 @@ def update_prompt(
         managed_text=next_managed_text,
         rebuilt_text=next_rebuilt_text,
         notes=next_notes,
-        allocation_policy=next_policy,
     )
     session.commit()
     return _admin_prompt_with_counts(session, prompt)
@@ -755,10 +741,6 @@ def restore_prompt_version(
         managed_text=source.managed_text,
         rebuilt_text=source.rebuilt_text,
         notes=source.notes,
-        allocation_policy={
-            "min_position_weight_pct": source.min_position_weight_pct,
-            "max_position_weight_pct": source.max_position_weight_pct,
-        },
         restored_from_version_id=source.id,
     )
     session.commit()
@@ -1040,7 +1022,9 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
     match = next((p for p in portfolios if p.id == portfolio_id), None)
     if match is None:
         raise AdminOpError(404, "Portfolio not found")
-    wrapper_prompt = wrapper_prompt_for_portfolio(session, match)
+    settings = get_app_settings(session)
+    wrapper_prompt = settings[f"{match.prompt_mode}_wrapper_prompt"]
+    allocation_policy = allocation_policy_out(settings, match.prompt_mode)
     if match.prompt_mode == "rebuilt":
         same_direction = [
             portfolio
@@ -1062,6 +1046,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
             "portfolio": serialize_rebuilt_detail(
                 analysis,
                 arena,
+                allocation_policy,
                 view="tuned",
                 horizon=None,
                 admin=True,
@@ -1079,6 +1064,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
         "portfolio": serialize_detail(
             valuation,
             valuations,
+            allocation_policy,
             admin=True,
             wrapper_prompt=wrapper_prompt,
         ),
@@ -1088,7 +1074,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
 # --- Allocations ------------------------------------------------------------
 
 
-def _normalize_positions(prompt: Prompt, positions: list[dict]) -> list[dict]:
+def _normalize_positions(policy: dict, positions: list[dict]) -> list[dict]:
     """Normalize symbols and enforce the position-set rules (sum to 100, no dups,
     positive whole-book weights) plus per-symbol resolution against Massive."""
     normalized = [
@@ -1103,7 +1089,7 @@ def _normalize_positions(prompt: Prompt, positions: list[dict]) -> list[dict]:
         validate_positions(normalized)
         for position in normalized:
             resolve_symbol(position["symbol"])
-        validate_position_weights(prompt, normalized)
+        validate_position_weights(policy, normalized)
     except SymbolValidationError as exc:
         raise AdminOpError(422, exc.message) from None
     except ValueError as exc:
@@ -1168,7 +1154,8 @@ def create_allocation(session: Session, portfolio_id: int, positions: list[dict]
         raise AdminOpError(409, "Unarchive the portfolio before adding allocations")
     _ensure_managed_not_liquidated(session, portfolio)
 
-    normalized = _normalize_positions(portfolio.prompt, positions)
+    policy = allocation_policy_out(get_app_settings(session), "managed")
+    normalized = _normalize_positions(policy, positions)
     now = datetime.now(UTC)
     effective = effective_date_for(now)
     clash = session.scalars(
@@ -1211,7 +1198,8 @@ def update_allocation(
                 "Positions are frozen: the effective close has passed. Enter a new rebalance instead.",
             )
         _ensure_managed_not_liquidated(session, allocation.portfolio)
-        normalized = _normalize_positions(allocation.portfolio.prompt, positions)
+        policy = allocation_policy_out(get_app_settings(session), "managed")
+        normalized = _normalize_positions(policy, positions)
         allocation.positions.clear()
         session.flush()  # delete old rows before inserting (unique on allocation+symbol)
         _apply_positions(allocation, normalized)
@@ -1300,7 +1288,8 @@ def create_signal(
 
     current_time = now or datetime.now(UTC)
     effective = effective_date_for(current_time)
-    normalized = _normalize_positions(portfolio.prompt, positions)
+    policy = allocation_policy_out(get_app_settings(session), "rebuilt")
+    normalized = _normalize_positions(policy, positions)
     clash = session.scalars(
         select(Signal).where(
             Signal.portfolio_id == portfolio.id,
@@ -1346,7 +1335,8 @@ def update_signal(
     if is_locked(signal.effective_date, current_time):
         raise AdminOpError(403, "This signal is immutable: its effective close has passed.")
     if positions is not None:
-        normalized = _normalize_positions(signal.portfolio.prompt, positions)
+        policy = allocation_policy_out(get_app_settings(session), "rebuilt")
+        normalized = _normalize_positions(policy, positions)
         signal.positions.clear()
         session.flush()
         _apply_signal_positions(signal, normalized)
@@ -1381,9 +1371,37 @@ def _setting_value(session: Session, key: str, fallback: str) -> str:
     return setting.value if setting is not None else fallback
 
 
+def _setting_float(session: Session, key: str, fallback: float) -> float:
+    return float(_setting_value(session, key, str(fallback)))
+
+
 def get_app_settings(session: Session) -> dict:
     return {
         "default_cost_bps": _default_cost_bps(session),
+        "managed_allocation_policy": allocation_policy_from_limits(
+            _setting_float(
+                session,
+                MANAGED_MIN_POSITION_WEIGHT_PCT_KEY,
+                MANAGED_MIN_POSITION_WEIGHT_PCT_FALLBACK,
+            ),
+            _setting_float(
+                session,
+                MANAGED_MAX_POSITION_WEIGHT_PCT_KEY,
+                MANAGED_MAX_POSITION_WEIGHT_PCT_FALLBACK,
+            ),
+        ),
+        "rebuilt_allocation_policy": allocation_policy_from_limits(
+            _setting_float(
+                session,
+                REBUILT_MIN_POSITION_WEIGHT_PCT_KEY,
+                REBUILT_MIN_POSITION_WEIGHT_PCT_FALLBACK,
+            ),
+            _setting_float(
+                session,
+                REBUILT_MAX_POSITION_WEIGHT_PCT_KEY,
+                REBUILT_MAX_POSITION_WEIGHT_PCT_FALLBACK,
+            ),
+        ),
         "managed_wrapper_prompt": _setting_value(
             session,
             MANAGED_WRAPPER_PROMPT_KEY,
@@ -1410,13 +1428,30 @@ def update_app_settings(
     session: Session,
     *,
     default_cost_bps: int,
+    managed_allocation_policy: dict,
+    rebuilt_allocation_policy: dict,
     managed_wrapper_prompt: str,
     rebuilt_wrapper_prompt: str,
 ) -> dict:
     if default_cost_bps < 0:
         raise AdminOpError(422, "Default cost bps cannot be negative")
+    try:
+        managed_policy = allocation_policy_from_limits(
+            float(managed_allocation_policy["min_position_weight_pct"]),
+            float(managed_allocation_policy["max_position_weight_pct"]),
+        )
+        rebuilt_policy = allocation_policy_from_limits(
+            float(rebuilt_allocation_policy["min_position_weight_pct"]),
+            float(rebuilt_allocation_policy["max_position_weight_pct"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AdminOpError(422, str(exc)) from None
     values = {
         DEFAULT_COST_BPS_KEY: str(default_cost_bps),
+        MANAGED_MIN_POSITION_WEIGHT_PCT_KEY: str(managed_policy["min_position_weight_pct"]),
+        MANAGED_MAX_POSITION_WEIGHT_PCT_KEY: str(managed_policy["max_position_weight_pct"]),
+        REBUILT_MIN_POSITION_WEIGHT_PCT_KEY: str(rebuilt_policy["min_position_weight_pct"]),
+        REBUILT_MAX_POSITION_WEIGHT_PCT_KEY: str(rebuilt_policy["max_position_weight_pct"]),
         MANAGED_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(managed_wrapper_prompt),
         REBUILT_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(rebuilt_wrapper_prompt),
     }

@@ -174,10 +174,6 @@ class TestWriteBoundaries:
                     "name": "X",
                     "mode": "managed",
                     "managed_text": "y",
-                    "allocation_policy": {
-                        "min_position_weight_pct": 1,
-                        "max_position_weight_pct": 100,
-                    },
                 },
             ).status_code
             == 401

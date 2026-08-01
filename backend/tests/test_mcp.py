@@ -339,10 +339,6 @@ class TestMcpTools:
                 "name": "MCP Prompt",
                 "mode": "managed",
                 "managed_text": "Beat SPY.",
-                "allocation_policy": {
-                    "min_position_weight_pct": 1,
-                    "max_position_weight_pct": 100,
-                },
             },
         )
         portfolio = _call_tool(
@@ -363,7 +359,12 @@ class TestMcpTools:
             "create_allocation",
             {
                 "portfolio_id": portfolio["id"],
-                "positions": [{"symbol": "AAPL", "weight_pct": 100}],
+                "positions": [
+                    {"symbol": "AAPL", "weight_pct": 25},
+                    {"symbol": "MSFT", "weight_pct": 25},
+                    {"symbol": "SPY", "weight_pct": 25},
+                    {"symbol": "RSP", "weight_pct": 25},
+                ],
                 "note": "entered via mcp",
             },
         )
@@ -393,10 +394,6 @@ class TestMcpTools:
                 "mode": "both",
                 "managed_text": "Managed MCP strategy.",
                 "rebuilt_text": "Rebuilt MCP strategy.",
-                "allocation_policy": {
-                    "min_position_weight_pct": 10,
-                    "max_position_weight_pct": 25,
-                },
             },
         )
 
@@ -409,6 +406,8 @@ class TestMcpTools:
         assert generic["mode"] == "both"
         assert generic["managed_text"] == "Managed MCP strategy."
         assert generic["rebuilt_text"] == "Rebuilt MCP strategy."
+        assert generic["allocation_policies"]["managed"]["max_position_weight_pct"] == 25
+        assert generic["allocation_policies"]["rebuilt"]["max_position_weight_pct"] == 100
         assert "text" not in generic
 
         _call_tool(

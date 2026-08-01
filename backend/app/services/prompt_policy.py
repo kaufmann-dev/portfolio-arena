@@ -79,19 +79,28 @@ DEFAULT_REBUILT_WRAPPER_PROMPT = """\
 Evaluate the Portfolio Arena portfolio `{{portfolio_slug}}` and produce its next independent signal
 allocation.
 
-Call the Portfolio Arena `get_portfolio` tool first. Treat its prompt mode, strategy, allocation policy,
-and effective date as authoritative. The response intentionally excludes current holdings, signal
-history, prior notes, performance, turnover, and transaction costs.
+Call the Portfolio Arena `get_portfolio` tool first. Treat its prompt mode, strategy, allocation
+policy, and effective date as authoritative. The response intentionally excludes current holdings,
+signal history, prior notes, performance, turnover, and transaction costs.
 
-Act as a US equity portfolio manager aiming to outperform the portfolio's direction-matched SPY
+Act as a US equity security selector aiming to outperform the portfolio's direction-matched SPY
 reference. Search across the full eligible US market rather than defaulting to index constituents,
-household names, or recent winners. Do not mirror SPY. Select a stock or ETF only when it has a
-distinct, falsifiable, security-specific investment thesis supported by current evidence.
+household names, or recent winners. Do not mirror SPY.
 
-At every evaluation, construct the complete signal portfolio independently from scratch. Evaluate
-every candidate without regard to previous signals. Select each security only if it independently
-qualifies as one of the strongest current opportunities under the strategy, and produce a complete
-target allocation.
+This is an independent security-selection signal. Breadth must be an outcome of the evidence, not a
+diversification target. Select only securities that independently qualify under the strategy. Never
+add a marginal security merely to increase the position count or make the allocation appear more
+diversified.
+
+Weight qualifying securities comparatively using expected excess return, conviction, evidence
+quality, downside, and the strength and timing of the recognition mechanism. Stronger opportunities
+should receive higher weights. A single security may receive 100% when it is the only opportunity
+that genuinely qualifies, but concentration must reflect the evidence rather than convenience or
+familiarity.
+
+At every evaluation, construct the complete signal independently from scratch. Evaluate every
+candidate without regard to previous signals, and do not infer, preserve, or reverse-engineer any
+previous allocation.
 
 Strategy:
 {{strategy_text}}
@@ -258,24 +267,35 @@ lasting deterioration in business value.""",
 
 
 def allocation_policy_from_limits(minimum: float, maximum: float) -> dict:
+    if minimum <= 0 or maximum > 100 or minimum > maximum:
+        raise ValueError("Position weights must satisfy 0 < minimum <= maximum <= 100.")
+    minimum_positions = math.ceil(100 / maximum)
+    maximum_positions = math.floor(100 / minimum)
+    if minimum_positions > maximum_positions:
+        raise ValueError("Position weight limits cannot form a portfolio totaling 100%.")
     return {
         "min_position_weight_pct": minimum,
         "max_position_weight_pct": maximum,
-        "derived_min_positions": math.ceil(100 / maximum),
-        "derived_max_positions": math.floor(100 / minimum),
+        "derived_min_positions": minimum_positions,
+        "derived_max_positions": maximum_positions,
     }
 
 
-def allocation_policy_out(prompt: Prompt) -> dict:
-    return allocation_policy_from_limits(
-        float(prompt.min_position_weight_pct),
-        float(prompt.max_position_weight_pct),
-    )
+def allocation_policy_out(settings: dict, mode: str) -> dict:
+    if mode not in PROMPT_MODES:
+        raise ValueError("Prompt mode must be 'managed' or 'rebuilt'.")
+    return dict(settings[f"{mode}_allocation_policy"])
 
 
-def validate_position_weights(prompt: Prompt, positions: list[dict]) -> None:
+def allocation_policies_out(settings: dict, prompt: Prompt) -> dict:
+    return {
+        mode: allocation_policy_out(settings, mode) if prompt_supports_mode(mode, prompt.mode) else None
+        for mode in sorted(PROMPT_MODES)
+    }
+
+
+def validate_position_weights(policy: dict, positions: list[dict]) -> None:
     """Raise ``ValueError`` when a position violates the prompt's active policy."""
-    policy = allocation_policy_out(prompt)
     minimum = policy["min_position_weight_pct"]
     maximum = policy["max_position_weight_pct"]
     for position in positions:
@@ -304,8 +324,7 @@ def validate_wrapper_prompt(template: str) -> str:
     return template
 
 
-def allocation_policy_text(prompt: Prompt, direction: str) -> str:
-    policy = allocation_policy_out(prompt)
+def allocation_policy_text(policy: dict, direction: str) -> str:
     if direction not in {"long", "short"}:
         raise ValueError("Portfolio direction must be long or short")
     direction_rules = (
@@ -348,6 +367,7 @@ def render_execution_prompt(
     portfolio: Portfolio,
     wrapper_prompt: str,
     submission_instructions: str,
+    allocation_policy: dict,
 ) -> str:
     """Render one wrapper in a single pass so inserted text is never re-expanded."""
     prompt = portfolio.prompt
@@ -356,28 +376,36 @@ def render_execution_prompt(
     values = {
         "portfolio_slug": portfolio.slug,
         "strategy_text": prompt.text_for_mode(portfolio.prompt_mode).strip(),
-        "allocation_policy": allocation_policy_text(prompt, portfolio.direction),
+        "allocation_policy": allocation_policy_text(allocation_policy, portfolio.direction),
         "submission_instructions": submission_instructions.strip(),
     }
     validated = validate_wrapper_prompt(wrapper_prompt)
     return _WRAPPER_PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], validated).strip()
 
 
-def manual_execution_prompt(portfolio: Portfolio, wrapper_prompt: str) -> str:
+def manual_execution_prompt(
+    portfolio: Portfolio,
+    wrapper_prompt: str,
+    allocation_policy: dict,
+) -> str:
     """Build the complete prompt copied from a portfolio's public detail page."""
     submission_instructions = (
         REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS
         if portfolio.prompt_mode == "rebuilt"
         else MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS
     )
-    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions)
+    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions, allocation_policy)
 
 
-def automated_execution_prompt(portfolio: Portfolio, wrapper_prompt: str) -> str:
+def automated_execution_prompt(
+    portfolio: Portfolio,
+    wrapper_prompt: str,
+    allocation_policy: dict,
+) -> str:
     """Build the complete prompt sent to an integrated evaluator worker."""
     submission_instructions = (
         REBUILT_AUTOMATED_SUBMISSION_INSTRUCTIONS
         if portfolio.prompt_mode == "rebuilt"
         else MANAGED_AUTOMATED_SUBMISSION_INSTRUCTIONS
     )
-    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions)
+    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions, allocation_policy)

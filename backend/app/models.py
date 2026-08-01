@@ -201,14 +201,6 @@ class Prompt(Base):
     def notes(self) -> str:
         return self._required_current_version().notes
 
-    @property
-    def min_position_weight_pct(self) -> float:
-        return self._required_current_version().min_position_weight_pct
-
-    @property
-    def max_position_weight_pct(self) -> float:
-        return self._required_current_version().max_position_weight_pct
-
     def _required_current_version(self) -> "PromptVersion":
         if self.current_version is None:
             raise RuntimeError(f"Prompt {self.id} has no current version")
@@ -235,11 +227,6 @@ class PromptVersion(Base):
             "AND btrim(rebuilt_text) <> '')",
             name="prompt_versions_mode_texts_check",
         ),
-        CheckConstraint(
-            "min_position_weight_pct > 0 AND max_position_weight_pct <= 100 "
-            "AND min_position_weight_pct <= max_position_weight_pct",
-            name="prompt_versions_position_weights_check",
-        ),
         UniqueConstraint(
             "prompt_id",
             "version",
@@ -260,8 +247,6 @@ class PromptVersion(Base):
     managed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     rebuilt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    min_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
-    max_position_weight_pct: Mapped[float] = mapped_column(Numeric(9, 4), nullable=False)
     restored_from_version_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("prompt_versions.id", ondelete="SET NULL"),

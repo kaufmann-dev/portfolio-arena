@@ -174,10 +174,16 @@ def _load_run(session: Session, run_id: int, *, lock: bool = False) -> Evaluatio
 
 
 def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
-    wrapper_prompt = admin_ops.wrapper_prompt_for_portfolio(session, run.portfolio)
+    app_settings = admin_ops.get_app_settings(session)
+    wrapper_prompt = app_settings[f"{run.portfolio.prompt_mode}_wrapper_prompt"]
+    allocation_policy = app_settings[f"{run.portfolio.prompt_mode}_allocation_policy"]
     return {
         **run_out(run),
-        "execution_prompt": automated_execution_prompt(run.portfolio, wrapper_prompt),
+        "execution_prompt": automated_execution_prompt(
+            run.portfolio,
+            wrapper_prompt,
+            allocation_policy,
+        ),
     }
 
 
@@ -849,7 +855,8 @@ def submit_run(
             "Reset this liquidated short portfolio before submitting an allocation.",
         )
 
-    normalized = admin_ops._normalize_positions(run.portfolio.prompt, positions)
+    allocation_policy = admin_ops.get_app_settings(session)[f"{run.portfolio.prompt_mode}_allocation_policy"]
+    normalized = admin_ops._normalize_positions(allocation_policy, positions)
     effective = run.scheduled_for if run.trigger_kind == "scheduled" else effective_date_for(current_time)
     assert effective is not None
     if run.portfolio.prompt_mode == "managed":

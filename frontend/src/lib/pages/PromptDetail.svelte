@@ -74,26 +74,49 @@
         </section>
       {/if}
 
-      <section class="detail-section policy-card">
-        <h2>Allocation policy</h2>
-        <div class="policy-stats">
-          <div>
-            <span>Position count</span>
-            <strong class="num">
-              {data.prompt.allocation_policy.derived_min_positions}–{data.prompt.allocation_policy
-                .derived_max_positions}
-            </strong>
+      {#if data.prompt.allocation_policies.managed}
+        {@const policy = data.prompt.allocation_policies.managed}
+        <section class="detail-section policy-card">
+          <h2>Managed allocation policy</h2>
+          <div class="policy-stats">
+            <div>
+              <span>Position count</span>
+              <strong class="num">
+                {policy.derived_min_positions}–{policy.derived_max_positions}
+              </strong>
+            </div>
+            <div>
+              <span>Weight per position</span>
+              <strong class="num">
+                {policy.min_position_weight_pct}%–{policy.max_position_weight_pct}%
+              </strong>
+            </div>
           </div>
-          <div>
-            <span>Weight per position</span>
-            <strong class="num">
-              {data.prompt.allocation_policy.min_position_weight_pct}%–{data.prompt.allocation_policy
-                .max_position_weight_pct}%
-            </strong>
+          <p>Global policy for every managed portfolio.</p>
+        </section>
+      {/if}
+
+      {#if data.prompt.allocation_policies.rebuilt}
+        {@const policy = data.prompt.allocation_policies.rebuilt}
+        <section class="detail-section policy-card">
+          <h2>Rebuilt allocation policy</h2>
+          <div class="policy-stats">
+            <div>
+              <span>Position count</span>
+              <strong class="num">
+                {policy.derived_min_positions}–{policy.derived_max_positions}
+              </strong>
+            </div>
+            <div>
+              <span>Weight per position</span>
+              <strong class="num">
+                {policy.min_position_weight_pct}%–{policy.max_position_weight_pct}%
+              </strong>
+            </div>
           </div>
-        </div>
-        <p>Fully invested in USD-denominated equities and ETFs.</p>
-      </section>
+          <p>Global policy for every independent rebuilt signal.</p>
+        </section>
+      {/if}
 
       <section class="portfolios-section">
         <h2>

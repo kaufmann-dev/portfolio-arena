@@ -152,17 +152,20 @@ class TestCreation:
         assert response.status_code == 422
         assert "equities and ETFs" in response.json()["detail"]
 
-    def test_prompt_position_limits_enforced(self, client, admin_headers, sample_agent):
+    def test_managed_mode_position_limits_enforced(self, client, admin_headers, sample_agent):
+        settings = client.get("/api/settings", headers=admin_headers).json()
+        settings["managed_allocation_policy"] = {
+            "min_position_weight_pct": 40,
+            "max_position_weight_pct": 60,
+        }
+        updated = client.put("/api/settings", json=settings, headers=admin_headers)
+        assert updated.status_code == 200, updated.text
         prompt = client.post(
             "/api/admin/prompts",
             json={
                 "name": "Concentrated",
                 "mode": "managed",
                 "managed_text": "Own a focused portfolio.",
-                "allocation_policy": {
-                    "min_position_weight_pct": 40,
-                    "max_position_weight_pct": 60,
-                },
             },
             headers=admin_headers,
         ).json()
@@ -189,6 +192,72 @@ class TestCreation:
         )
         assert response.status_code == 422
         assert "between 40% and 60%" in response.json()["detail"]
+
+    def test_default_mode_policies_allow_concentrated_rebuilt_but_focus_managed(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+    ):
+        prompt_response = client.post(
+            "/api/admin/prompts",
+            json={
+                "name": "Mode Policy Test",
+                "mode": "both",
+                "managed_text": "Build a focused managed portfolio.",
+                "rebuilt_text": "Select the strongest independent signal.",
+            },
+            headers=admin_headers,
+        )
+        assert prompt_response.status_code == 201, prompt_response.text
+        prompt = prompt_response.json()
+
+        def create_portfolio(name: str, prompt_mode: str) -> dict:
+            response = client.post(
+                "/api/portfolios",
+                json={
+                    "name": name,
+                    "agent_id": sample_agent["id"],
+                    "prompt_id": prompt["id"],
+                    "prompt_mode": prompt_mode,
+                    "direction": "long",
+                },
+                headers=admin_headers,
+            )
+            assert response.status_code == 201, response.text
+            return response.json()
+
+        managed = create_portfolio("Managed Mode Policy", "managed")
+        rebuilt = create_portfolio("Rebuilt Mode Policy", "rebuilt")
+
+        concentrated_managed = client.post(
+            f"/api/portfolios/{managed['id']}/allocations",
+            json=make_allocation_body([{"symbol": "AAPL", "weight_pct": 100}]),
+            headers=admin_headers,
+        )
+        assert concentrated_managed.status_code == 422
+        assert "between 10% and 25%" in concentrated_managed.json()["detail"]
+
+        focused_managed = client.post(
+            f"/api/portfolios/{managed['id']}/allocations",
+            json=make_allocation_body(
+                [
+                    {"symbol": "AAPL", "weight_pct": 25},
+                    {"symbol": "MSFT", "weight_pct": 25},
+                    {"symbol": "SPY", "weight_pct": 25},
+                    {"symbol": "RSP", "weight_pct": 25},
+                ]
+            ),
+            headers=admin_headers,
+        )
+        assert focused_managed.status_code == 201, focused_managed.text
+
+        concentrated_signal = client.post(
+            f"/api/portfolios/{rebuilt['id']}/signals",
+            json={"positions": [{"symbol": "AAPL", "weight_pct": 100}]},
+            headers=admin_headers,
+        )
+        assert concentrated_signal.status_code == 201, concentrated_signal.text
 
     def test_same_effective_date_conflicts(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(

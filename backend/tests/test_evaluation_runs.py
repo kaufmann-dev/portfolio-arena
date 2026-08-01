@@ -35,6 +35,8 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
         admin_ops.update_app_settings(
             session,
             default_cost_bps=app_settings["default_cost_bps"],
+            managed_allocation_policy=app_settings["managed_allocation_policy"],
+            rebuilt_allocation_policy=app_settings["rebuilt_allocation_policy"],
             managed_wrapper_prompt=managed_wrapper,
             rebuilt_wrapper_prompt=app_settings["rebuilt_wrapper_prompt"],
         )
