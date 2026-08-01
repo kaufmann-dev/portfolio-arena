@@ -373,8 +373,10 @@ export interface PromptOut {
   name: string;
   mode: PromptAvailability;
   direction: DirectionAvailability;
-  managed_text: string | null;
-  rebuilt_text: string | null;
+  managed_long_text: string | null;
+  managed_short_text: string | null;
+  rebuilt_long_text: string | null;
+  rebuilt_short_text: string | null;
   notes: string;
   allocation_policies: ModeAllocationPolicies;
   updated_at?: string;
@@ -396,8 +398,10 @@ export interface PromptVersion {
   name: string;
   mode: PromptAvailability;
   direction: DirectionAvailability;
-  managed_text: string | null;
-  rebuilt_text: string | null;
+  managed_long_text: string | null;
+  managed_short_text: string | null;
+  rebuilt_long_text: string | null;
+  rebuilt_short_text: string | null;
   notes: string;
   created_at: string;
   restored_from_version: number | null;

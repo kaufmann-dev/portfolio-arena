@@ -174,7 +174,7 @@ class TestWriteBoundaries:
                     "name": "X",
                     "mode": "managed",
                     "direction": "long",
-                    "managed_text": "y",
+                    "managed_long_text": "y",
                 },
             ).status_code
             == 401

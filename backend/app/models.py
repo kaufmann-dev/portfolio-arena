@@ -191,15 +191,23 @@ class Prompt(Base):
         return self._required_current_version().direction
 
     @property
-    def managed_text(self) -> str | None:
-        return self._required_current_version().managed_text
+    def managed_long_text(self) -> str | None:
+        return self._required_current_version().managed_long_text
 
     @property
-    def rebuilt_text(self) -> str | None:
-        return self._required_current_version().rebuilt_text
+    def managed_short_text(self) -> str | None:
+        return self._required_current_version().managed_short_text
 
-    def text_for_mode(self, mode: str) -> str:
-        return self._required_current_version().text_for_mode(mode)
+    @property
+    def rebuilt_long_text(self) -> str | None:
+        return self._required_current_version().rebuilt_long_text
+
+    @property
+    def rebuilt_short_text(self) -> str | None:
+        return self._required_current_version().rebuilt_short_text
+
+    def text_for(self, mode: str, direction: str) -> str:
+        return self._required_current_version().text_for(mode, direction)
 
     @property
     def notes(self) -> str:
@@ -226,13 +234,22 @@ class PromptVersion(Base):
             name="prompt_versions_direction_check",
         ),
         CheckConstraint(
-            "(mode = 'managed' AND managed_text IS NOT NULL "
-            "AND btrim(managed_text) <> '' AND rebuilt_text IS NULL) OR "
-            "(mode = 'rebuilt' AND managed_text IS NULL "
-            "AND rebuilt_text IS NOT NULL AND btrim(rebuilt_text) <> '') OR "
-            "(mode = 'both' AND managed_text IS NOT NULL "
-            "AND btrim(managed_text) <> '' AND rebuilt_text IS NOT NULL "
-            "AND btrim(rebuilt_text) <> '')",
+            "((mode IN ('managed', 'both') AND direction IN ('long', 'both') "
+            "AND managed_long_text IS NOT NULL AND btrim(managed_long_text) <> '') OR "
+            "(NOT (mode IN ('managed', 'both') AND direction IN ('long', 'both')) "
+            "AND managed_long_text IS NULL)) AND "
+            "((mode IN ('managed', 'both') AND direction IN ('short', 'both') "
+            "AND managed_short_text IS NOT NULL AND btrim(managed_short_text) <> '') OR "
+            "(NOT (mode IN ('managed', 'both') AND direction IN ('short', 'both')) "
+            "AND managed_short_text IS NULL)) AND "
+            "((mode IN ('rebuilt', 'both') AND direction IN ('long', 'both') "
+            "AND rebuilt_long_text IS NOT NULL AND btrim(rebuilt_long_text) <> '') OR "
+            "(NOT (mode IN ('rebuilt', 'both') AND direction IN ('long', 'both')) "
+            "AND rebuilt_long_text IS NULL)) AND "
+            "((mode IN ('rebuilt', 'both') AND direction IN ('short', 'both') "
+            "AND rebuilt_short_text IS NOT NULL AND btrim(rebuilt_short_text) <> '') OR "
+            "(NOT (mode IN ('rebuilt', 'both') AND direction IN ('short', 'both')) "
+            "AND rebuilt_short_text IS NULL))",
             name="prompt_versions_mode_texts_check",
         ),
         UniqueConstraint(
@@ -253,8 +270,10 @@ class PromptVersion(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     mode: Mapped[str] = mapped_column(Text, nullable=False)
     direction: Mapped[str] = mapped_column(Text, nullable=False)
-    managed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    rebuilt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    managed_long_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    managed_short_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rebuilt_long_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rebuilt_short_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     restored_from_version_id: Mapped[int | None] = mapped_column(
         Integer,
@@ -276,14 +295,17 @@ class PromptVersion(Base):
         remote_side=[id],
     )
 
-    def text_for_mode(self, mode: str) -> str:
-        if mode == "managed" and self.mode in {"managed", "both"} and self.managed_text is not None:
-            return self.managed_text
-        if mode == "rebuilt" and self.mode in {"rebuilt", "both"} and self.rebuilt_text is not None:
-            return self.rebuilt_text
+    def text_for(self, mode: str, direction: str) -> str:
         if mode not in {"managed", "rebuilt"}:
             raise ValueError("Prompt mode must be 'managed' or 'rebuilt'.")
-        raise ValueError(f"Prompt version {self.version} does not support {mode} portfolios.")
+        if direction not in {"long", "short"}:
+            raise ValueError("Portfolio direction must be 'long' or 'short'.")
+        if self.mode not in {mode, "both"} or self.direction not in {direction, "both"}:
+            raise ValueError(f"Prompt version {self.version} does not support {direction} {mode} portfolios.")
+        text = getattr(self, f"{mode}_{direction}_text")
+        if text is None:
+            raise RuntimeError(f"Prompt version {self.version} is missing {direction} {mode} strategy text.")
+        return text
 
 
 class Portfolio(Base):

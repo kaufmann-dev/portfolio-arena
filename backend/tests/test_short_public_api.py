@@ -30,8 +30,10 @@ def _create_prompt(client, admin_headers, name: str) -> dict:
             "name": name,
             "mode": "both",
             "direction": "both",
-            "managed_text": "Manage evidence-backed opportunities.",
-            "rebuilt_text": "Select fresh evidence-backed opportunities.",
+            "managed_long_text": "Manage evidence-backed long opportunities.",
+            "managed_short_text": "Manage evidence-backed short opportunities.",
+            "rebuilt_long_text": "Select fresh evidence-backed long opportunities.",
+            "rebuilt_short_text": "Select fresh evidence-backed short opportunities.",
         },
         headers=admin_headers,
     )
@@ -175,6 +177,8 @@ def test_managed_arenas_filter_directions_and_expose_direction_fields(
     execution_prompt = " ".join(detail["portfolio"]["execution_prompt"].split())
     assert "direction-matched SPY reference" in execution_prompt
     assert "prices are expected to underperform SPY" in execution_prompt
+    assert prompt["managed_short_text"] in execution_prompt
+    assert prompt["managed_long_text"] not in execution_prompt
 
     prompt_detail = client.get(f"/api/prompts/{prompt['slug']}").json()
     assert {portfolio["slug"]: portfolio["direction"] for portfolio in prompt_detail["portfolios"]} == {

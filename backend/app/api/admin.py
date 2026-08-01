@@ -154,8 +154,10 @@ def create_prompt(body: PromptCreate, session: Session = Depends(get_session)):
         name=body.name,
         mode=body.mode,
         direction=body.direction,
-        managed_text=body.managed_text,
-        rebuilt_text=body.rebuilt_text,
+        managed_long_text=body.managed_long_text,
+        managed_short_text=body.managed_short_text,
+        rebuilt_long_text=body.rebuilt_long_text,
+        rebuilt_short_text=body.rebuilt_short_text,
         slug=body.slug,
         notes=body.notes,
     )
@@ -170,8 +172,10 @@ def patch_prompt(prompt_id: int, body: PromptPatch, session: Session = Depends(g
         name=body.name,
         mode=body.mode,
         direction=body.direction,
-        managed_text=body.managed_text,
-        rebuilt_text=body.rebuilt_text,
+        managed_long_text=body.managed_long_text,
+        managed_short_text=body.managed_short_text,
+        rebuilt_long_text=body.rebuilt_long_text,
+        rebuilt_short_text=body.rebuilt_short_text,
         notes=body.notes,
     )
 

@@ -72,13 +72,22 @@ class PromptCreate(BaseModel):
     slug: str | None = None
     mode: Literal["managed", "rebuilt", "both"]
     direction: Literal["long", "short", "both"]
-    managed_text: str | None = None
-    rebuilt_text: str | None = None
+    managed_long_text: str | None = None
+    managed_short_text: str | None = None
+    rebuilt_long_text: str | None = None
+    rebuilt_short_text: str | None = None
     notes: str = ""
 
     @model_validator(mode="after")
     def validate_mode_texts(self):
-        validate_prompt_texts(self.mode, self.managed_text, self.rebuilt_text)
+        validate_prompt_texts(
+            self.mode,
+            self.direction,
+            self.managed_long_text,
+            self.managed_short_text,
+            self.rebuilt_long_text,
+            self.rebuilt_short_text,
+        )
         return self
 
 
@@ -88,8 +97,10 @@ class PromptPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     mode: Literal["managed", "rebuilt", "both"] | None = None
     direction: Literal["long", "short", "both"] | None = None
-    managed_text: str | None = None
-    rebuilt_text: str | None = None
+    managed_long_text: str | None = None
+    managed_short_text: str | None = None
+    rebuilt_long_text: str | None = None
+    rebuilt_short_text: str | None = None
     notes: str | None = None
 
 

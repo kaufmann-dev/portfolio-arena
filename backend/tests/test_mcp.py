@@ -232,9 +232,11 @@ class TestMcpTools:
         assert data["market_data_status"] == "fresh"
         assert portfolio["prompt"]["mode"] == "both"
         assert portfolio["prompt"]["direction"] == "both"
-        assert portfolio["prompt"]["text"] == sample_prompt["managed_text"]
-        assert "managed_text" not in portfolio["prompt"]
-        assert "rebuilt_text" not in portfolio["prompt"]
+        assert portfolio["prompt"]["text"] == sample_prompt["managed_long_text"]
+        assert "managed_long_text" not in portfolio["prompt"]
+        assert "managed_short_text" not in portfolio["prompt"]
+        assert "rebuilt_long_text" not in portfolio["prompt"]
+        assert "rebuilt_short_text" not in portfolio["prompt"]
         assert portfolio["prompt_mode"] == "managed"
         assert portfolio["allocations"]  # history with notes
         assert "next_entry" in portfolio
@@ -280,9 +282,11 @@ class TestMcpTools:
         assert portfolio["prompt_mode"] == "rebuilt"
         assert portfolio["prompt"]["mode"] == "both"
         assert portfolio["prompt"]["direction"] == "both"
-        assert portfolio["prompt"]["text"] == sample_prompt["rebuilt_text"]
-        assert "managed_text" not in portfolio["prompt"]
-        assert "rebuilt_text" not in portfolio["prompt"]
+        assert portfolio["prompt"]["text"] == sample_prompt["rebuilt_long_text"]
+        assert "managed_long_text" not in portfolio["prompt"]
+        assert "managed_short_text" not in portfolio["prompt"]
+        assert "rebuilt_long_text" not in portfolio["prompt"]
+        assert "rebuilt_short_text" not in portfolio["prompt"]
         assert portfolio["prompt"]["allocation_policy"]
         assert "next_entry" in portfolio
         for hidden in (
@@ -341,7 +345,7 @@ class TestMcpTools:
                 "name": "MCP Prompt",
                 "mode": "managed",
                 "direction": "long",
-                "managed_text": "Beat SPY.",
+                "managed_long_text": "Beat SPY.",
             },
         )
         portfolio = _call_tool(
@@ -396,8 +400,10 @@ class TestMcpTools:
                 "name": "MCP Both Prompt",
                 "mode": "both",
                 "direction": "both",
-                "managed_text": "Managed MCP strategy.",
-                "rebuilt_text": "Rebuilt MCP strategy.",
+                "managed_long_text": "Managed Long MCP strategy.",
+                "managed_short_text": "Managed Short MCP strategy.",
+                "rebuilt_long_text": "Rebuilt Long MCP strategy.",
+                "rebuilt_short_text": "Rebuilt Short MCP strategy.",
             },
         )
 
@@ -409,8 +415,10 @@ class TestMcpTools:
         )
         assert generic["mode"] == "both"
         assert generic["direction"] == "both"
-        assert generic["managed_text"] == "Managed MCP strategy."
-        assert generic["rebuilt_text"] == "Rebuilt MCP strategy."
+        assert generic["managed_long_text"] == "Managed Long MCP strategy."
+        assert generic["managed_short_text"] == "Managed Short MCP strategy."
+        assert generic["rebuilt_long_text"] == "Rebuilt Long MCP strategy."
+        assert generic["rebuilt_short_text"] == "Rebuilt Short MCP strategy."
         assert generic["allocation_policies"]["managed"]["max_position_weight_pct"] == 25
         assert generic["allocation_policies"]["rebuilt"]["max_position_weight_pct"] == 100
         assert "text" not in generic

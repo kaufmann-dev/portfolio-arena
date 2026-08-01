@@ -2,6 +2,7 @@
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.db import session_factory
 from app.models import EvaluationRun, Portfolio, Prompt, PromptVersion
@@ -23,8 +24,18 @@ def _create_prompt(
             "name": name,
             "mode": mode,
             "direction": direction,
-            "managed_text": managed_text,
-            "rebuilt_text": rebuilt_text,
+            "managed_long_text": (
+                managed_text if mode in {"managed", "both"} and direction in {"long", "both"} else None
+            ),
+            "managed_short_text": (
+                managed_text if mode in {"managed", "both"} and direction in {"short", "both"} else None
+            ),
+            "rebuilt_long_text": (
+                rebuilt_text if mode in {"rebuilt", "both"} and direction in {"long", "both"} else None
+            ),
+            "rebuilt_short_text": (
+                rebuilt_text if mode in {"rebuilt", "both"} and direction in {"short", "both"} else None
+            ),
             "notes": "initial note",
         },
         headers=admin_headers,
@@ -68,8 +79,10 @@ def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
     assert created["name"] == "Alpha Strategy"
     assert created["mode"] == "both"
     assert created["direction"] == "both"
-    assert created["managed_text"] == "Choose evidence-backed managed opportunities."
-    assert created["rebuilt_text"] == "Choose fresh evidence-backed rebuilt opportunities."
+    assert created["managed_long_text"] == "Choose evidence-backed managed opportunities."
+    assert created["managed_short_text"] == "Choose evidence-backed managed opportunities."
+    assert created["rebuilt_long_text"] == "Choose fresh evidence-backed rebuilt opportunities."
+    assert created["rebuilt_short_text"] == "Choose fresh evidence-backed rebuilt opportunities."
     assert "text" not in created
     assert created["notes"] == "initial note"
     assert created["allocation_policies"]["managed"]["min_position_weight_pct"] == 10
@@ -85,8 +98,10 @@ def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
         assert prompt.current_version.version == 1
         assert prompt.current_version.mode == "both"
         assert prompt.current_version.direction == "both"
-        assert prompt.current_version.managed_text == created["managed_text"]
-        assert prompt.current_version.rebuilt_text == created["rebuilt_text"]
+        assert prompt.current_version.managed_long_text == created["managed_long_text"]
+        assert prompt.current_version.managed_short_text == created["managed_short_text"]
+        assert prompt.current_version.rebuilt_long_text == created["rebuilt_long_text"]
+        assert prompt.current_version.rebuilt_short_text == created["rebuilt_short_text"]
         assert (
             session.scalar(
                 select(func.count())
@@ -97,6 +112,28 @@ def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
         )
 
 
+def test_database_rejects_non_null_text_for_unsupported_cell(client, admin_headers):
+    created = _create_prompt(client, admin_headers, mode="managed", direction="long", rebuilt_text=None)
+
+    with session_factory()() as session:
+        session.add(
+            PromptVersion(
+                prompt_id=created["id"],
+                version=2,
+                name="Invalid unsupported cell",
+                mode="managed",
+                direction="long",
+                managed_long_text="Valid managed long text.",
+                managed_short_text="   ",
+                rebuilt_long_text=None,
+                rebuilt_short_text=None,
+                notes="",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
 def test_prompt_requests_reject_legacy_per_prompt_allocation_policy(client, admin_headers):
     create_response = client.post(
         "/api/admin/prompts",
@@ -104,7 +141,7 @@ def test_prompt_requests_reject_legacy_per_prompt_allocation_policy(client, admi
             "name": "Legacy Policy",
             "mode": "managed",
             "direction": "long",
-            "managed_text": "Choose managed opportunities.",
+            "managed_long_text": "Choose managed opportunities.",
             "allocation_policy": {
                 "min_position_weight_pct": 10,
                 "max_position_weight_pct": 100,
@@ -145,7 +182,7 @@ def test_update_appends_immutable_version_and_noop_does_not(client, admin_header
         f"/api/admin/prompts/{created['id']}",
         json={
             "name": "Alpha Strategy v2",
-            "managed_text": "Choose managed opportunities with a specific catalyst.",
+            "managed_long_text": "Choose managed opportunities with a specific catalyst.",
             "notes": "second note",
         },
         headers=admin_headers,
@@ -165,21 +202,30 @@ def test_update_appends_immutable_version_and_noop_does_not(client, admin_header
     assert payload["versions"][0]["name"] == "Alpha Strategy v2"
     assert payload["versions"][0]["mode"] == "both"
     assert payload["versions"][0]["direction"] == "both"
-    assert payload["versions"][0]["managed_text"] == "Choose managed opportunities with a specific catalyst."
-    assert payload["versions"][0]["rebuilt_text"] == created["rebuilt_text"]
+    assert (
+        payload["versions"][0]["managed_long_text"]
+        == "Choose managed opportunities with a specific catalyst."
+    )
+    assert payload["versions"][0]["managed_short_text"] == created["managed_short_text"]
+    assert payload["versions"][0]["rebuilt_long_text"] == created["rebuilt_long_text"]
+    assert payload["versions"][0]["rebuilt_short_text"] == created["rebuilt_short_text"]
     assert payload["versions"][0]["restored_from_version"] is None
     assert payload["versions"][1]["name"] == "Alpha Strategy"
     assert payload["versions"][1]["mode"] == "both"
     assert payload["versions"][1]["direction"] == "both"
-    assert payload["versions"][1]["managed_text"] == created["managed_text"]
-    assert payload["versions"][1]["rebuilt_text"] == created["rebuilt_text"]
+    assert payload["versions"][1]["managed_long_text"] == created["managed_long_text"]
+    assert payload["versions"][1]["managed_short_text"] == created["managed_short_text"]
+    assert payload["versions"][1]["rebuilt_long_text"] == created["rebuilt_long_text"]
+    assert payload["versions"][1]["rebuilt_short_text"] == created["rebuilt_short_text"]
     assert set(payload["versions"][0]) == {
         "version",
         "name",
         "mode",
         "direction",
-        "managed_text",
-        "rebuilt_text",
+        "managed_long_text",
+        "managed_short_text",
+        "rebuilt_long_text",
+        "rebuilt_short_text",
         "notes",
         "created_at",
         "restored_from_version",
@@ -206,7 +252,7 @@ def test_direction_edit_appends_immutable_version(client, admin_headers):
 
 
 @pytest.mark.parametrize(
-    ("mode", "managed_text", "rebuilt_text"),
+    ("mode", "managed_long_text", "rebuilt_long_text"),
     [
         ("managed", None, None),
         ("managed", "   ", None),
@@ -223,8 +269,8 @@ def test_create_rejects_invalid_mode_text_combinations(
     client,
     admin_headers,
     mode,
-    managed_text,
-    rebuilt_text,
+    managed_long_text,
+    rebuilt_long_text,
 ):
     response = client.post(
         "/api/admin/prompts",
@@ -232,8 +278,8 @@ def test_create_rejects_invalid_mode_text_combinations(
             "name": "Invalid mode contract",
             "mode": mode,
             "direction": "long",
-            "managed_text": managed_text,
-            "rebuilt_text": rebuilt_text,
+            "managed_long_text": managed_long_text,
+            "rebuilt_long_text": rebuilt_long_text,
         },
         headers=admin_headers,
     )
@@ -267,8 +313,10 @@ def test_create_serializes_normalized_mode_texts(
 
     assert created["mode"] == mode
     assert created["direction"] == "both"
-    assert created["managed_text"] == managed_text
-    assert created["rebuilt_text"] == rebuilt_text
+    assert created["managed_long_text"] == managed_text
+    assert created["managed_short_text"] == managed_text
+    assert created["rebuilt_long_text"] == rebuilt_text
+    assert created["rebuilt_short_text"] == rebuilt_text
     assert "text" not in created
 
 
@@ -285,7 +333,7 @@ def test_create_rejects_invalid_direction_support(client, admin_headers, directi
     payload = {
         "name": "Invalid direction contract",
         "mode": "managed",
-        "managed_text": "Managed strategy.",
+        "managed_long_text": "Managed strategy.",
     }
     if direction is not None:
         payload["direction"] = direction
@@ -302,7 +350,7 @@ def test_legacy_generic_text_field_is_rejected(client, admin_headers):
             "name": "Legacy create",
             "mode": "managed",
             "direction": "long",
-            "managed_text": "Managed strategy.",
+            "managed_long_text": "Managed strategy.",
             "text": "Legacy generic strategy.",
         },
         headers=admin_headers,
@@ -333,12 +381,14 @@ def test_patch_merges_then_normalizes_mode_specific_text(client, admin_headers):
     )
     assert narrowed.status_code == 200, narrowed.text
     assert narrowed.json()["mode"] == "managed"
-    assert narrowed.json()["managed_text"] == created["managed_text"]
-    assert narrowed.json()["rebuilt_text"] is None
+    assert narrowed.json()["managed_long_text"] == created["managed_long_text"]
+    assert narrowed.json()["managed_short_text"] == created["managed_short_text"]
+    assert narrowed.json()["rebuilt_long_text"] is None
+    assert narrowed.json()["rebuilt_short_text"] is None
 
     unsupported_text = client.patch(
         f"/api/admin/prompts/{created['id']}",
-        json={"rebuilt_text": "Not valid for a managed-only prompt."},
+        json={"rebuilt_long_text": "Not valid for a managed-only prompt."},
         headers=admin_headers,
     )
     assert unsupported_text.status_code == 422
@@ -354,14 +404,17 @@ def test_patch_merges_then_normalizes_mode_specific_text(client, admin_headers):
         f"/api/admin/prompts/{created['id']}",
         json={
             "mode": "both",
-            "rebuilt_text": "New rebuilt strategy.",
+            "rebuilt_long_text": "New rebuilt long strategy.",
+            "rebuilt_short_text": "New rebuilt short strategy.",
         },
         headers=admin_headers,
     )
     assert expanded.status_code == 200, expanded.text
     assert expanded.json()["mode"] == "both"
-    assert expanded.json()["managed_text"] == created["managed_text"]
-    assert expanded.json()["rebuilt_text"] == "New rebuilt strategy."
+    assert expanded.json()["managed_long_text"] == created["managed_long_text"]
+    assert expanded.json()["managed_short_text"] == created["managed_short_text"]
+    assert expanded.json()["rebuilt_long_text"] == "New rebuilt long strategy."
+    assert expanded.json()["rebuilt_short_text"] == "New rebuilt short strategy."
 
 
 @pytest.mark.parametrize("portfolio_status", ["active", "archived"])
@@ -437,7 +490,8 @@ def test_restore_rejects_removing_mode_used_by_archived_portfolio(
         f"/api/admin/prompts/{created['id']}",
         json={
             "mode": "both",
-            "rebuilt_text": "Rebuilt strategy added in v2.",
+            "rebuilt_long_text": "Rebuilt long strategy added in v2.",
+            "rebuilt_short_text": "Rebuilt short strategy added in v2.",
         },
         headers=admin_headers,
     )
@@ -472,7 +526,11 @@ def test_restore_rejects_removing_direction_used_by_archived_portfolio(
     created = _create_prompt(client, admin_headers, direction="long")
     expanded = client.patch(
         f"/api/admin/prompts/{created['id']}",
-        json={"direction": "both"},
+        json={
+            "direction": "both",
+            "managed_short_text": "Managed short strategy added in v2.",
+            "rebuilt_short_text": "Rebuilt short strategy added in v2.",
+        },
         headers=admin_headers,
     )
     assert expanded.status_code == 200, expanded.text
@@ -522,8 +580,10 @@ def test_admin_list_has_status_history_and_usage_metadata(
         "name",
         "mode",
         "direction",
-        "managed_text",
-        "rebuilt_text",
+        "managed_long_text",
+        "managed_short_text",
+        "rebuilt_long_text",
+        "rebuilt_short_text",
         "notes",
         "allocation_policies",
     }
@@ -561,7 +621,7 @@ def test_restore_appends_version_and_preserves_archive_status(client, admin_head
 
     blocked_update = client.patch(
         f"/api/admin/prompts/{created['id']}",
-        json={"managed_text": "This edit must not be accepted."},
+        json={"managed_long_text": "This edit must not be accepted."},
         headers=admin_headers,
     )
     assert blocked_update.status_code == 409
@@ -583,8 +643,10 @@ def test_restore_appends_version_and_preserves_archive_status(client, admin_head
     assert history["versions"][0]["version"] == 2
     assert history["versions"][0]["mode"] == "both"
     assert history["versions"][0]["direction"] == "both"
-    assert history["versions"][0]["managed_text"] == created["managed_text"]
-    assert history["versions"][0]["rebuilt_text"] == created["rebuilt_text"]
+    assert history["versions"][0]["managed_long_text"] == created["managed_long_text"]
+    assert history["versions"][0]["managed_short_text"] == created["managed_short_text"]
+    assert history["versions"][0]["rebuilt_long_text"] == created["rebuilt_long_text"]
+    assert history["versions"][0]["rebuilt_short_text"] == created["rebuilt_short_text"]
     assert history["versions"][0]["restored_from_version"] == 1
 
     unarchived = client.post(
@@ -625,7 +687,7 @@ def test_running_evaluation_blocks_update_and_restore(
 
     update = client.patch(
         f"/api/admin/prompts/{created['id']}",
-        json={"managed_text": "A change while the evaluator is active."},
+        json={"managed_long_text": "A change while the evaluator is active."},
         headers=admin_headers,
     )
     restore = client.post(

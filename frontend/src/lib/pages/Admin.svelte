@@ -119,14 +119,28 @@
     return promptSupportsTrack(prompt.mode, mode) && promptSupportsDirection(prompt.direction, direction);
   }
 
+  function promptSupportsCell(
+    mode: PromptAvailability,
+    direction: DirectionAvailability,
+    track: PromptMode,
+    portfolioDirection: Direction,
+  ): boolean {
+    return promptSupportsTrack(mode, track) && promptSupportsDirection(direction, portfolioDirection);
+  }
+
   function promptTextsValid(
     mode: PromptAvailability | "",
-    managedText: string | null,
-    rebuiltText: string | null,
+    direction: DirectionAvailability | "",
+    managedLongText: string | null,
+    managedShortText: string | null,
+    rebuiltLongText: string | null,
+    rebuiltShortText: string | null,
   ): boolean {
-    if (!mode) return false;
-    if (promptSupportsTrack(mode, "managed") && !managedText?.trim()) return false;
-    if (promptSupportsTrack(mode, "rebuilt") && !rebuiltText?.trim()) return false;
+    if (!mode || !direction) return false;
+    if (promptSupportsCell(mode, direction, "managed", "long") && !managedLongText?.trim()) return false;
+    if (promptSupportsCell(mode, direction, "managed", "short") && !managedShortText?.trim()) return false;
+    if (promptSupportsCell(mode, direction, "rebuilt", "long") && !rebuiltLongText?.trim()) return false;
+    if (promptSupportsCell(mode, direction, "rebuilt", "short") && !rebuiltShortText?.trim()) return false;
     return true;
   }
 
@@ -691,8 +705,10 @@
   let newPromptName = $state("");
   let newPromptAvailability = $state<PromptAvailability | "">("");
   let newPromptDirection = $state<DirectionAvailability | "">("");
-  let newPromptManagedText = $state("");
-  let newPromptRebuiltText = $state("");
+  let newPromptManagedLongText = $state("");
+  let newPromptManagedShortText = $state("");
+  let newPromptRebuiltLongText = $state("");
+  let newPromptRebuiltShortText = $state("");
   let newPromptNotes = $state("");
   let historyPromptId = $state<number | null>(null);
   let promptVersions = $state.raw<PromptVersion[]>([]);
@@ -709,7 +725,14 @@
     if (
       !newPromptName.trim() ||
       !newPromptDirection ||
-      !promptTextsValid(newPromptAvailability, newPromptManagedText, newPromptRebuiltText)
+      !promptTextsValid(
+        newPromptAvailability,
+        newPromptDirection,
+        newPromptManagedLongText,
+        newPromptManagedShortText,
+        newPromptRebuiltLongText,
+        newPromptRebuiltShortText,
+      )
     ) {
       return;
     }
@@ -719,15 +742,27 @@
         name: newPromptName.trim(),
         mode,
         direction: newPromptDirection,
-        managed_text: promptSupportsTrack(mode, "managed") ? newPromptManagedText : null,
-        rebuilt_text: promptSupportsTrack(mode, "rebuilt") ? newPromptRebuiltText : null,
+        managed_long_text: promptSupportsCell(mode, newPromptDirection, "managed", "long")
+          ? newPromptManagedLongText
+          : null,
+        managed_short_text: promptSupportsCell(mode, newPromptDirection, "managed", "short")
+          ? newPromptManagedShortText
+          : null,
+        rebuilt_long_text: promptSupportsCell(mode, newPromptDirection, "rebuilt", "long")
+          ? newPromptRebuiltLongText
+          : null,
+        rebuilt_short_text: promptSupportsCell(mode, newPromptDirection, "rebuilt", "short")
+          ? newPromptRebuiltShortText
+          : null,
         notes: newPromptNotes.trim(),
       });
       newPromptName = "";
       newPromptAvailability = "";
       newPromptDirection = "";
-      newPromptManagedText = "";
-      newPromptRebuiltText = "";
+      newPromptManagedLongText = "";
+      newPromptManagedShortText = "";
+      newPromptRebuiltLongText = "";
+      newPromptRebuiltShortText = "";
       newPromptNotes = "";
       await refreshPrompts();
       flash("Prompt created.");
@@ -741,7 +776,14 @@
     if (
       !editPrompt ||
       !editPrompt.name.trim() ||
-      !promptTextsValid(editPrompt.mode, editPrompt.managed_text, editPrompt.rebuilt_text)
+      !promptTextsValid(
+        editPrompt.mode,
+        editPrompt.direction,
+        editPrompt.managed_long_text,
+        editPrompt.managed_short_text,
+        editPrompt.rebuilt_long_text,
+        editPrompt.rebuilt_short_text,
+      )
     ) {
       return;
     }
@@ -751,8 +793,18 @@
         name: editPrompt.name,
         mode: editPrompt.mode,
         direction: editPrompt.direction,
-        managed_text: promptSupportsTrack(editPrompt.mode, "managed") ? editPrompt.managed_text : null,
-        rebuilt_text: promptSupportsTrack(editPrompt.mode, "rebuilt") ? editPrompt.rebuilt_text : null,
+        managed_long_text: promptSupportsCell(editPrompt.mode, editPrompt.direction, "managed", "long")
+          ? editPrompt.managed_long_text
+          : null,
+        managed_short_text: promptSupportsCell(editPrompt.mode, editPrompt.direction, "managed", "short")
+          ? editPrompt.managed_short_text
+          : null,
+        rebuilt_long_text: promptSupportsCell(editPrompt.mode, editPrompt.direction, "rebuilt", "long")
+          ? editPrompt.rebuilt_long_text
+          : null,
+        rebuilt_short_text: promptSupportsCell(editPrompt.mode, editPrompt.direction, "rebuilt", "short")
+          ? editPrompt.rebuilt_short_text
+          : null,
         notes: editPrompt.notes,
       });
       editPrompt = null;
@@ -773,18 +825,51 @@
     const next = (event.currentTarget as HTMLSelectElement).value as PromptAvailability;
     if (next !== "managed" && next !== "rebuilt" && next !== "both") return;
     editPrompt.mode = next;
-    if (promptSupportsTrack(next, "managed") && editPrompt.managed_text === null) {
-      editPrompt.managed_text = "";
+    initializeEditPromptTexts();
+  }
+
+  function setEditPromptDirection(event: Event): void {
+    if (!editPrompt) return;
+    const next = (event.currentTarget as HTMLSelectElement).value as DirectionAvailability;
+    if (next !== "long" && next !== "short" && next !== "both") return;
+    editPrompt.direction = next;
+    initializeEditPromptTexts();
+  }
+
+  function initializeEditPromptTexts(): void {
+    if (!editPrompt) return;
+    if (
+      promptSupportsCell(editPrompt.mode, editPrompt.direction, "managed", "long") &&
+      editPrompt.managed_long_text === null
+    ) {
+      editPrompt.managed_long_text = "";
     }
-    if (promptSupportsTrack(next, "rebuilt") && editPrompt.rebuilt_text === null) {
-      editPrompt.rebuilt_text = "";
+    if (
+      promptSupportsCell(editPrompt.mode, editPrompt.direction, "managed", "short") &&
+      editPrompt.managed_short_text === null
+    ) {
+      editPrompt.managed_short_text = "";
+    }
+    if (
+      promptSupportsCell(editPrompt.mode, editPrompt.direction, "rebuilt", "long") &&
+      editPrompt.rebuilt_long_text === null
+    ) {
+      editPrompt.rebuilt_long_text = "";
+    }
+    if (
+      promptSupportsCell(editPrompt.mode, editPrompt.direction, "rebuilt", "short") &&
+      editPrompt.rebuilt_short_text === null
+    ) {
+      editPrompt.rebuilt_short_text = "";
     }
   }
 
-  function setEditPromptText(track: PromptMode, value: string): void {
+  function setEditPromptText(track: PromptMode, direction: Direction, value: string): void {
     if (!editPrompt) return;
-    if (track === "managed") editPrompt.managed_text = value;
-    else editPrompt.rebuilt_text = value;
+    if (track === "managed" && direction === "long") editPrompt.managed_long_text = value;
+    else if (track === "managed") editPrompt.managed_short_text = value;
+    else if (direction === "long") editPrompt.rebuilt_long_text = value;
+    else editPrompt.rebuilt_short_text = value;
   }
 
   async function loadPromptVersions(promptId: number): Promise<void> {
@@ -1988,8 +2073,8 @@
                 <option value="both">Managed + Rebuilt</option>
               </select>
               <p class="muted hint">
-                Both stores distinct strategy text for each track; evaluators receive only the applicable
-                text.
+                Each supported mode and direction stores distinct strategy text; evaluators receive only the
+                applicable text.
               </p>
             </div>
             <div class="field">
@@ -2004,18 +2089,44 @@
                 Direction support controls which long and short portfolios may use this strategy.
               </p>
             </div>
-            {#if newPromptAvailability && promptSupportsTrack(newPromptAvailability, "managed")}
+            {#if newPromptAvailability && newPromptDirection && promptSupportsCell(newPromptAvailability, newPromptDirection, "managed", "long")}
               <div class="field">
-                <label for="np-prompt-managed-text">Managed strategy text</label>
-                <textarea id="np-prompt-managed-text" bind:value={newPromptManagedText} rows="7" required
-                ></textarea>
+                <label for="np-prompt-managed-long-text">Managed Long strategy text</label>
+                <textarea
+                  id="np-prompt-managed-long-text"
+                  bind:value={newPromptManagedLongText}
+                  rows="7"
+                  required></textarea>
               </div>
             {/if}
-            {#if newPromptAvailability && promptSupportsTrack(newPromptAvailability, "rebuilt")}
+            {#if newPromptAvailability && newPromptDirection && promptSupportsCell(newPromptAvailability, newPromptDirection, "managed", "short")}
               <div class="field">
-                <label for="np-prompt-rebuilt-text">Rebuilt strategy text</label>
-                <textarea id="np-prompt-rebuilt-text" bind:value={newPromptRebuiltText} rows="7" required
-                ></textarea>
+                <label for="np-prompt-managed-short-text">Managed Short strategy text</label>
+                <textarea
+                  id="np-prompt-managed-short-text"
+                  bind:value={newPromptManagedShortText}
+                  rows="7"
+                  required></textarea>
+              </div>
+            {/if}
+            {#if newPromptAvailability && newPromptDirection && promptSupportsCell(newPromptAvailability, newPromptDirection, "rebuilt", "long")}
+              <div class="field">
+                <label for="np-prompt-rebuilt-long-text">Rebuilt Long strategy text</label>
+                <textarea
+                  id="np-prompt-rebuilt-long-text"
+                  bind:value={newPromptRebuiltLongText}
+                  rows="7"
+                  required></textarea>
+              </div>
+            {/if}
+            {#if newPromptAvailability && newPromptDirection && promptSupportsCell(newPromptAvailability, newPromptDirection, "rebuilt", "short")}
+              <div class="field">
+                <label for="np-prompt-rebuilt-short-text">Rebuilt Short strategy text</label>
+                <textarea
+                  id="np-prompt-rebuilt-short-text"
+                  bind:value={newPromptRebuiltShortText}
+                  rows="7"
+                  required></textarea>
               </div>
             {/if}
             <div class="field">
@@ -2027,7 +2138,14 @@
               type="submit"
               disabled={!newPromptName.trim() ||
                 !newPromptDirection ||
-                !promptTextsValid(newPromptAvailability, newPromptManagedText, newPromptRebuiltText)}
+                !promptTextsValid(
+                  newPromptAvailability,
+                  newPromptDirection,
+                  newPromptManagedLongText,
+                  newPromptManagedShortText,
+                  newPromptRebuiltLongText,
+                  newPromptRebuiltShortText,
+                )}
             >
               Create prompt
             </button>
@@ -2067,30 +2185,56 @@
                 </div>
                 <div class="field">
                   <label for="ep-direction-{prompt.id}">Support direction</label>
-                  <select id="ep-direction-{prompt.id}" bind:value={editPrompt.direction}>
+                  <select
+                    id="ep-direction-{prompt.id}"
+                    value={editPrompt.direction}
+                    onchange={setEditPromptDirection}
+                  >
                     <option value="long">Long only</option>
                     <option value="short">Short only</option>
                     <option value="both">Long + Short</option>
                   </select>
                 </div>
-                {#if promptSupportsTrack(editPrompt.mode, "managed")}
+                {#if promptSupportsCell(editPrompt.mode, editPrompt.direction, "managed", "long")}
                   <div class="field">
-                    <label for="ep-managed-text-{prompt.id}">Managed strategy text</label>
+                    <label for="ep-managed-long-text-{prompt.id}">Managed Long strategy text</label>
                     <textarea
-                      id="ep-managed-text-{prompt.id}"
-                      value={editPrompt.managed_text ?? ""}
-                      oninput={(event) => setEditPromptText("managed", event.currentTarget.value)}
+                      id="ep-managed-long-text-{prompt.id}"
+                      value={editPrompt.managed_long_text ?? ""}
+                      oninput={(event) => setEditPromptText("managed", "long", event.currentTarget.value)}
                       rows="8"
                       required></textarea>
                   </div>
                 {/if}
-                {#if promptSupportsTrack(editPrompt.mode, "rebuilt")}
+                {#if promptSupportsCell(editPrompt.mode, editPrompt.direction, "managed", "short")}
                   <div class="field">
-                    <label for="ep-rebuilt-text-{prompt.id}">Rebuilt strategy text</label>
+                    <label for="ep-managed-short-text-{prompt.id}">Managed Short strategy text</label>
                     <textarea
-                      id="ep-rebuilt-text-{prompt.id}"
-                      value={editPrompt.rebuilt_text ?? ""}
-                      oninput={(event) => setEditPromptText("rebuilt", event.currentTarget.value)}
+                      id="ep-managed-short-text-{prompt.id}"
+                      value={editPrompt.managed_short_text ?? ""}
+                      oninput={(event) => setEditPromptText("managed", "short", event.currentTarget.value)}
+                      rows="8"
+                      required></textarea>
+                  </div>
+                {/if}
+                {#if promptSupportsCell(editPrompt.mode, editPrompt.direction, "rebuilt", "long")}
+                  <div class="field">
+                    <label for="ep-rebuilt-long-text-{prompt.id}">Rebuilt Long strategy text</label>
+                    <textarea
+                      id="ep-rebuilt-long-text-{prompt.id}"
+                      value={editPrompt.rebuilt_long_text ?? ""}
+                      oninput={(event) => setEditPromptText("rebuilt", "long", event.currentTarget.value)}
+                      rows="8"
+                      required></textarea>
+                  </div>
+                {/if}
+                {#if promptSupportsCell(editPrompt.mode, editPrompt.direction, "rebuilt", "short")}
+                  <div class="field">
+                    <label for="ep-rebuilt-short-text-{prompt.id}">Rebuilt Short strategy text</label>
+                    <textarea
+                      id="ep-rebuilt-short-text-{prompt.id}"
+                      value={editPrompt.rebuilt_short_text ?? ""}
+                      oninput={(event) => setEditPromptText("rebuilt", "short", event.currentTarget.value)}
                       rows="8"
                       required></textarea>
                   </div>
@@ -2104,8 +2248,14 @@
                     class="btn primary"
                     type="submit"
                     disabled={!editPrompt.name.trim() ||
-                      !promptTextsValid(editPrompt.mode, editPrompt.managed_text, editPrompt.rebuilt_text)}
-                    >Save</button
+                      !promptTextsValid(
+                        editPrompt.mode,
+                        editPrompt.direction,
+                        editPrompt.managed_long_text,
+                        editPrompt.managed_short_text,
+                        editPrompt.rebuilt_long_text,
+                        editPrompt.rebuilt_short_text,
+                      )}>Save</button
                   >
                   <button class="btn" type="button" onclick={() => (editPrompt = null)}>Cancel</button>
                 </div>
@@ -2126,16 +2276,28 @@
                     </span>
                   </div>
                   <div class="prompt-previews">
-                    {#if prompt.managed_text}
+                    {#if prompt.managed_long_text}
                       <p class="muted preview">
-                        <strong>Managed:</strong>
-                        <span class="preview-text">{prompt.managed_text}</span>
+                        <strong>Managed Long:</strong>
+                        <span class="preview-text">{prompt.managed_long_text}</span>
                       </p>
                     {/if}
-                    {#if prompt.rebuilt_text}
+                    {#if prompt.managed_short_text}
                       <p class="muted preview">
-                        <strong>Rebuilt:</strong>
-                        <span class="preview-text">{prompt.rebuilt_text}</span>
+                        <strong>Managed Short:</strong>
+                        <span class="preview-text">{prompt.managed_short_text}</span>
+                      </p>
+                    {/if}
+                    {#if prompt.rebuilt_long_text}
+                      <p class="muted preview">
+                        <strong>Rebuilt Long:</strong>
+                        <span class="preview-text">{prompt.rebuilt_long_text}</span>
+                      </p>
+                    {/if}
+                    {#if prompt.rebuilt_short_text}
+                      <p class="muted preview">
+                        <strong>Rebuilt Short:</strong>
+                        <span class="preview-text">{prompt.rebuilt_short_text}</span>
                       </p>
                     {/if}
                   </div>
@@ -2226,16 +2388,28 @@
                                   <span class="badge">{promptDirectionLabel(version.direction)}</span>
                                 </span>
                                 <div class="prompt-previews">
-                                  {#if version.managed_text}
+                                  {#if version.managed_long_text}
                                     <p class="muted preview">
-                                      <strong>Managed:</strong>
-                                      <span class="preview-text">{version.managed_text}</span>
+                                      <strong>Managed Long:</strong>
+                                      <span class="preview-text">{version.managed_long_text}</span>
                                     </p>
                                   {/if}
-                                  {#if version.rebuilt_text}
+                                  {#if version.managed_short_text}
                                     <p class="muted preview">
-                                      <strong>Rebuilt:</strong>
-                                      <span class="preview-text">{version.rebuilt_text}</span>
+                                      <strong>Managed Short:</strong>
+                                      <span class="preview-text">{version.managed_short_text}</span>
+                                    </p>
+                                  {/if}
+                                  {#if version.rebuilt_long_text}
+                                    <p class="muted preview">
+                                      <strong>Rebuilt Long:</strong>
+                                      <span class="preview-text">{version.rebuilt_long_text}</span>
+                                    </p>
+                                  {/if}
+                                  {#if version.rebuilt_short_text}
+                                    <p class="muted preview">
+                                      <strong>Rebuilt Short:</strong>
+                                      <span class="preview-text">{version.rebuilt_short_text}</span>
                                     </p>
                                   {/if}
                                 </div>

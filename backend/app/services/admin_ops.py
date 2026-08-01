@@ -352,8 +352,10 @@ def prompt_out(prompt: Prompt, settings: dict) -> dict:
         "name": prompt.name,
         "mode": prompt.mode,
         "direction": prompt.direction,
-        "managed_text": prompt.managed_text,
-        "rebuilt_text": prompt.rebuilt_text,
+        "managed_long_text": prompt.managed_long_text,
+        "managed_short_text": prompt.managed_short_text,
+        "rebuilt_long_text": prompt.rebuilt_long_text,
+        "rebuilt_short_text": prompt.rebuilt_short_text,
         "notes": prompt.notes,
         "allocation_policies": allocation_policies_out(settings, prompt),
     }
@@ -365,8 +367,10 @@ def _prompt_version_out(version: PromptVersion) -> dict:
         "name": version.name,
         "mode": version.mode,
         "direction": version.direction,
-        "managed_text": version.managed_text,
-        "rebuilt_text": version.rebuilt_text,
+        "managed_long_text": version.managed_long_text,
+        "managed_short_text": version.managed_short_text,
+        "rebuilt_long_text": version.rebuilt_long_text,
+        "rebuilt_short_text": version.rebuilt_short_text,
         "notes": version.notes,
         "created_at": version.created_at.isoformat(),
         "restored_from_version": (
@@ -398,8 +402,10 @@ def _admin_prompt_out(
         "name": current.name,
         "mode": current.mode,
         "direction": current.direction,
-        "managed_text": current.managed_text,
-        "rebuilt_text": current.rebuilt_text,
+        "managed_long_text": current.managed_long_text,
+        "managed_short_text": current.managed_short_text,
+        "rebuilt_long_text": current.rebuilt_long_text,
+        "rebuilt_short_text": current.rebuilt_short_text,
         "notes": current.notes,
         "allocation_policies": allocation_policies_out(settings, prompt),
     }
@@ -495,11 +501,21 @@ def _active_prompt_for_portfolio(session: Session, prompt_id: int) -> Prompt:
 
 def _validate_prompt_text_contract(
     mode: str,
-    managed_text: str | None,
-    rebuilt_text: str | None,
+    direction: str,
+    managed_long_text: str | None,
+    managed_short_text: str | None,
+    rebuilt_long_text: str | None,
+    rebuilt_short_text: str | None,
 ) -> None:
     try:
-        validate_prompt_texts(mode, managed_text, rebuilt_text)
+        validate_prompt_texts(
+            mode,
+            direction,
+            managed_long_text,
+            managed_short_text,
+            rebuilt_long_text,
+            rebuilt_short_text,
+        )
     except ValueError as exc:
         raise AdminOpError(422, str(exc)) from None
 
@@ -600,8 +616,10 @@ def _append_prompt_version(
     name: str,
     mode: str,
     direction: str,
-    managed_text: str | None,
-    rebuilt_text: str | None,
+    managed_long_text: str | None,
+    managed_short_text: str | None,
+    rebuilt_long_text: str | None,
+    rebuilt_short_text: str | None,
     notes: str,
     restored_from_version_id: int | None = None,
 ) -> PromptVersion:
@@ -614,8 +632,10 @@ def _append_prompt_version(
         name=name,
         mode=mode,
         direction=direction,
-        managed_text=managed_text,
-        rebuilt_text=rebuilt_text,
+        managed_long_text=managed_long_text,
+        managed_short_text=managed_short_text,
+        rebuilt_long_text=rebuilt_long_text,
+        rebuilt_short_text=rebuilt_short_text,
         notes=notes,
         restored_from_version_id=restored_from_version_id,
     )
@@ -632,15 +652,24 @@ def create_prompt(
     name: str,
     mode: str,
     direction: str,
-    managed_text: str | None,
-    rebuilt_text: str | None,
+    managed_long_text: str | None,
+    managed_short_text: str | None,
+    rebuilt_long_text: str | None,
+    rebuilt_short_text: str | None,
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
     if not name.strip():
         raise AdminOpError(422, "Prompt name is required")
     _validate_prompt_direction(direction)
-    _validate_prompt_text_contract(mode, managed_text, rebuilt_text)
+    _validate_prompt_text_contract(
+        mode,
+        direction,
+        managed_long_text,
+        managed_short_text,
+        rebuilt_long_text,
+        rebuilt_short_text,
+    )
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
         status="active",
@@ -655,8 +684,10 @@ def create_prompt(
         name=name,
         mode=mode,
         direction=direction,
-        managed_text=managed_text,
-        rebuilt_text=rebuilt_text,
+        managed_long_text=managed_long_text,
+        managed_short_text=managed_short_text,
+        rebuilt_long_text=rebuilt_long_text,
+        rebuilt_short_text=rebuilt_short_text,
         notes=notes,
     )
     session.add(version)
@@ -679,8 +710,10 @@ def update_prompt(
     name: str | None = None,
     mode: str | None = None,
     direction: str | None = None,
-    managed_text: str | None = None,
-    rebuilt_text: str | None = None,
+    managed_long_text: str | None = None,
+    managed_short_text: str | None = None,
+    rebuilt_long_text: str | None = None,
+    rebuilt_short_text: str | None = None,
     notes: str | None = None,
 ) -> dict:
     prompt = _locked_prompt(session, prompt_id)
@@ -697,23 +730,37 @@ def update_prompt(
     next_mode = mode if mode is not None else current.mode
     next_direction = direction if direction is not None else current.direction
     _validate_prompt_direction(next_direction)
-    if next_mode == "managed":
-        if rebuilt_text is not None:
-            raise AdminOpError(422, "Rebuilt prompt text must be null for mode 'managed'.")
-        next_managed_text = managed_text if managed_text is not None else current.managed_text
-        next_rebuilt_text = None
-    elif next_mode == "rebuilt":
-        if managed_text is not None:
-            raise AdminOpError(422, "Managed prompt text must be null for mode 'rebuilt'.")
-        next_managed_text = None
-        next_rebuilt_text = rebuilt_text if rebuilt_text is not None else current.rebuilt_text
-    else:
-        next_managed_text = managed_text if managed_text is not None else current.managed_text
-        next_rebuilt_text = rebuilt_text if rebuilt_text is not None else current.rebuilt_text
+    supplied_texts = {
+        "managed_long_text": managed_long_text,
+        "managed_short_text": managed_short_text,
+        "rebuilt_long_text": rebuilt_long_text,
+        "rebuilt_short_text": rebuilt_short_text,
+    }
+    next_texts: dict[str, str | None] = {}
+    for prompt_mode in sorted(PROMPT_MODES):
+        for portfolio_direction in sorted(PROMPT_DIRECTIONS):
+            field = f"{prompt_mode}_{portfolio_direction}_text"
+            supplied = supplied_texts[field]
+            supported = prompt_supports_mode(prompt_mode, next_mode) and prompt_supports_direction(
+                portfolio_direction, next_direction
+            )
+            if not supported:
+                if supplied is not None:
+                    raise AdminOpError(
+                        422,
+                        f"{prompt_mode.title()} {portfolio_direction} prompt text must be null for "
+                        f"mode '{next_mode}' and direction '{next_direction}'.",
+                    )
+                next_texts[field] = None
+            else:
+                next_texts[field] = supplied if supplied is not None else getattr(current, field)
     _validate_prompt_text_contract(
         next_mode,
-        next_managed_text,
-        next_rebuilt_text,
+        next_direction,
+        next_texts["managed_long_text"],
+        next_texts["managed_short_text"],
+        next_texts["rebuilt_long_text"],
+        next_texts["rebuilt_short_text"],
     )
     _ensure_prompt_mode_preserves_references(session, prompt.id, next_mode)
     _ensure_prompt_direction_preserves_references(session, prompt.id, next_direction)
@@ -722,8 +769,7 @@ def update_prompt(
         next_name != current.name
         or next_mode != current.mode
         or next_direction != current.direction
-        or next_managed_text != current.managed_text
-        or next_rebuilt_text != current.rebuilt_text
+        or any(getattr(current, field) != value for field, value in next_texts.items())
         or next_notes != current.notes
     )
     if not changed:
@@ -742,8 +788,10 @@ def update_prompt(
         name=next_name,
         mode=next_mode,
         direction=next_direction,
-        managed_text=next_managed_text,
-        rebuilt_text=next_rebuilt_text,
+        managed_long_text=next_texts["managed_long_text"],
+        managed_short_text=next_texts["managed_short_text"],
+        rebuilt_long_text=next_texts["rebuilt_long_text"],
+        rebuilt_short_text=next_texts["rebuilt_short_text"],
         notes=next_notes,
     )
     session.commit()
@@ -790,8 +838,11 @@ def restore_prompt_version(
         raise AdminOpError(404, "Prompt version not found")
     _validate_prompt_text_contract(
         source.mode,
-        source.managed_text,
-        source.rebuilt_text,
+        source.direction,
+        source.managed_long_text,
+        source.managed_short_text,
+        source.rebuilt_long_text,
+        source.rebuilt_short_text,
     )
     _validate_prompt_direction(source.direction)
     _ensure_prompt_mode_preserves_references(session, prompt.id, source.mode)
@@ -802,8 +853,10 @@ def restore_prompt_version(
         name=source.name,
         mode=source.mode,
         direction=source.direction,
-        managed_text=source.managed_text,
-        rebuilt_text=source.rebuilt_text,
+        managed_long_text=source.managed_long_text,
+        managed_short_text=source.managed_short_text,
+        rebuilt_long_text=source.rebuilt_long_text,
+        rebuilt_short_text=source.rebuilt_short_text,
         notes=source.notes,
         restored_from_version_id=source.id,
     )
