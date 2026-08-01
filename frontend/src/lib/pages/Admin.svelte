@@ -15,6 +15,7 @@
     ApiKeyOut,
     ApiKeysResponse,
     Direction,
+    DirectionAvailability,
     HarnessDefinition,
     HarnessesResponse,
     ManagedArenaResponse,
@@ -103,6 +104,19 @@
   function promptModeLabel(mode: PromptAvailability): string {
     if (mode === "both") return "Managed + Rebuilt";
     return mode === "managed" ? "Managed" : "Rebuilt";
+  }
+
+  function promptSupportsDirection(availability: DirectionAvailability, direction: Direction): boolean {
+    return availability === "both" || availability === direction;
+  }
+
+  function promptDirectionLabel(direction: DirectionAvailability): string {
+    if (direction === "both") return "Long + Short";
+    return direction === "long" ? "Long" : "Short";
+  }
+
+  function promptIsCompatible(prompt: AdminPrompt, mode: PromptMode, direction: Direction): boolean {
+    return promptSupportsTrack(prompt.mode, mode) && promptSupportsDirection(prompt.direction, direction);
   }
 
   function promptTextsValid(
@@ -396,15 +410,28 @@
   let newCostBps = $state<string>("");
   let portfolioError = $state("");
   const newPortfolioPrompts = $derived(
-    activePrompts.filter((prompt) => promptSupportsTrack(prompt.mode, newPromptMode)),
+    activePrompts.filter((prompt) => promptIsCompatible(prompt, newPromptMode, newDirection)),
   );
+
+  function clearIncompatibleNewPortfolioPrompt(): void {
+    const selectedPrompt = prompts.find((prompt) => prompt.id === newPromptId);
+    if (!selectedPrompt || !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)) {
+      newPromptId = null;
+    }
+  }
 
   function setNewPortfolioMode(event: Event): void {
     const next = (event.currentTarget as HTMLSelectElement).value as PromptMode;
     if (next !== "managed" && next !== "rebuilt") return;
     newPromptMode = next;
-    const selectedPrompt = prompts.find((prompt) => prompt.id === newPromptId);
-    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, next)) newPromptId = null;
+    clearIncompatibleNewPortfolioPrompt();
+  }
+
+  function setNewPortfolioDirection(event: Event): void {
+    const next = (event.currentTarget as HTMLSelectElement).value as Direction;
+    if (next !== "long" && next !== "short") return;
+    newDirection = next;
+    clearIncompatibleNewPortfolioPrompt();
   }
 
   async function createPortfolio(event: SubmitEvent) {
@@ -415,9 +442,9 @@
       return;
     }
     const selectedPrompt = activePrompts.find((prompt) => prompt.id === newPromptId);
-    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, newPromptMode)) {
+    if (!selectedPrompt || !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)) {
       newPromptId = null;
-      portfolioError = `Select an active prompt that supports the ${newPromptMode} track.`;
+      portfolioError = `Select an active prompt that supports ${newDirection} ${newPromptMode} portfolios.`;
       return;
     }
     const body: Record<string, unknown> = {
@@ -668,6 +695,7 @@
   let editPrompt = $state<AdminPrompt | null>(null);
   let newPromptName = $state("");
   let newPromptAvailability = $state<PromptAvailability | "">("");
+  let newPromptDirection = $state<DirectionAvailability | "">("");
   let newPromptManagedText = $state("");
   let newPromptRebuiltText = $state("");
   let newPromptNotes = $state("");
@@ -685,6 +713,7 @@
     event.preventDefault();
     if (
       !newPromptName.trim() ||
+      !newPromptDirection ||
       !promptTextsValid(newPromptAvailability, newPromptManagedText, newPromptRebuiltText)
     ) {
       return;
@@ -694,12 +723,14 @@
       await postJson("/api/admin/prompts", {
         name: newPromptName.trim(),
         mode,
+        direction: newPromptDirection,
         managed_text: promptSupportsTrack(mode, "managed") ? newPromptManagedText : null,
         rebuilt_text: promptSupportsTrack(mode, "rebuilt") ? newPromptRebuiltText : null,
         notes: newPromptNotes.trim(),
       });
       newPromptName = "";
       newPromptAvailability = "";
+      newPromptDirection = "";
       newPromptManagedText = "";
       newPromptRebuiltText = "";
       newPromptNotes = "";
@@ -724,6 +755,7 @@
       await patchJson(`/api/admin/prompts/${promptId}`, {
         name: editPrompt.name,
         mode: editPrompt.mode,
+        direction: editPrompt.direction,
         managed_text: promptSupportsTrack(editPrompt.mode, "managed") ? editPrompt.managed_text : null,
         rebuilt_text: promptSupportsTrack(editPrompt.mode, "rebuilt") ? editPrompt.rebuilt_text : null,
         notes: editPrompt.notes,
@@ -841,12 +873,27 @@
   } | null>(null);
   let portfolioEditLoadingId = $state<number | null>(null);
 
-  function promptsForPortfolio(currentPromptId: number | null, track: PromptMode): AdminPrompt[] {
+  function promptsForPortfolio(
+    currentPromptId: number | null,
+    track: PromptMode,
+    direction: Direction,
+  ): AdminPrompt[] {
     return prompts.filter(
       (prompt) =>
-        promptSupportsTrack(prompt.mode, track) &&
+        promptIsCompatible(prompt, track, direction) &&
         (prompt.status === "active" || prompt.id === currentPromptId),
     );
+  }
+
+  function clearIncompatibleEditPortfolioPrompt(): void {
+    if (!editPortfolio) return;
+    const selectedPrompt = prompts.find((prompt) => prompt.id === editPortfolio?.prompt_id);
+    if (
+      !selectedPrompt ||
+      !promptIsCompatible(selectedPrompt, editPortfolio.prompt_mode, editPortfolio.direction)
+    ) {
+      editPortfolio.prompt_id = null;
+    }
   }
 
   function setEditPortfolioMode(event: Event): void {
@@ -854,11 +901,15 @@
     const next = (event.currentTarget as HTMLSelectElement).value as PromptMode;
     if (next !== "managed" && next !== "rebuilt") return;
     editPortfolio.prompt_mode = next;
-    const currentPromptId = editPortfolio.prompt_id;
-    const selectedPrompt = prompts.find((prompt) => prompt.id === currentPromptId);
-    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, next)) {
-      editPortfolio.prompt_id = null;
-    }
+    clearIncompatibleEditPortfolioPrompt();
+  }
+
+  function setEditPortfolioDirection(event: Event): void {
+    if (!editPortfolio) return;
+    const next = (event.currentTarget as HTMLSelectElement).value as Direction;
+    if (next !== "long" && next !== "short") return;
+    editPortfolio.direction = next;
+    clearIncompatibleEditPortfolioPrompt();
   }
 
   async function beginPortfolioEdit(portfolio: ArenaPortfolio): Promise<void> {
@@ -899,13 +950,16 @@
   async function savePortfolio(event: SubmitEvent) {
     event.preventDefault();
     if (!editPortfolio || editPortfolio.prompt_id === null) {
-      flash("Select a prompt compatible with this portfolio track.");
+      flash("Select a prompt compatible with this portfolio track and direction.");
       return;
     }
     const selectedPrompt = prompts.find((prompt) => prompt.id === editPortfolio?.prompt_id);
-    if (!selectedPrompt || !promptSupportsTrack(selectedPrompt.mode, editPortfolio.prompt_mode)) {
+    if (
+      !selectedPrompt ||
+      !promptIsCompatible(selectedPrompt, editPortfolio.prompt_mode, editPortfolio.direction)
+    ) {
       editPortfolio.prompt_id = null;
-      flash("Select a prompt compatible with this portfolio track.");
+      flash("Select a prompt compatible with this portfolio track and direction.");
       return;
     }
     try {
@@ -1012,6 +1066,8 @@
   let rebuiltMaxPositionWeightPct = $state<string>("");
   let managedWrapperPrompt = $state("");
   let rebuiltWrapperPrompt = $state("");
+  let longDirectionInstructions = $state("");
+  let shortDirectionInstructions = $state("");
   let settingsError = $state("");
 
   function positionCountRange(minimum: string, maximum: string): string {
@@ -1031,6 +1087,8 @@
       rebuiltMaxPositionWeightPct = String(payload.rebuilt_allocation_policy.max_position_weight_pct);
       managedWrapperPrompt = payload.managed_wrapper_prompt;
       rebuiltWrapperPrompt = payload.rebuilt_wrapper_prompt;
+      longDirectionInstructions = payload.long_direction_instructions;
+      shortDirectionInstructions = payload.short_direction_instructions;
     } catch {
       defaultCostBps = "";
       managedMinPositionWeightPct = "";
@@ -1039,6 +1097,8 @@
       rebuiltMaxPositionWeightPct = "";
       managedWrapperPrompt = "";
       rebuiltWrapperPrompt = "";
+      longDirectionInstructions = "";
+      shortDirectionInstructions = "";
     }
   }
 
@@ -1072,6 +1132,8 @@
         },
         managed_wrapper_prompt: managedWrapperPrompt,
         rebuilt_wrapper_prompt: rebuiltWrapperPrompt,
+        long_direction_instructions: longDirectionInstructions,
+        short_direction_instructions: shortDirectionInstructions,
       });
       flash("Settings saved.");
     } catch (e) {
@@ -1452,7 +1514,7 @@
             <div class="grid-2">
               <div class="field">
                 <label for="np-direction">Direction</label>
-                <select id="np-direction" bind:value={newDirection}>
+                <select id="np-direction" value={newDirection} onchange={setNewPortfolioDirection}>
                   <option value="long">Long</option>
                   <option value="short">Short</option>
                 </select>
@@ -1476,12 +1538,15 @@
               <select id="np-prompt" bind:value={newPromptId}>
                 <option value={null} disabled>Select a prompt…</option>
                 {#each newPortfolioPrompts as prompt (prompt.id)}
-                  <option value={prompt.id}>{prompt.name} · {promptModeLabel(prompt.mode)}</option>
+                  <option value={prompt.id}>
+                    {prompt.name} · {promptModeLabel(prompt.mode)} · {promptDirectionLabel(prompt.direction)}
+                  </option>
                 {/each}
               </select>
               {#if newPortfolioPrompts.length === 0}
                 <p class="muted hint">
-                  No active prompts support the {newPromptMode} track — create or unarchive one in the Prompts tab.
+                  No active prompts support {newDirection}
+                  {newPromptMode} portfolios — create or update one in the Prompts tab.
                 </p>
               {/if}
             </div>
@@ -1531,11 +1596,11 @@
                   <label for="epf-prompt-{portfolio.id}">Compatible prompt</label>
                   <select id="epf-prompt-{portfolio.id}" bind:value={editPortfolio.prompt_id}>
                     <option value={null} disabled>Select a prompt…</option>
-                    {#each promptsForPortfolio(editPortfolio.prompt_id, editPortfolio.prompt_mode) as prompt (prompt.id)}
+                    {#each promptsForPortfolio(editPortfolio.prompt_id, editPortfolio.prompt_mode, editPortfolio.direction) as prompt (prompt.id)}
                       <option value={prompt.id} disabled={prompt.status === "archived"}>
-                        {prompt.name} · {promptModeLabel(prompt.mode)}{prompt.status === "archived"
-                          ? " (archived)"
-                          : ""}
+                        {prompt.name} · {promptModeLabel(prompt.mode)} · {promptDirectionLabel(
+                          prompt.direction,
+                        )}{prompt.status === "archived" ? " (archived)" : ""}
                       </option>
                     {/each}
                   </select>
@@ -1544,7 +1609,8 @@
                   <label for="epf-direction-{portfolio.id}">Direction</label>
                   <select
                     id="epf-direction-{portfolio.id}"
-                    bind:value={editPortfolio.direction}
+                    value={editPortfolio.direction}
+                    onchange={setEditPortfolioDirection}
                     disabled={!editPortfolio.direction_editable}
                   >
                     <option value="long">Long</option>
@@ -1926,6 +1992,18 @@
                 text.
               </p>
             </div>
+            <div class="field">
+              <label for="np-prompt-direction">Support direction</label>
+              <select id="np-prompt-direction" bind:value={newPromptDirection} required>
+                <option value="" disabled>Select support direction…</option>
+                <option value="long">Long only</option>
+                <option value="short">Short only</option>
+                <option value="both">Long + Short</option>
+              </select>
+              <p class="muted hint">
+                Direction support controls which long and short portfolios may use this strategy.
+              </p>
+            </div>
             {#if newPromptAvailability && promptSupportsTrack(newPromptAvailability, "managed")}
               <div class="field">
                 <label for="np-prompt-managed-text">Managed strategy text</label>
@@ -1948,6 +2026,7 @@
               class="btn primary"
               type="submit"
               disabled={!newPromptName.trim() ||
+                !newPromptDirection ||
                 !promptTextsValid(newPromptAvailability, newPromptManagedText, newPromptRebuiltText)}
             >
               Create prompt
@@ -1984,6 +2063,14 @@
                     <option value="managed">Managed only</option>
                     <option value="rebuilt">Rebuilt only</option>
                     <option value="both">Managed + Rebuilt</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="ep-direction-{prompt.id}">Support direction</label>
+                  <select id="ep-direction-{prompt.id}" bind:value={editPrompt.direction}>
+                    <option value="long">Long only</option>
+                    <option value="short">Short only</option>
+                    <option value="both">Long + Short</option>
                   </select>
                 </div>
                 {#if promptSupportsTrack(editPrompt.mode, "managed")}
@@ -2029,6 +2116,7 @@
                   <strong>{prompt.name}</strong>
                   <span class={["badge", prompt.status === "archived" && "warn"]}>{prompt.status}</span>
                   <span class="badge">{promptModeLabel(prompt.mode)}</span>
+                  <span class="badge">{promptDirectionLabel(prompt.direction)}</span>
                   <span class="muted"> · {prompt.portfolio_count} portfolio(s)</span>
                   <span class="muted">
                     · current v{prompt.current_version} · {prompt.version_count} version{prompt.version_count ===
@@ -2135,7 +2223,10 @@
                               </th>
                               <td class="version-snapshot">
                                 <strong>{version.name}</strong>
-                                <span><span class="badge">{promptModeLabel(version.mode)}</span></span>
+                                <span>
+                                  <span class="badge">{promptModeLabel(version.mode)}</span>
+                                  <span class="badge">{promptDirectionLabel(version.direction)}</span>
+                                </span>
                                 <div class="prompt-previews">
                                   {#if version.managed_text}
                                     <p class="muted preview">
@@ -2339,6 +2430,20 @@
               Currently permits {positionCountRange(rebuiltMinPositionWeightPct, rebuiltMaxPositionWeightPct)} positions
               in every rebuilt signal.
             </p>
+            <h3>Direction instructions</h3>
+            <div class="field">
+              <label for="set-long-direction">Long direction instructions</label>
+              <textarea id="set-long-direction" bind:value={longDirectionInstructions} rows="5" required
+              ></textarea>
+            </div>
+            <div class="field">
+              <label for="set-short-direction">Short direction instructions</label>
+              <textarea id="set-short-direction" bind:value={shortDirectionInstructions} rows="6" required
+              ></textarea>
+              <p class="muted hint">
+                The applicable block is inserted into either mode wrapper for every evaluation.
+              </p>
+            </div>
             <div class="field">
               <label for="set-managed-wrapper">Managed wrapper prompt</label>
               <textarea id="set-managed-wrapper" bind:value={managedWrapperPrompt} rows="18" required
@@ -2359,6 +2464,7 @@
               Both wrappers must include
               <code>{"{{portfolio_slug}}"}</code>,
               <code>{"{{strategy_text}}"}</code>,
+              <code>{"{{direction_instructions}}"}</code>,
               <code>{"{{allocation_policy}}"}</code>, and
               <code>{"{{submission_instructions}}"}</code>. Unknown placeholders are rejected.
             </p>

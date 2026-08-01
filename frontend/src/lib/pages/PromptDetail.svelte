@@ -1,6 +1,6 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type { PortfolioRefOut, PromptAvailability, PromptOut } from "../api/types";
+  import type { DirectionAvailability, PortfolioRefOut, PromptAvailability, PromptOut } from "../api/types";
   import PortfolioRefTable from "../components/PortfolioRefTable.svelte";
   import { link } from "../stores/router.svelte";
 
@@ -23,6 +23,11 @@
     if (mode === "both") return "Managed + Rebuilt";
     return mode === "managed" ? "Managed only" : "Rebuilt only";
   }
+
+  function promptDirectionLabel(direction: DirectionAvailability): string {
+    if (direction === "both") return "Long + Short";
+    return direction === "long" ? "Long only" : "Short only";
+  }
 </script>
 
 {#key slug}
@@ -42,6 +47,8 @@
           <span class="num">{data.prompt.slug}</span>
           <span aria-hidden="true">·</span>
           <span class="badge">{promptModeLabel(data.prompt.mode)}</span>
+          <span aria-hidden="true">·</span>
+          <span class="badge">{promptDirectionLabel(data.prompt.direction)}</span>
           <span aria-hidden="true">·</span>
           updated <span class="num">{data.prompt.updated_at.slice(0, 10)}</span>
         </p>

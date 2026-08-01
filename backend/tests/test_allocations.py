@@ -165,6 +165,7 @@ class TestCreation:
             json={
                 "name": "Concentrated",
                 "mode": "managed",
+                "direction": "long",
                 "managed_text": "Own a focused portfolio.",
             },
             headers=admin_headers,
@@ -204,6 +205,7 @@ class TestCreation:
             json={
                 "name": "Mode Policy Test",
                 "mode": "both",
+                "direction": "long",
                 "managed_text": "Build a focused managed portfolio.",
                 "rebuilt_text": "Select the strongest independent signal.",
             },

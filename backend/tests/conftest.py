@@ -328,6 +328,7 @@ def sample_prompt(client, admin_headers) -> dict:
         json={
             "name": "weekly-manager-v1",
             "mode": "both",
+            "direction": "both",
             "managed_text": "Manage a portfolio to beat SPY.",
             "rebuilt_text": "Select a fresh portfolio to beat SPY.",
         },

@@ -3,12 +3,20 @@
 import pytest
 
 
-def _create_mode_prompt(client, admin_headers, *, name: str, mode: str) -> dict:
+def _create_mode_prompt(
+    client,
+    admin_headers,
+    *,
+    name: str,
+    mode: str,
+    direction: str = "both",
+) -> dict:
     response = client.post(
         "/api/admin/prompts",
         json={
             "name": name,
             "mode": mode,
+            "direction": direction,
             "managed_text": "Managed strategy." if mode in {"managed", "both"} else None,
             "rebuilt_text": "Rebuilt strategy." if mode in {"rebuilt", "both"} else None,
         },
@@ -155,6 +163,40 @@ class TestCreatePortfolioPrompt:
 
         assert response.status_code == 422
 
+    @pytest.mark.parametrize(
+        ("prompt_support", "portfolio_direction"),
+        [("long", "short"), ("short", "long")],
+    )
+    def test_create_rejects_prompt_without_requested_direction(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+        prompt_support,
+        portfolio_direction,
+    ):
+        prompt = _create_mode_prompt(
+            client,
+            admin_headers,
+            name=f"{prompt_support} only",
+            mode="managed",
+            direction=prompt_support,
+        )
+
+        response = client.post(
+            "/api/portfolios",
+            json={
+                "name": "Unsupported prompt direction",
+                "agent_id": sample_agent["id"],
+                "prompt_id": prompt["id"],
+                "prompt_mode": "managed",
+                "direction": portfolio_direction,
+            },
+            headers=admin_headers,
+        )
+
+        assert response.status_code == 422
+
 
 class TestEditPortfolio:
     def test_patch_validates_final_prompt_and_mode_together(
@@ -212,6 +254,61 @@ class TestEditPortfolio:
         assert simultaneous.status_code == 200, simultaneous.text
         assert simultaneous.json()["prompt_id"] == rebuilt_prompt["id"]
         assert simultaneous.json()["prompt_mode"] == "rebuilt"
+
+    def test_patch_validates_final_prompt_and_direction_together(
+        self,
+        client,
+        admin_headers,
+        sample_agent,
+    ):
+        long_prompt = _create_mode_prompt(
+            client,
+            admin_headers,
+            name="Long only",
+            mode="managed",
+            direction="long",
+        )
+        short_prompt = _create_mode_prompt(
+            client,
+            admin_headers,
+            name="Short only",
+            mode="managed",
+            direction="short",
+        )
+        portfolio = client.post(
+            "/api/portfolios",
+            json={
+                "name": "Direction transition",
+                "agent_id": sample_agent["id"],
+                "prompt_id": long_prompt["id"],
+                "prompt_mode": "managed",
+                "direction": "long",
+            },
+            headers=admin_headers,
+        ).json()
+
+        prompt_only = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            json={"prompt_id": short_prompt["id"]},
+            headers=admin_headers,
+        )
+        assert prompt_only.status_code == 422
+
+        direction_only = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            json={"direction": "short"},
+            headers=admin_headers,
+        )
+        assert direction_only.status_code == 422
+
+        simultaneous = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            json={"prompt_id": short_prompt["id"], "direction": "short"},
+            headers=admin_headers,
+        )
+        assert simultaneous.status_code == 200, simultaneous.text
+        assert simultaneous.json()["prompt_id"] == short_prompt["id"]
+        assert simultaneous.json()["direction"] == "short"
 
     def test_patch_updates_name_agent_cost(
         self,
@@ -301,6 +398,7 @@ class TestEditPortfolio:
             json={
                 "name": "weekly-manager-v2",
                 "mode": "managed",
+                "direction": "long",
                 "managed_text": "Be bolder.",
             },
             headers=admin_headers,
@@ -336,6 +434,7 @@ class TestEditPortfolio:
             json={
                 "name": "alternate-manager",
                 "mode": "managed",
+                "direction": "long",
                 "managed_text": "Use a different strategy.",
             },
             headers=admin_headers,

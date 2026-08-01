@@ -3,8 +3,10 @@
 from types import SimpleNamespace
 
 from app.services.prompt_policy import (
+    DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
+    DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
     V2_REBUILT_PROMPTS,
     automated_execution_prompt,
     manual_execution_prompt,
@@ -38,8 +40,18 @@ def test_managed_execution_instructions_remain_allocation_specific():
         "derived_max_positions": 10,
     }
 
-    manual = manual_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT, policy)
-    automated = automated_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT, policy)
+    manual = manual_execution_prompt(
+        portfolio,
+        DEFAULT_MANAGED_WRAPPER_PROMPT,
+        DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+        policy,
+    )
+    automated = automated_execution_prompt(
+        portfolio,
+        DEFAULT_MANAGED_WRAPPER_PROMPT,
+        DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+        policy,
+    )
 
     assert "call `create_allocation` exactly once" in manual
     assert "create_signal" not in manual
@@ -60,8 +72,18 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
         "derived_max_positions": 10,
     }
 
-    manual = manual_execution_prompt(portfolio, DEFAULT_REBUILT_WRAPPER_PROMPT, policy)
-    automated = automated_execution_prompt(portfolio, DEFAULT_REBUILT_WRAPPER_PROMPT, policy)
+    manual = manual_execution_prompt(
+        portfolio,
+        DEFAULT_REBUILT_WRAPPER_PROMPT,
+        DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+        policy,
+    )
+    automated = automated_execution_prompt(
+        portfolio,
+        DEFAULT_REBUILT_WRAPPER_PROMPT,
+        DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+        policy,
+    )
 
     assert "call `create_signal` exactly once" in manual
     assert "previous signals" in manual
@@ -84,12 +106,18 @@ def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_pola
         "derived_max_positions": 10,
     }
 
-    prompt = manual_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT, policy)
+    prompt = manual_execution_prompt(
+        portfolio,
+        DEFAULT_MANAGED_WRAPPER_PROMPT,
+        DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
+        policy,
+    )
 
     assert "prices are expected to underperform SPY" in prompt
     assert "short book can outperform the Short SPY reference" in prompt
     assert "Submit positive weights totaling exactly 100%" in prompt
     assert "server interprets every position as gross short exposure" in prompt
+    assert prompt.count("This is an all-short portfolio") == 1
 
 
 def test_v2_rebuilt_catalog_rewrites_exactly_eight_weekly_strategies():
