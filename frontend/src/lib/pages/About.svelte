@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Tabs } from "bits-ui";
 
+  import EvidenceBadge from "../components/EvidenceBadge.svelte";
   import { link } from "../stores/router.svelte";
 
   type Tab = "overview" | "rules" | "mcp";
@@ -168,10 +169,10 @@
             evidence rather than the largest point estimate.
           </li>
           <li>
-            <span class="evidence pending">Pending</span> lacks enough eligible observations;
-            <span class="evidence inconclusive">Inconclusive</span> includes zero;
-            <span class="evidence positive">Positive</span> is entirely above zero; and
-            <span class="evidence negative">Negative</span> is entirely below zero.
+            <EvidenceBadge state="pending" compact /> lacks enough eligible observations;
+            <EvidenceBadge state="inconclusive" compact /> includes zero;
+            <EvidenceBadge state="positive" compact /> is entirely above zero; and
+            <EvidenceBadge state="negative" compact /> is entirely below zero.
           </li>
         </ul>
 
@@ -255,7 +256,13 @@
             {copied ? "Copied" : "Copy"}
           </button>
           <span class="visually-hidden" aria-live="polite">{copied ? "Configuration copied." : ""}</span>
-          <pre class="code-block">{mcpConfig}</pre>
+          <!-- Keyboard focus lets non-pointer users scroll the configuration. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <pre
+            class="code-block"
+            role="region"
+            tabindex="0"
+            aria-label="Portfolio Arena MCP server configuration">{mcpConfig}</pre>
         </div>
         <p class="muted">
           Every MCP request requires a valid key. Revoke keys at any time from the same tab.
@@ -305,6 +312,7 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 1px;
+    margin-bottom: 20px;
     border: 1px solid var(--border-subtle);
     background: var(--border-subtle);
   }
@@ -341,35 +349,6 @@
   code {
     font-family: var(--font-mono);
     font-size: 0.9em;
-  }
-
-  .evidence {
-    display: inline-flex;
-    min-height: 20px;
-    align-items: center;
-    padding: 2px 5px;
-    border: 1px solid var(--border-strong);
-    font-size: 8px;
-    font-weight: 750;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .evidence.positive {
-    color: var(--pos);
-  }
-
-  .evidence.negative {
-    color: var(--neg);
-  }
-
-  .evidence.inconclusive {
-    color: var(--warn);
-  }
-
-  .evidence.pending {
-    color: var(--text-tertiary);
-    border-style: dashed;
   }
 
   .code-wrap {

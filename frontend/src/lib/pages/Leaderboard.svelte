@@ -378,7 +378,7 @@
   {#if error}
     <div class="error-box load-error" role="alert">
       <span>{error}</span>
-      <button class="retry-button" type="button" onclick={loadArena}>Retry</button>
+      <button class="btn small" type="button" onclick={loadArena}>Retry</button>
     </div>
   {/if}
 
@@ -469,7 +469,7 @@
             <span>Select one more portfolio to compare.</span>
           {:else if selected.length >= 2}
             <span>Comparing {selected.length} portfolios.</span>
-            <button class="clear-button" type="button" onclick={clearComparison}>Clear</button>
+            <button class="btn small" type="button" onclick={clearComparison}>Clear</button>
           {:else}
             <span>Select portfolios to compare their SPY-relative paths.</span>
           {/if}
@@ -490,14 +490,14 @@
         {#if compareLoading && compareData}<span role="status">Updating…</span>{/if}
       </header>
       {#if compareLoading && !compareData}
-        <div class="loading-state compact" aria-live="polite">
-          <span class="loading-mark" aria-hidden="true"></span>
+        <div class="loading-block compact" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
           Loading comparison…
         </div>
       {:else if comparisonError}
         <div class="error-box" role="alert">
           <span>{comparisonError}</span>
-          <button class="retry-button" type="button" onclick={loadComparison}>Retry</button>
+          <button class="btn small" type="button" onclick={loadComparison}>Retry</button>
         </div>
       {:else if compareData}
         <LineChart series={compareSeries} ariaLabel="Portfolio comparison chart" height={300} />
@@ -508,8 +508,8 @@
   {/if}
 
   {#if loading && !currentData}
-    <div class="loading-state" aria-live="polite" aria-busy="true">
-      <span class="loading-mark" aria-hidden="true"></span>
+    <div class="loading-block" aria-live="polite" aria-busy="true">
+      <span class="spinner" aria-hidden="true"></span>
       Building {direction}
       {track} rankings…
     </div>
@@ -719,17 +719,6 @@
     justify-content: space-between;
     color: var(--text-tertiary);
     font-size: 11px;
-  }
-
-  .clear-button,
-  .retry-button {
-    min-height: 30px;
-    padding: 4px 8px;
-    border: 1px solid var(--border-strong);
-    color: var(--text-primary);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
   }
 
   .comparison-panel {

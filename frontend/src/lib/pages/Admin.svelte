@@ -1098,7 +1098,7 @@
     </section>
   </div>
 {:else}
-  <div class="admin-head">
+  <div class="page-head">
     <div>
       <h1>Administration</h1>
       <p class="muted">Configure portfolios, agents, automation, and protected access.</p>
@@ -1108,7 +1108,7 @@
   <MarketDataWarning status={displayedMarketDataStatus} asOf={displayedMarketDataAsOf} />
 
   {#if notice}
-    <div class="notice" role="status">{notice}</div>
+    <div class="notice-box" role="status">{notice}</div>
   {/if}
 
   <Tabs.Root bind:value={getTab, setTab} class="admin-tabs" loop>
@@ -1159,14 +1159,21 @@
             {/if}
 
             {#if managedDetail}
-              <div class="table-scroll history">
-                <table>
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div
+                class="table-scroll history"
+                role="region"
+                aria-label={`Allocation history for ${managedDetail.name}`}
+                tabindex="0"
+              >
+                <table class="data-table allocation-history-table">
+                  <caption class="visually-hidden">Allocation history for {managedDetail.name}</caption>
                   <thead>
                     <tr>
-                      <th>Effective</th>
-                      <th>Status</th>
-                      <th class="right">Positions</th>
-                      <th></th>
+                      <th scope="col">Effective</th>
+                      <th scope="col">Status</th>
+                      <th scope="col" class="right">Positions</th>
+                      <th scope="col"><span class="visually-hidden">Actions</span></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1199,7 +1206,7 @@
                         </td>
                       </tr>
                     {:else}
-                      <tr><td colspan="4" class="muted">No allocations yet.</td></tr>
+                      <tr><td colspan="4" class="table-empty">No allocations yet.</td></tr>
                     {/each}
                   </tbody>
                 </table>
@@ -1212,13 +1219,25 @@
                 </button>
               </div>
               {#if managedDetail.holdings.length}
-                <div class="table-scroll history">
-                  <table>
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <div
+                  class="table-scroll history"
+                  role="region"
+                  aria-label={`Current holdings for ${managedDetail.name}`}
+                  tabindex="0"
+                >
+                  <table class="data-table holdings-table">
+                    <caption class="visually-hidden">Current holdings for {managedDetail.name}</caption>
                     <thead>
                       <tr>
-                        <th>Symbol</th><th class="right">Entry</th><th class="right">Now</th>
-                        <th class="right">Position return</th><th class="right">Weight</th>
-                        <th class="right">Target</th><th>Note</th>
+                        <th scope="col">Symbol</th><th scope="col" class="right">Entry</th><th
+                          scope="col"
+                          class="right">Now</th
+                        >
+                        <th scope="col" class="right">Position return</th><th scope="col" class="right"
+                          >Weight</th
+                        >
+                        <th scope="col" class="right">Target</th><th scope="col">Note</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1292,15 +1311,22 @@
                 {/key}
               {/if}
             {:else if rebuiltDetail}
-              <div class="table-scroll history">
-                <table>
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div
+                class="table-scroll history"
+                role="region"
+                aria-label={`Daily signal history for ${rebuiltDetail.name}`}
+                tabindex="0"
+              >
+                <table class="data-table signal-history-table">
+                  <caption class="visually-hidden">Daily signal history for {rebuiltDetail.name}</caption>
                   <thead>
                     <tr>
-                      <th>Effective</th>
-                      <th>Provenance</th>
-                      <th>Status</th>
-                      <th class="right">Positions</th>
-                      <th></th>
+                      <th scope="col">Effective</th>
+                      <th scope="col">Provenance</th>
+                      <th scope="col">Status</th>
+                      <th scope="col" class="right">Positions</th>
+                      <th scope="col"><span class="visually-hidden">Actions</span></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1330,7 +1356,7 @@
                         </td>
                       </tr>
                     {:else}
-                      <tr><td colspan="5" class="muted">No daily signals yet.</td></tr>
+                      <tr><td colspan="5" class="table-empty">No daily signals yet.</td></tr>
                     {/each}
                   </tbody>
                 </table>
@@ -1566,7 +1592,7 @@
               </div>
             {/if}
           {:else}
-            <div class="empty-state"><p>No portfolios yet.</p></div>
+            <div class="empty-state compact"><p>No portfolios yet.</p></div>
           {/each}
         </section>
       {/if}
@@ -1742,7 +1768,7 @@
               </div>
             {/if}
           {:else}
-            <div class="empty-state"><p>No models yet — create one above.</p></div>
+            <div class="empty-state compact"><p>No models yet — create one above.</p></div>
           {/each}
         </section>
       {/if}
@@ -1860,7 +1886,7 @@
               </div>
             {/if}
           {:else}
-            <div class="empty-state"><p>No agents yet — create one above.</p></div>
+            <div class="empty-state compact"><p>No agents yet — create one above.</p></div>
           {/each}
         </section>
       {/if}
@@ -2124,21 +2150,27 @@
                   {#if promptHistoryError}
                     <div class="error-box" role="alert">{promptHistoryError}</div>
                   {:else if promptHistoryLoading}
-                    <div class="loading-block" aria-live="polite">
+                    <div class="loading-block compact" aria-live="polite">
                       <span class="spinner" aria-hidden="true"></span>
                       Loading version history…
                     </div>
                   {:else}
-                    <div class="table-scroll">
-                      <table class="version-table">
-                        <caption>Immutable versions for {prompt.name}</caption>
+                    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                    <div
+                      class="table-scroll"
+                      role="region"
+                      aria-label={`Version history table for ${prompt.name}`}
+                      tabindex="0"
+                    >
+                      <table class="data-table version-table">
+                        <caption class="visually-hidden">Immutable versions for {prompt.name}</caption>
                         <thead>
                           <tr>
-                            <th>Version</th>
-                            <th>Snapshot</th>
-                            <th>Created</th>
-                            <th>Origin</th>
-                            <th></th>
+                            <th scope="col">Version</th>
+                            <th scope="col">Snapshot</th>
+                            <th scope="col">Created</th>
+                            <th scope="col">Origin</th>
+                            <th scope="col"><span class="visually-hidden">Actions</span></th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2194,7 +2226,7 @@
                               </td>
                             </tr>
                           {:else}
-                            <tr><td colspan="5" class="muted">No versions recorded.</td></tr>
+                            <tr><td colspan="5" class="table-empty">No versions recorded.</td></tr>
                           {/each}
                         </tbody>
                       </table>
@@ -2204,7 +2236,7 @@
               {/if}
             {/if}
           {:else}
-            <div class="empty-state">
+            <div class="empty-state compact">
               <p>
                 No {promptStatusFilter === "all" ? "" : `${promptStatusFilter} `}prompts match this filter.
               </p>
@@ -2245,16 +2277,18 @@
           {/if}
 
           <h2 class="spaced">Keys</h2>
-          <div class="table-scroll">
-            <table>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="table-scroll" role="region" aria-label="API keys" tabindex="0">
+            <table class="data-table keys-table">
+              <caption class="visually-hidden">API keys</caption>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Prefix</th>
-                  <th>Created</th>
-                  <th>Last used</th>
-                  <th>Status</th>
-                  <th></th>
+                  <th scope="col">Name</th>
+                  <th scope="col">Prefix</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Last used</th>
+                  <th scope="col">Status</th>
+                  <th scope="col"><span class="visually-hidden">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -2278,7 +2312,7 @@
                     </td>
                   </tr>
                 {:else}
-                  <tr><td colspan="6" class="muted">No API keys yet — create one above.</td></tr>
+                  <tr><td colspan="6" class="table-empty">No API keys yet — create one above.</td></tr>
                 {/each}
               </tbody>
             </table>
@@ -2365,12 +2399,6 @@
     gap: 14px;
   }
 
-  h1 {
-    margin: 0;
-    font-size: clamp(28px, 4vw, 42px);
-    letter-spacing: -0.045em;
-  }
-
   h2 {
     display: flex;
     align-items: center;
@@ -2409,29 +2437,6 @@
     margin: 0;
   }
 
-  .admin-head {
-    display: flex;
-    align-items: end;
-    justify-content: space-between;
-    gap: 24px;
-    padding: 6px 0 24px;
-    margin-bottom: 18px;
-    border-bottom: 1px solid var(--border-strong);
-  }
-
-  .admin-head p {
-    max-width: 640px;
-    margin-top: 8px;
-  }
-
-  .notice {
-    padding: 10px 12px;
-    margin-bottom: 14px;
-    border: 1px solid var(--pos);
-    color: var(--pos);
-    background: color-mix(in srgb, var(--pos) 8%, transparent);
-  }
-
   .admin-tabs {
     min-width: 0;
   }
@@ -2442,6 +2447,19 @@
 
   .history {
     margin-bottom: 24px;
+  }
+
+  .allocation-history-table,
+  .keys-table {
+    min-width: 720px;
+  }
+
+  .signal-history-table {
+    min-width: 820px;
+  }
+
+  .holdings-table {
+    min-width: 940px;
   }
 
   .actions {
@@ -2647,12 +2665,6 @@
   @media (max-width: 800px) {
     .grid-2 {
       grid-template-columns: 1fr;
-    }
-
-    .admin-head {
-      align-items: start;
-      flex-direction: column;
-      gap: 14px;
     }
 
     .prompt-list-head,

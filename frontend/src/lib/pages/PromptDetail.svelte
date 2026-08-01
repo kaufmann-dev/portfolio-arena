@@ -115,24 +115,6 @@
 
   .detail-head {
     margin-bottom: 28px;
-    padding-bottom: 22px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .crumbs {
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-tertiary);
-    font-size: 12px;
-  }
-
-  h1 {
-    margin: 0 0 8px;
-    font-size: clamp(28px, 8vw, 44px);
-    line-height: 1.05;
-    letter-spacing: -0.04em;
   }
 
   h2 {
