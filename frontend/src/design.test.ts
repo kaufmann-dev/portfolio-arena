@@ -69,4 +69,10 @@ describe("frontend geometry", () => {
     expect(automationPanel).toContain('colspan="8"');
     expect(automationPanel).not.toMatch(/max-width\s*:\s*420px\s*;/);
   });
+
+  it("keeps single-line truncation wrappers inside evaluator table cells", () => {
+    const automationPanel = sourceEnding("AutomationPanel.svelte");
+
+    expect(automationPanel).not.toMatch(/<td[^>]*class="[^"]*\bcell-line\b/);
+  });
 });

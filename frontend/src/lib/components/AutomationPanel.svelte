@@ -615,7 +615,7 @@
               </td>
               <td><span class={`badge ${statusClass(run.status)}`}>{run.status}</span></td>
               <td class="right num">{run.attempt_count}/{run.max_attempts}</td>
-              <td class="cell-line num">{fmtDateTime(run.finished_at)}</td>
+              <td class="num"><span class="cell-line">{fmtDateTime(run.finished_at)}</span></td>
               <td>
                 {#if run.result}
                   <span class="cell-line muted">
