@@ -671,8 +671,6 @@
   let newPromptManagedText = $state("");
   let newPromptRebuiltText = $state("");
   let newPromptNotes = $state("");
-  let newPromptMinWeight = $state(10);
-  let newPromptMaxWeight = $state(25);
   let historyPromptId = $state<number | null>(null);
   let promptVersions = $state.raw<PromptVersion[]>([]);
   let promptHistoryLoading = $state(false);
@@ -699,18 +697,12 @@
         managed_text: promptSupportsTrack(mode, "managed") ? newPromptManagedText : null,
         rebuilt_text: promptSupportsTrack(mode, "rebuilt") ? newPromptRebuiltText : null,
         notes: newPromptNotes.trim(),
-        allocation_policy: {
-          min_position_weight_pct: newPromptMinWeight,
-          max_position_weight_pct: newPromptMaxWeight,
-        },
       });
       newPromptName = "";
       newPromptAvailability = "";
       newPromptManagedText = "";
       newPromptRebuiltText = "";
       newPromptNotes = "";
-      newPromptMinWeight = 10;
-      newPromptMaxWeight = 25;
       await refreshPrompts();
       flash("Prompt created.");
     } catch (e) {
@@ -735,10 +727,6 @@
         managed_text: promptSupportsTrack(editPrompt.mode, "managed") ? editPrompt.managed_text : null,
         rebuilt_text: promptSupportsTrack(editPrompt.mode, "rebuilt") ? editPrompt.rebuilt_text : null,
         notes: editPrompt.notes,
-        allocation_policy: {
-          min_position_weight_pct: editPrompt.allocation_policy.min_position_weight_pct,
-          max_position_weight_pct: editPrompt.allocation_policy.max_position_weight_pct,
-        },
       });
       editPrompt = null;
       await refreshPrompts();
@@ -750,10 +738,7 @@
   }
 
   function beginPromptEdit(prompt: AdminPrompt): void {
-    editPrompt = {
-      ...prompt,
-      allocation_policy: { ...prompt.allocation_policy },
-    };
+    editPrompt = { ...prompt };
   }
 
   function setEditPromptMode(event: Event): void {
@@ -1021,18 +1006,37 @@
 
   // ── Tab 4: settings ──────────────────────────
   let defaultCostBps = $state<string>("");
+  let managedMinPositionWeightPct = $state<string>("");
+  let managedMaxPositionWeightPct = $state<string>("");
+  let rebuiltMinPositionWeightPct = $state<string>("");
+  let rebuiltMaxPositionWeightPct = $state<string>("");
   let managedWrapperPrompt = $state("");
   let rebuiltWrapperPrompt = $state("");
   let settingsError = $state("");
+
+  function positionCountRange(minimum: string, maximum: string): string {
+    const min = Number(minimum);
+    const max = Number(maximum);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return "—";
+    return `${Math.ceil(100 / max)}–${Math.floor(100 / min)}`;
+  }
 
   async function loadSettings() {
     try {
       const payload = await apiJson<AppSettings>("/api/settings");
       defaultCostBps = String(payload.default_cost_bps);
+      managedMinPositionWeightPct = String(payload.managed_allocation_policy.min_position_weight_pct);
+      managedMaxPositionWeightPct = String(payload.managed_allocation_policy.max_position_weight_pct);
+      rebuiltMinPositionWeightPct = String(payload.rebuilt_allocation_policy.min_position_weight_pct);
+      rebuiltMaxPositionWeightPct = String(payload.rebuilt_allocation_policy.max_position_weight_pct);
       managedWrapperPrompt = payload.managed_wrapper_prompt;
       rebuiltWrapperPrompt = payload.rebuilt_wrapper_prompt;
     } catch {
       defaultCostBps = "";
+      managedMinPositionWeightPct = "";
+      managedMaxPositionWeightPct = "";
+      rebuiltMinPositionWeightPct = "";
+      rebuiltMaxPositionWeightPct = "";
       managedWrapperPrompt = "";
       rebuiltWrapperPrompt = "";
     }
@@ -1058,6 +1062,14 @@
     try {
       await putJson("/api/settings", {
         default_cost_bps: parseInt(defaultCostBps, 10) || 0,
+        managed_allocation_policy: {
+          min_position_weight_pct: Number(managedMinPositionWeightPct),
+          max_position_weight_pct: Number(managedMaxPositionWeightPct),
+        },
+        rebuilt_allocation_policy: {
+          min_position_weight_pct: Number(rebuiltMinPositionWeightPct),
+          max_position_weight_pct: Number(rebuiltMaxPositionWeightPct),
+        },
         managed_wrapper_prompt: managedWrapperPrompt,
         rebuilt_wrapper_prompt: rebuiltWrapperPrompt,
       });
@@ -1932,37 +1944,6 @@
               <label for="np-prompt-notes">Notes <span class="muted">(optional)</span></label>
               <input id="np-prompt-notes" type="text" bind:value={newPromptNotes} />
             </div>
-            <div class="grid-2 weight-grid">
-              <div class="field">
-                <label for="np-prompt-min">Minimum position weight (%)</label>
-                <input
-                  id="np-prompt-min"
-                  type="number"
-                  min="0.0001"
-                  max="100"
-                  step="0.0001"
-                  bind:value={newPromptMinWeight}
-                  required
-                />
-              </div>
-              <div class="field">
-                <label for="np-prompt-max">Maximum position weight (%)</label>
-                <input
-                  id="np-prompt-max"
-                  type="number"
-                  min="0.0001"
-                  max="100"
-                  step="0.0001"
-                  bind:value={newPromptMaxWeight}
-                  required
-                />
-              </div>
-            </div>
-            <p class="muted hint">
-              These defaults produce {Math.ceil(100 / newPromptMaxWeight)}–{Math.floor(
-                100 / newPromptMinWeight,
-              )} positions. The server enforces the limits on every allocation and signal.
-            </p>
             <button
               class="btn primary"
               type="submit"
@@ -2031,32 +2012,6 @@
                   <label for="ep-notes-{prompt.id}">Notes</label>
                   <input id="ep-notes-{prompt.id}" type="text" bind:value={editPrompt.notes} />
                 </div>
-                <div class="grid-2 weight-grid">
-                  <div class="field">
-                    <label for="ep-min-{prompt.id}">Minimum position weight (%)</label>
-                    <input
-                      id="ep-min-{prompt.id}"
-                      type="number"
-                      min="0.0001"
-                      max="100"
-                      step="0.0001"
-                      bind:value={editPrompt.allocation_policy.min_position_weight_pct}
-                      required
-                    />
-                  </div>
-                  <div class="field">
-                    <label for="ep-max-{prompt.id}">Maximum position weight (%)</label>
-                    <input
-                      id="ep-max-{prompt.id}"
-                      type="number"
-                      min="0.0001"
-                      max="100"
-                      step="0.0001"
-                      bind:value={editPrompt.allocation_policy.max_position_weight_pct}
-                      required
-                    />
-                  </div>
-                </div>
                 <div class="edit-actions">
                   <button
                     class="btn primary"
@@ -2080,10 +2035,6 @@
                     1
                       ? ""
                       : "s"}
-                  </span>
-                  <span class="muted">
-                    · {prompt.allocation_policy.min_position_weight_pct}%–{prompt.allocation_policy
-                      .max_position_weight_pct}% per position
                   </span>
                   {#if prompt.archived_at}
                     <span class="muted"> · archived {fmtDate(prompt.archived_at)}</span>
@@ -2185,10 +2136,6 @@
                               <td class="version-snapshot">
                                 <strong>{version.name}</strong>
                                 <span><span class="badge">{promptModeLabel(version.mode)}</span></span>
-                                <span class="muted">
-                                  {version.allocation_policy.min_position_weight_pct}%–{version
-                                    .allocation_policy.max_position_weight_pct}% per position
-                                </span>
                                 <div class="prompt-previews">
                                   {#if version.managed_text}
                                     <p class="muted preview">
@@ -2330,6 +2277,68 @@
               <label for="set-cost">Default cost bps for new portfolios</label>
               <input id="set-cost" type="number" min="0" bind:value={defaultCostBps} />
             </div>
+            <h3>Managed allocation policy</h3>
+            <div class="grid-2 weight-grid">
+              <div class="field">
+                <label for="set-managed-min-weight">Minimum position weight (%)</label>
+                <input
+                  id="set-managed-min-weight"
+                  type="number"
+                  min="0.0001"
+                  max="100"
+                  step="0.0001"
+                  bind:value={managedMinPositionWeightPct}
+                  required
+                />
+              </div>
+              <div class="field">
+                <label for="set-managed-max-weight">Maximum position weight (%)</label>
+                <input
+                  id="set-managed-max-weight"
+                  type="number"
+                  min="0.0001"
+                  max="100"
+                  step="0.0001"
+                  bind:value={managedMaxPositionWeightPct}
+                  required
+                />
+              </div>
+            </div>
+            <p class="muted hint">
+              Currently permits {positionCountRange(managedMinPositionWeightPct, managedMaxPositionWeightPct)} positions
+              in every managed portfolio.
+            </p>
+            <h3>Rebuilt allocation policy</h3>
+            <div class="grid-2 weight-grid">
+              <div class="field">
+                <label for="set-rebuilt-min-weight">Minimum position weight (%)</label>
+                <input
+                  id="set-rebuilt-min-weight"
+                  type="number"
+                  min="0.0001"
+                  max="100"
+                  step="0.0001"
+                  bind:value={rebuiltMinPositionWeightPct}
+                  required
+                />
+              </div>
+              <div class="field">
+                <label for="set-rebuilt-max-weight">Maximum position weight (%)</label>
+                <input
+                  id="set-rebuilt-max-weight"
+                  type="number"
+                  min="0.0001"
+                  max="100"
+                  step="0.0001"
+                  bind:value={rebuiltMaxPositionWeightPct}
+                  required
+                />
+              </div>
+            </div>
+            <p class="muted hint">
+              Currently permits {positionCountRange(rebuiltMinPositionWeightPct, rebuiltMaxPositionWeightPct)} positions
+              in every rebuilt signal.
+            </p>
             <div class="field">
               <label for="set-managed-wrapper">Managed wrapper prompt</label>
               <textarea id="set-managed-wrapper" bind:value={managedWrapperPrompt} rows="18" required

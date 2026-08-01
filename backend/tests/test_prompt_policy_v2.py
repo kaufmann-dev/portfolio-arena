@@ -15,8 +15,6 @@ class _ModePrompt:
     mode = "both"
     managed_text = "Use the managed-only strategy evidence."
     rebuilt_text = "Use the rebuilt-only strategy evidence."
-    min_position_weight_pct = 10
-    max_position_weight_pct = 25
 
     def text_for_mode(self, mode: str) -> str:
         return self.managed_text if mode == "managed" else self.rebuilt_text
@@ -33,9 +31,15 @@ def _portfolio(prompt_mode: str, direction: str = "long"):
 
 def test_managed_execution_instructions_remain_allocation_specific():
     portfolio = _portfolio("managed")
+    policy = {
+        "min_position_weight_pct": 10,
+        "max_position_weight_pct": 25,
+        "derived_min_positions": 4,
+        "derived_max_positions": 10,
+    }
 
-    manual = manual_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT)
-    automated = automated_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT)
+    manual = manual_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT, policy)
+    automated = automated_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT, policy)
 
     assert "call `create_allocation` exactly once" in manual
     assert "create_signal" not in manual
@@ -49,9 +53,15 @@ def test_managed_execution_instructions_remain_allocation_specific():
 
 def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
     portfolio = _portfolio("rebuilt")
+    policy = {
+        "min_position_weight_pct": 10,
+        "max_position_weight_pct": 100,
+        "derived_min_positions": 1,
+        "derived_max_positions": 10,
+    }
 
-    manual = manual_execution_prompt(portfolio, DEFAULT_REBUILT_WRAPPER_PROMPT)
-    automated = automated_execution_prompt(portfolio, DEFAULT_REBUILT_WRAPPER_PROMPT)
+    manual = manual_execution_prompt(portfolio, DEFAULT_REBUILT_WRAPPER_PROMPT, policy)
+    automated = automated_execution_prompt(portfolio, DEFAULT_REBUILT_WRAPPER_PROMPT, policy)
 
     assert "call `create_signal` exactly once" in manual
     assert "previous signals" in manual
@@ -61,12 +71,19 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
     assert portfolio.prompt.managed_text not in manual
     assert portfolio.prompt.rebuilt_text in automated
     assert portfolio.prompt.managed_text not in automated
+    assert "A single security may receive 100%" in automated
 
 
 def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_polarity():
     portfolio = _portfolio("managed", "short")
+    policy = {
+        "min_position_weight_pct": 10,
+        "max_position_weight_pct": 25,
+        "derived_min_positions": 4,
+        "derived_max_positions": 10,
+    }
 
-    prompt = manual_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT)
+    prompt = manual_execution_prompt(portfolio, DEFAULT_MANAGED_WRAPPER_PROMPT, policy)
 
     assert "prices are expected to underperform SPY" in prompt
     assert "short book can outperform the Short SPY reference" in prompt

@@ -87,6 +87,7 @@ def get_portfolio(slug_or_id: str) -> dict:
     mode, and next effective date. Accepts a slug or a numeric id."""
     with _session() as session:
         portfolio = _resolve_portfolio(session, slug_or_id)
+        settings = admin_ops.get_app_settings(session)
         if portfolio.prompt_mode == "rebuilt":
             now = datetime.now(UTC)
             return {
@@ -97,7 +98,11 @@ def get_portfolio(slug_or_id: str) -> dict:
                     "slug": portfolio.slug,
                     "name": portfolio.name,
                     "agent": agent_out(portfolio.agent),
-                    "prompt": _portfolio_prompt_out(portfolio.prompt, portfolio.prompt_mode),
+                    "prompt": _portfolio_prompt_out(
+                        portfolio.prompt,
+                        portfolio.prompt_mode,
+                        settings,
+                    ),
                     "prompt_mode": "rebuilt",
                     "direction": portfolio.direction,
                     "status": portfolio.status,
@@ -118,7 +123,7 @@ def get_portfolio(slug_or_id: str) -> dict:
         prompt_id = prompt_payload.get("id") if prompt_payload else None
         prompt = session.get(Prompt, prompt_id) if prompt_id is not None else None
         if prompt is not None:
-            payload["prompt"] = _portfolio_prompt_out(prompt, portfolio.prompt_mode)
+            payload["prompt"] = _portfolio_prompt_out(prompt, portfolio.prompt_mode, settings)
         now = datetime.now(UTC)
         payload["next_entry"] = {
             "entered_at": now.isoformat(),
@@ -137,6 +142,9 @@ def get_arena_overview(direction: str) -> dict:
     all-long or all-short direction."""
     selected_direction = _direction(direction)
     with _session() as session:
+        settings = admin_ops.get_app_settings(session)
+        managed_policy = settings["managed_allocation_policy"]
+        rebuilt_policy = settings["rebuilt_allocation_policy"]
         portfolios = load_portfolios(session)
         selected = [portfolio for portfolio in portfolios if portfolio.direction == selected_direction]
         valuations = compute_valuations(session, selected)
@@ -147,7 +155,7 @@ def get_arena_overview(direction: str) -> dict:
             valuation = valuations.by_portfolio_id.get(portfolio.id)
             if valuation is None:
                 continue
-            summary = serialize_summary(valuation, valuations)
+            summary = serialize_summary(valuation, valuations, managed_policy)
             summary.pop("sparkline", None)
             managed_rows.append(summary)
         rank_rows(managed_rows)
@@ -160,7 +168,7 @@ def get_arena_overview(direction: str) -> dict:
             cost_basis="net",
         )
         rebuilt_rows = [
-            serialize_rebuilt_summary(analysis, rebuilt, view="common")
+            serialize_rebuilt_summary(analysis, rebuilt, rebuilt_policy, view="common")
             for analysis in rebuilt.by_portfolio_id.values()
             if analysis.portfolio.direction == selected_direction
         ]
@@ -246,6 +254,7 @@ def get_rebuilt_analysis(
         raise ValueError("horizon is valid only for signal view")
 
     with _session() as session:
+        allocation_policy = admin_ops.get_app_settings(session)["rebuilt_allocation_policy"]
         portfolios = load_portfolios(session)
         selected = [portfolio for portfolio in portfolios if portfolio.direction == selected_direction]
         arena = compute_rebuilt_arena(
@@ -260,6 +269,7 @@ def get_rebuilt_analysis(
             serialize_rebuilt_summary(
                 analysis,
                 arena,
+                allocation_policy,
                 view=view,
                 horizon=horizon,
             )
@@ -305,11 +315,13 @@ def _portfolio_counts(session: Session, column) -> dict[int, int]:
     return {key: count for key, count in rows}
 
 
-def _portfolio_prompt_out(prompt: Prompt, prompt_mode: str) -> dict:
+def _portfolio_prompt_out(prompt: Prompt, prompt_mode: str, settings: dict) -> dict:
     """Expose only the strategy text applicable to one portfolio context."""
-    payload = admin_ops.prompt_out(prompt)
+    payload = admin_ops.prompt_out(prompt, settings)
     payload.pop("managed_text", None)
     payload.pop("rebuilt_text", None)
+    policies = payload.pop("allocation_policies")
+    payload["allocation_policy"] = policies[prompt_mode]
     payload["text"] = prompt.text_for_mode(prompt_mode)
     return payload
 
@@ -384,7 +396,7 @@ def get_prompt(slug_or_id: str) -> dict:
             ).first()
         if prompt is None:
             raise ValueError(f"Prompt '{slug_or_id}' not found")
-        return admin_ops.prompt_out(prompt)
+        return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
 
 
 @mcp.tool()
@@ -520,12 +532,11 @@ def delete_agent(agent_id: int) -> dict:
 def create_prompt(
     name: str,
     mode: str,
-    allocation_policy: AllocationPolicyIn,
     managed_text: str | None = None,
     rebuilt_text: str | None = None,
     notes: str = "",
 ) -> dict:
-    """Create mode-specific strategy text with one position-sizing policy."""
+    """Create mode-specific strategy text using the arena's mode-level sizing policy."""
     with _session() as session:
         created = _guard(
             admin_ops.create_prompt,
@@ -535,12 +546,11 @@ def create_prompt(
             managed_text=managed_text,
             rebuilt_text=rebuilt_text,
             notes=notes,
-            allocation_policy=allocation_policy.model_dump(),
         )
         prompt = session.get(Prompt, created["id"])
         if prompt is None:
             raise ValueError("Prompt creation did not return a prompt")
-        return admin_ops.prompt_out(prompt)
+        return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
 
 
 @mcp.tool()
@@ -551,9 +561,8 @@ def update_prompt(
     managed_text: str | None = None,
     rebuilt_text: str | None = None,
     notes: str | None = None,
-    allocation_policy: AllocationPolicyIn | None = None,
 ) -> dict:
-    """Edit mode-specific strategy text, notes, or its position-sizing policy."""
+    """Edit mode-specific strategy text or notes."""
     with _session() as session:
         updated = _guard(
             admin_ops.update_prompt,
@@ -564,12 +573,11 @@ def update_prompt(
             managed_text=managed_text,
             rebuilt_text=rebuilt_text,
             notes=notes,
-            allocation_policy=allocation_policy.model_dump() if allocation_policy else None,
         )
         prompt = session.get(Prompt, updated["id"])
         if prompt is None or prompt.status != "active":
             raise ValueError("Prompt not found")
-        return admin_ops.prompt_out(prompt)
+        return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
 
 
 @mcp.tool()
@@ -836,15 +844,19 @@ def get_settings() -> dict:
 @mcp.tool()
 def update_settings(
     default_cost_bps: int,
+    managed_allocation_policy: AllocationPolicyIn,
+    rebuilt_allocation_policy: AllocationPolicyIn,
     managed_wrapper_prompt: str,
     rebuilt_wrapper_prompt: str,
 ) -> dict:
-    """Atomically update the default cost and both wrapper prompt templates."""
+    """Atomically update costs, mode-level sizing, and both wrapper templates."""
     with _session() as session:
         return _guard(
             admin_ops.update_app_settings,
             session,
             default_cost_bps=default_cost_bps,
+            managed_allocation_policy=managed_allocation_policy.model_dump(),
+            rebuilt_allocation_policy=rebuilt_allocation_policy.model_dump(),
             managed_wrapper_prompt=managed_wrapper_prompt,
             rebuilt_wrapper_prompt=rebuilt_wrapper_prompt,
         )

@@ -316,6 +316,13 @@ def mcp_headers(api_key) -> dict:
 
 @pytest.fixture
 def sample_prompt(client, admin_headers) -> dict:
+    settings = client.get("/api/settings", headers=admin_headers).json()
+    settings["managed_allocation_policy"] = {
+        "min_position_weight_pct": 10,
+        "max_position_weight_pct": 100,
+    }
+    updated = client.put("/api/settings", json=settings, headers=admin_headers)
+    assert updated.status_code == 200, updated.text
     response = client.post(
         "/api/admin/prompts",
         json={
@@ -323,10 +330,6 @@ def sample_prompt(client, admin_headers) -> dict:
             "mode": "both",
             "managed_text": "Manage a portfolio to beat SPY.",
             "rebuilt_text": "Select a fresh portfolio to beat SPY.",
-            "allocation_policy": {
-                "min_position_weight_pct": 1,
-                "max_position_weight_pct": 100,
-            },
         },
         headers=admin_headers,
     )

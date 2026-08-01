@@ -15,7 +15,7 @@ from .arena import (
     downsample,
 )
 from .model_catalog import agent_out
-from .prompt_policy import allocation_policy_out, manual_execution_prompt
+from .prompt_policy import manual_execution_prompt
 from .rebuilt import PolicyResult, selected_objective_score
 from .trading_calendar import is_locked
 from .valuation import AppliedAllocation, Direction, rebase_series
@@ -27,14 +27,14 @@ def agent_ref(portfolio: Portfolio) -> dict:
     return result
 
 
-def prompt_ref(portfolio: Portfolio) -> dict:
+def prompt_ref(portfolio: Portfolio, allocation_policy: dict) -> dict:
     return {
         "id": portfolio.prompt.id,
         "slug": portfolio.prompt.slug,
         "name": portfolio.prompt.name,
         "mode": portfolio.prompt.mode,
         "configurable": True,
-        "allocation_policy": allocation_policy_out(portfolio.prompt),
+        "allocation_policy": allocation_policy,
     }
 
 
@@ -108,7 +108,11 @@ def _flags(valuation: PortfolioValuation) -> dict:
     }
 
 
-def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations) -> dict:
+def serialize_summary(
+    valuation: PortfolioValuation,
+    valuations: ArenaValuations,
+    allocation_policy: dict,
+) -> dict:
     """Managed-track summary retained for admin callers and public ranking."""
     portfolio = valuation.portfolio
     age = age_days(valuation, valuations.current_date)
@@ -118,7 +122,7 @@ def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations
         "slug": portfolio.slug,
         "name": portfolio.name,
         "agent": agent_ref(portfolio),
-        "prompt": prompt_ref(portfolio),
+        "prompt": prompt_ref(portfolio, allocation_policy),
         "prompt_mode": portfolio.prompt_mode,
         "direction": portfolio.direction,
         "status": portfolio.status,
@@ -140,6 +144,7 @@ def serialize_summary(valuation: PortfolioValuation, valuations: ArenaValuations
 def serialize_detail(
     valuation: PortfolioValuation,
     valuations: ArenaValuations,
+    allocation_policy: dict,
     admin: bool = False,
     wrapper_prompt: str | None = None,
 ) -> dict:
@@ -160,8 +165,12 @@ def serialize_detail(
         else []
     )
     return {
-        **serialize_summary(valuation, valuations),
-        "execution_prompt": manual_execution_prompt(portfolio, wrapper_prompt or ""),
+        **serialize_summary(valuation, valuations, allocation_policy),
+        "execution_prompt": manual_execution_prompt(
+            portfolio,
+            wrapper_prompt or "",
+            allocation_policy,
+        ),
         "series": series,
         "spy_series": spy_overlay,
         "holdings": [
@@ -313,6 +322,7 @@ def _aggregate_policy_payload(policy: PolicyResult | None, *, provisional: bool)
 def serialize_rebuilt_summary(
     analysis: RebuiltPortfolioAnalysis,
     arena: RebuiltArena,
+    allocation_policy: dict,
     *,
     view: str,
     horizon: int | None = None,
@@ -384,7 +394,7 @@ def serialize_rebuilt_summary(
         "slug": portfolio.slug,
         "name": portfolio.name,
         "agent": agent_ref(portfolio),
-        "prompt": prompt_ref(portfolio),
+        "prompt": prompt_ref(portfolio, allocation_policy),
         "prompt_mode": "rebuilt",
         "direction": portfolio.direction,
         "status": portfolio.status,
@@ -410,13 +420,20 @@ def serialize_rebuilt_summary(
 def serialize_rebuilt_detail(
     analysis: RebuiltPortfolioAnalysis,
     arena: RebuiltArena,
+    allocation_policy: dict,
     *,
     view: str,
     horizon: int | None,
     admin: bool = False,
     wrapper_prompt: str = "",
 ) -> dict:
-    summary = serialize_rebuilt_summary(analysis, arena, view=view, horizon=horizon)
+    summary = serialize_rebuilt_summary(
+        analysis,
+        arena,
+        allocation_policy,
+        view=view,
+        horizon=horizon,
+    )
     selected = summary["selected_policy"]
     policy = analysis.policies.get((selected["horizon"], selected["exposure_pct"])) if selected else None
     aggregate_policy = policy
@@ -434,7 +451,11 @@ def serialize_rebuilt_detail(
         spy_series = policy.spy_series if policy else []
     return {
         **summary,
-        "execution_prompt": manual_execution_prompt(analysis.portfolio, wrapper_prompt),
+        "execution_prompt": manual_execution_prompt(
+            analysis.portfolio,
+            wrapper_prompt,
+            allocation_policy,
+        ),
         "series": series,
         "spy_series": spy_series,
         "aggregate_policy": _aggregate_policy_payload(

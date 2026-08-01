@@ -24,10 +24,6 @@ def _create_prompt(
             "managed_text": managed_text,
             "rebuilt_text": rebuilt_text,
             "notes": "initial note",
-            "allocation_policy": {
-                "min_position_weight_pct": 10.1,
-                "max_position_weight_pct": 25.5,
-            },
         },
         headers=admin_headers,
     )
@@ -72,8 +68,10 @@ def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
     assert created["rebuilt_text"] == "Choose fresh evidence-backed rebuilt opportunities."
     assert "text" not in created
     assert created["notes"] == "initial note"
-    assert created["allocation_policy"]["min_position_weight_pct"] == 10.1
-    assert created["allocation_policy"]["max_position_weight_pct"] == 25.5
+    assert created["allocation_policies"]["managed"]["min_position_weight_pct"] == 10
+    assert created["allocation_policies"]["managed"]["max_position_weight_pct"] == 25
+    assert created["allocation_policies"]["rebuilt"]["min_position_weight_pct"] == 10
+    assert created["allocation_policies"]["rebuilt"]["max_position_weight_pct"] == 100
 
     with session_factory()() as session:
         prompt = session.get(Prompt, created["id"])
@@ -94,18 +92,42 @@ def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
         )
 
 
+def test_prompt_requests_reject_legacy_per_prompt_allocation_policy(client, admin_headers):
+    create_response = client.post(
+        "/api/admin/prompts",
+        json={
+            "name": "Legacy Policy",
+            "mode": "managed",
+            "managed_text": "Choose managed opportunities.",
+            "allocation_policy": {
+                "min_position_weight_pct": 10,
+                "max_position_weight_pct": 100,
+            },
+        },
+        headers=admin_headers,
+    )
+    assert create_response.status_code == 422, create_response.text
+
+    created = _create_prompt(client, admin_headers)
+    patch_response = client.patch(
+        f"/api/admin/prompts/{created['id']}",
+        json={
+            "allocation_policy": {
+                "min_position_weight_pct": 10,
+                "max_position_weight_pct": 100,
+            }
+        },
+        headers=admin_headers,
+    )
+    assert patch_response.status_code == 422, patch_response.text
+
+
 def test_update_appends_immutable_version_and_noop_does_not(client, admin_headers):
     created = _create_prompt(client, admin_headers)
 
     noop = client.patch(
         f"/api/admin/prompts/{created['id']}",
-        json={
-            "name": "Alpha Strategy",
-            "allocation_policy": {
-                "min_position_weight_pct": 10.1,
-                "max_position_weight_pct": 25.5,
-            },
-        },
+        json={"name": "Alpha Strategy"},
         headers=admin_headers,
     )
     assert noop.status_code == 200, noop.text
@@ -119,10 +141,6 @@ def test_update_appends_immutable_version_and_noop_does_not(client, admin_header
             "name": "Alpha Strategy v2",
             "managed_text": "Choose managed opportunities with a specific catalyst.",
             "notes": "second note",
-            "allocation_policy": {
-                "min_position_weight_pct": 20,
-                "max_position_weight_pct": 40,
-            },
         },
         headers=admin_headers,
     )
@@ -154,7 +172,6 @@ def test_update_appends_immutable_version_and_noop_does_not(client, admin_header
         "managed_text",
         "rebuilt_text",
         "notes",
-        "allocation_policy",
         "created_at",
         "restored_from_version",
     }
@@ -188,10 +205,6 @@ def test_create_rejects_invalid_mode_text_combinations(
             "mode": mode,
             "managed_text": managed_text,
             "rebuilt_text": rebuilt_text,
-            "allocation_policy": {
-                "min_position_weight_pct": 10,
-                "max_position_weight_pct": 25,
-            },
         },
         headers=admin_headers,
     )
@@ -237,10 +250,6 @@ def test_legacy_generic_text_field_is_rejected(client, admin_headers):
             "mode": "managed",
             "managed_text": "Managed strategy.",
             "text": "Legacy generic strategy.",
-            "allocation_policy": {
-                "min_position_weight_pct": 10,
-                "max_position_weight_pct": 25,
-            },
         },
         headers=admin_headers,
     )
@@ -395,7 +404,7 @@ def test_admin_list_has_status_history_and_usage_metadata(
         "managed_text",
         "rebuilt_text",
         "notes",
-        "allocation_policy",
+        "allocation_policies",
     }
     assert row["current_version"] == 1
     assert row["version_count"] == 1

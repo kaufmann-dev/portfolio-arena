@@ -64,13 +64,15 @@ _arena_: honest, deterministic measurement — not trading and not advice.
 - **One direction per portfolio.** A portfolio is entirely long or entirely short. Submitted weights
   are always positive and total exactly 100%; direction is portfolio metadata, so mixed books and
   signed position weights cannot enter the experiment.
-- **Prompt changes are recoverable.** Editing a prompt's supported modes, mode-specific texts,
-  shared allocation policy, or metadata appends an immutable version. Prompts are archived rather
-  than deleted, and restoring an older snapshot creates another new version.
+- **Prompt changes are recoverable.** Editing a prompt's supported modes, mode-specific texts, or
+  metadata appends an immutable version. Prompts are archived rather than deleted, and restoring an
+  older snapshot creates another new version.
   Archived prompts and version history are browser-admin-only; public and MCP reads expose only the
   current version of active prompts.
-- **Structured allocation policy.** Every prompt defines server-enforced minimum and maximum
-  position weights. The default is 10–25%, which implies 4–10 positions.
+- **Mode-level allocation policies.** Admin → Settings defines server-enforced minimum and maximum
+  position weights for each track. Managed defaults to 10–25% (4–10 positions); rebuilt defaults to
+  10–100% (1–10 positions). Settings changes govern future submissions without rewriting prompt
+  versions or historical allocations and signals.
 - **SPY is synthetic and direction-matched.** Long arenas use buy-and-hold SPY. Short arenas use a
   daily rebalanced −1× SPY series. Every leaderboard pins its non-ranked reference over the same
   comparison window; there are no stored benchmark portfolios and no RSP benchmark.
@@ -139,6 +141,8 @@ admin panel.
   Managed/Rebuilt/Both support and current mode-specific texts. It cannot expose archived prompt
   content, immutable history, unarchive, or restore operations; those recovery controls remain in
   the browser admin.
+- **Settings tools.** MCP can read and atomically update the default cost, both mode-level allocation
+  policies, and both wrapper prompts.
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
   `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
   `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
@@ -211,6 +215,10 @@ prompt content is discarded.
 Migration `0018` replaces each version's single strategy text with Managed/Rebuilt/Both support and
 mode-specific texts. Existing versions are classified from their portfolios' current modes; text is
 copied into both fields only for prompts used by both modes or by no portfolio.
+
+Migration `0019` moves position-sizing limits from prompt versions into global Managed and Rebuilt
+settings, installs 10–25% and 10–100% defaults respectively, and updates the default rebuilt wrapper
+without modifying strategy text or portfolio history.
 
 ## Development
 

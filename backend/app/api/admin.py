@@ -157,7 +157,6 @@ def create_prompt(body: PromptCreate, session: Session = Depends(get_session)):
         rebuilt_text=body.rebuilt_text,
         slug=body.slug,
         notes=body.notes,
-        allocation_policy=body.allocation_policy.model_dump(),
     )
 
 
@@ -172,7 +171,6 @@ def patch_prompt(prompt_id: int, body: PromptPatch, session: Session = Depends(g
         managed_text=body.managed_text,
         rebuilt_text=body.rebuilt_text,
         notes=body.notes,
-        allocation_policy=body.allocation_policy.model_dump() if body.allocation_policy else None,
     )
 
 

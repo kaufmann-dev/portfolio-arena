@@ -15,6 +15,11 @@ export interface AllocationPolicy {
   derived_max_positions: number;
 }
 
+export interface ModeAllocationPolicies {
+  managed: AllocationPolicy | null;
+  rebuilt: AllocationPolicy | null;
+}
+
 export interface PromptRef {
   id: number;
   slug: string;
@@ -36,6 +41,8 @@ export type EvidenceState = "pending" | "inconclusive" | "positive" | "negative"
 
 export interface AppSettings {
   default_cost_bps: number;
+  managed_allocation_policy: AllocationPolicy;
+  rebuilt_allocation_policy: AllocationPolicy;
   managed_wrapper_prompt: string;
   rebuilt_wrapper_prompt: string;
 }
@@ -364,7 +371,7 @@ export interface PromptOut {
   managed_text: string | null;
   rebuilt_text: string | null;
   notes: string;
-  allocation_policy: AllocationPolicy;
+  allocation_policies: ModeAllocationPolicies;
   updated_at?: string;
   portfolio_count?: number;
 }
@@ -386,7 +393,6 @@ export interface PromptVersion {
   managed_text: string | null;
   rebuilt_text: string | null;
   notes: string;
-  allocation_policy: AllocationPolicy;
   created_at: string;
   restored_from_version: number | null;
 }
