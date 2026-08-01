@@ -986,6 +986,7 @@ def _meta_portfolio_set_out(meta_set: MetaPortfolioSet) -> dict:
         "id": meta_set.id,
         "slug": meta_set.slug,
         "family_name": meta_set.family_name,
+        "variant_label": meta_set.variant_label,
         "agent_id": meta_set.agent_id,
         "prompt_id": meta_set.prompt_id,
         "created_at": meta_set.created_at.isoformat(),
@@ -1007,10 +1008,20 @@ def _meta_portfolio_set_out(meta_set: MetaPortfolioSet) -> dict:
     }
 
 
+def _automation_agent(session: Session, agent_id: int) -> Agent:
+    agent = session.get(Agent, agent_id)
+    if agent is None:
+        raise AdminOpError(422, "Agent not found")
+    if not supports_automation(agent.harness):
+        raise AdminOpError(422, "The selected agent does not support integrated automation.")
+    return agent
+
+
 def create_meta_portfolio_set(
     session: Session,
     *,
     family_name: str,
+    variant_label: str | None = None,
     agent_id: int,
     prompt_id: int,
 ) -> dict:
@@ -1020,16 +1031,17 @@ def create_meta_portfolio_set(
         raise AdminOpError(422, "Meta portfolio family name is required.")
     if len(clean_family_name) > 180:
         raise AdminOpError(422, "Meta portfolio family name must be at most 180 characters.")
+    clean_variant_label = variant_label.strip() if variant_label is not None else None
+    if variant_label is not None and not clean_variant_label:
+        raise AdminOpError(422, "Meta portfolio variant label cannot be blank.")
+    if clean_variant_label is not None and len(clean_variant_label) > 80:
+        raise AdminOpError(422, "Meta portfolio variant label must be at most 80 characters.")
 
     # Serialize identity checks and creation so two concurrent requests cannot
     # each pass the friendly conflict checks before inserting.
     session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
 
-    agent = session.get(Agent, agent_id)
-    if agent is None:
-        raise AdminOpError(422, "Agent not found")
-    if not supports_automation(agent.harness):
-        raise AdminOpError(422, "The selected agent does not support integrated automation.")
+    agent = _automation_agent(session, agent_id)
 
     prompt = _active_prompt_for_portfolio(session, prompt_id)
     if prompt.context_scope != "arena":
@@ -1040,19 +1052,23 @@ def create_meta_portfolio_set(
             "Meta portfolio sets require a prompt supporting managed and rebuilt, long and short.",
         )
 
-    family_slug = slugify(clean_family_name)
+    identity_name = f"{clean_family_name} {clean_variant_label}" if clean_variant_label else clean_family_name
+    family_slug = slugify(identity_name)
     if session.scalar(select(MetaPortfolioSet.id).where(MetaPortfolioSet.slug == family_slug)):
-        raise AdminOpError(409, "A meta portfolio set with this family name already exists.")
+        raise AdminOpError(409, "A meta portfolio set with this family and variant already exists.")
 
     members = [
         {
-            "name": f"{clean_family_name} {suffix}",
-            "slug": slugify(f"{clean_family_name} {suffix}"),
+            "name": " ".join(value for value in (clean_family_name, suffix, clean_variant_label) if value),
             "prompt_mode": prompt_mode,
             "direction": direction,
         }
         for suffix, prompt_mode, direction in META_PORTFOLIO_CELLS
     ]
+    if any(len(member["name"]) > 200 for member in members):
+        raise AdminOpError(422, "Meta portfolio member names must be at most 200 characters.")
+    for member in members:
+        member["slug"] = slugify(member["name"])
     member_slugs = [member["slug"] for member in members]
     member_names = [member["name"].casefold() for member in members]
     conflicting_portfolio = session.scalar(
@@ -1066,6 +1082,7 @@ def create_meta_portfolio_set(
     meta_set = MetaPortfolioSet(
         slug=family_slug,
         family_name=clean_family_name,
+        variant_label=clean_variant_label,
         agent_id=agent.id,
         prompt_id=prompt.id,
     )
@@ -1088,6 +1105,32 @@ def create_meta_portfolio_set(
         )
         session.add(portfolio)
 
+    session.commit()
+    return _meta_portfolio_set_out(meta_set)
+
+
+def update_meta_portfolio_set(
+    session: Session,
+    meta_set_id: int,
+    *,
+    agent_id: int,
+) -> dict:
+    """Atomically reassign every cell in a synthesis family for future runs."""
+    session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
+    meta_set = session.scalars(
+        select(MetaPortfolioSet)
+        .where(MetaPortfolioSet.id == meta_set_id)
+        .options(
+            selectinload(MetaPortfolioSet.portfolios).selectinload(Portfolio.evaluator_config),
+        )
+        .with_for_update()
+    ).first()
+    if meta_set is None:
+        raise AdminOpError(404, "Meta portfolio set not found")
+    agent = _automation_agent(session, agent_id)
+    meta_set.agent_id = agent.id
+    for portfolio in meta_set.portfolios:
+        portfolio.agent_id = agent.id
     session.commit()
     return _meta_portfolio_set_out(meta_set)
 

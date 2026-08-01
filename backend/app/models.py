@@ -323,6 +323,7 @@ class MetaPortfolioSet(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     family_name: Mapped[str] = mapped_column(Text, nullable=False)
+    variant_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("agents.id", ondelete="CASCADE"),

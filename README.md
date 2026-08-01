@@ -154,10 +154,13 @@ admin panel.
 - **Prompt tools.** MCP can list, read, create, update, and archive active prompts, including their
   immutable Portfolio/Arena scope, Managed/Rebuilt/Both and Long/Short/Both support, and current
   mode-and-direction-specific texts. `create_meta_portfolio_set` atomically creates and enables all
-  four cells of one arena-scoped family. It
-  can archive a prompt after every referencing portfolio is archived. It cannot expose archived
-  prompt content, immutable history, unarchive, or restore operations; those recovery controls remain
-  in the browser admin.
+  four cells of one arena-scoped family, with an optional comparison-variant label appended to member
+  names. `update_meta_portfolio_set` atomically reassigns all four cells to one automation-capable
+  Agent for future runs. Normal portfolios can be reassigned with `update_portfolio`, and
+  `reset_portfolio` clears a portfolio's mode-specific decisions while preserving its identity,
+  evaluator configuration, and evaluator audit. Prompt tools can archive a prompt after every
+  referencing portfolio is archived. MCP cannot expose archived prompt content, immutable history,
+  unarchive, or restore operations; those recovery controls remain in the browser admin.
 - **Settings tools.** MCP can read and atomically update the default cost, both mode-level allocation
   policies, both wrapper prompts, and the Long and Short direction instructions.
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,

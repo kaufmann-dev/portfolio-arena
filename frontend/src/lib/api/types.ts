@@ -586,6 +586,7 @@ export interface MetaPortfolioSetCreated {
   id: number;
   slug: string;
   family_name: string;
+  variant_label: string | null;
   agent_id: number;
   prompt_id: number;
   created_at: string;
