@@ -2526,6 +2526,10 @@
     margin-top: 28px;
   }
 
+  .card form > h3 {
+    margin: 24px 0 12px;
+  }
+
   .capability {
     padding: 14px;
     margin: 14px 0;
