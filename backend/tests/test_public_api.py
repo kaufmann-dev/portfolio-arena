@@ -251,9 +251,11 @@ class TestPortfolioDetail:
         assert sample_prompt["rebuilt_text"] not in execution_prompt
         assert execution_prompt.count("If the returned allocation history is empty") == 1
         assert "construct the portfolio's initial allocation" in execution_prompt
-        assert "do not rebuild it from scratch" in execution_prompt
-        assert "after\ntransaction costs" in execution_prompt
-        assert "prefer retaining the existing allocation" in execution_prompt
+        assert "rather than rebuilding it without reference to its\nhistory" in execution_prompt
+        assert "prospective excess return after transaction\ncosts" in execution_prompt
+        assert "automatic retention advantage" in execution_prompt
+        assert "Do not target either low or high\nturnover" in execution_prompt
+        assert "prefer retaining the existing allocation" not in execution_prompt
         assert "call `create_allocation` exactly once" in execution_prompt
         assert "{{" not in execution_prompt
 
@@ -301,6 +303,7 @@ class TestPortfolioDetail:
         assert reconstruction_strategy in execution_prompt
         assert "construct the complete signal independently from scratch" in execution_prompt
         assert "without regard to previous signals" in execution_prompt
+        assert "Do not use prior portfolio state from any source" in execution_prompt
         assert "continuity is useful" not in execution_prompt
         assert "prefer retaining the existing allocation" not in execution_prompt
         assert "call `create_signal` exactly once" in execution_prompt
