@@ -313,13 +313,12 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 1px;
     margin-bottom: 20px;
-    border: 1px solid var(--border-subtle);
     background: var(--border-subtle);
   }
 
   .track-grid section {
     padding: 16px;
-    background: var(--bg-base);
+    background: var(--bg-raised);
   }
 
   .track-grid span {
@@ -343,7 +342,6 @@
 
   ul.tools li {
     padding-bottom: 10px;
-    border-bottom: 1px solid var(--border-subtle);
   }
 
   code {
@@ -366,8 +364,7 @@
     max-width: 100%;
     padding: 18px;
     overflow-x: auto;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-inset);
+    background: var(--bg-raised);
     font-family: var(--font-mono);
     font-size: 11px;
     line-height: 1.6;

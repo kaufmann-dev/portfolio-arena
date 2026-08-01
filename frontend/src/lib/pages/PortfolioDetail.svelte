@@ -542,7 +542,8 @@
   .policy-context {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    border: 1px solid var(--border-strong);
+    gap: 1px;
+    background: var(--border-subtle);
   }
 
   .policy-context div {
@@ -550,11 +551,7 @@
     display: grid;
     gap: 4px;
     padding: 12px;
-    border-right: 1px solid var(--border-subtle);
-  }
-
-  .policy-context div:last-child {
-    border-right: 0;
+    background: var(--bg-raised);
   }
 
   .policy-context span,
@@ -584,8 +581,7 @@
     align-content: space-between;
     gap: 10px;
     padding: 12px;
-    border: 0;
-    background: var(--bg-surface);
+    background: var(--bg-raised);
   }
 
   .metric-value {
@@ -624,14 +620,6 @@
 
     .policy-context {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .policy-context div:nth-child(2) {
-      border-right: 0;
-    }
-
-    .policy-context div:nth-child(-n + 2) {
-      border-bottom: 1px solid var(--border-subtle);
     }
 
     .metric-grid {

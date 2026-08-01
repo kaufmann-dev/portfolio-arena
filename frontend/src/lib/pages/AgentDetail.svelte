@@ -107,7 +107,6 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 1px;
-    border: 1px solid var(--border-subtle);
     background: var(--border-subtle);
   }
 
@@ -118,7 +117,7 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    background: var(--bg-base);
+    background: var(--bg-raised);
   }
 
   dt {

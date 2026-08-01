@@ -123,24 +123,17 @@
   }
 
   .selected {
-    box-shadow:
-      inset 2px 0 var(--accent),
-      inset -2px 0 var(--accent);
+    border-right: 2px solid var(--accent);
+    border-left: 2px solid var(--accent);
   }
 
   .matrix-table thead .selected {
     color: var(--accent);
-    box-shadow:
-      inset 2px 0 var(--accent),
-      inset -2px 0 var(--accent),
-      inset 0 2px var(--accent);
+    border-top: 2px solid var(--accent);
   }
 
   .matrix-table tbody tr:last-child .selected {
-    box-shadow:
-      inset 2px 0 var(--accent),
-      inset -2px 0 var(--accent),
-      inset 0 -2px var(--accent);
+    border-bottom: 2px solid var(--accent);
   }
 
   .matrix-table .benchmark th,

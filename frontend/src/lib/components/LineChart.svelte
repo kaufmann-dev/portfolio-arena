@@ -292,7 +292,6 @@
     gap: 6px;
     margin-top: 10px;
     padding: 10px 0;
-    border-top: 1px solid var(--border-subtle);
   }
 
   .chart-summary dl div {

@@ -388,7 +388,6 @@
     justify-content: space-between;
     gap: 16px;
     padding-bottom: 14px;
-    border-bottom: 1px solid var(--border-strong);
   }
 
   .positions-head p {
@@ -407,9 +406,9 @@
   .policy-strip {
     display: flex;
     gap: 18px;
-    padding: 10px 0;
+    padding: 10px;
     color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-inset);
     font-size: 12px;
   }
 
