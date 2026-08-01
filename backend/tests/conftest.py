@@ -329,8 +329,10 @@ def sample_prompt(client, admin_headers) -> dict:
             "name": "weekly-manager-v1",
             "mode": "both",
             "direction": "both",
-            "managed_text": "Manage a portfolio to beat SPY.",
-            "rebuilt_text": "Select a fresh portfolio to beat SPY.",
+            "managed_long_text": "Manage a long portfolio to beat SPY.",
+            "managed_short_text": "Manage a short portfolio to beat SPY.",
+            "rebuilt_long_text": "Select a fresh long portfolio to beat SPY.",
+            "rebuilt_short_text": "Select a fresh short portfolio to beat SPY.",
         },
         headers=admin_headers,
     )

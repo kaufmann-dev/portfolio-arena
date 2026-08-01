@@ -37,21 +37,35 @@ def prompt_supports_direction(portfolio_direction: str, version_direction: str) 
 
 def validate_prompt_texts(
     mode: str,
-    managed_text: str | None,
-    rebuilt_text: str | None,
+    direction: str,
+    managed_long_text: str | None,
+    managed_short_text: str | None,
+    rebuilt_long_text: str | None,
+    rebuilt_short_text: str | None,
 ) -> None:
     """Validate the exact text/null shape for one immutable prompt version."""
     if mode not in PROMPT_VERSION_MODES:
         raise ValueError("Prompt mode must be 'managed', 'rebuilt', or 'both'.")
-    for prompt_mode, text in (
-        ("managed", managed_text),
-        ("rebuilt", rebuilt_text),
+    if direction not in PROMPT_VERSION_DIRECTIONS:
+        raise ValueError("Prompt direction must be 'long', 'short', or 'both'.")
+    for prompt_mode, portfolio_direction, text in (
+        ("managed", "long", managed_long_text),
+        ("managed", "short", managed_short_text),
+        ("rebuilt", "long", rebuilt_long_text),
+        ("rebuilt", "short", rebuilt_short_text),
     ):
-        supported = mode == "both" or mode == prompt_mode
+        supported = prompt_supports_mode(prompt_mode, mode) and prompt_supports_direction(
+            portfolio_direction, direction
+        )
+        label = f"{prompt_mode.title()} {portfolio_direction}"
         if supported and (text is None or not text.strip()):
-            raise ValueError(f"{prompt_mode.title()} prompt text is required for mode '{mode}'.")
+            raise ValueError(
+                f"{label} prompt text is required for mode '{mode}' and direction '{direction}'."
+            )
         if not supported and text is not None:
-            raise ValueError(f"{prompt_mode.title()} prompt text must be null for mode '{mode}'.")
+            raise ValueError(
+                f"{label} prompt text must be null for mode '{mode}' and direction '{direction}'."
+            )
 
 
 def validate_direction_instructions(value: str) -> str:
@@ -399,7 +413,7 @@ def render_execution_prompt(
         raise ValueError("Portfolio does not have an execution prompt")
     values = {
         "portfolio_slug": portfolio.slug,
-        "strategy_text": prompt.text_for_mode(portfolio.prompt_mode).strip(),
+        "strategy_text": prompt.text_for(portfolio.prompt_mode, portfolio.direction).strip(),
         "direction_instructions": validate_direction_instructions(direction_instructions).strip(),
         "allocation_policy": allocation_policy_text(allocation_policy),
         "submission_instructions": submission_instructions.strip(),

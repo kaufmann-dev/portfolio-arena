@@ -54,23 +54,43 @@
         </p>
       </header>
 
-      {#if data.prompt.managed_text}
+      {#if data.prompt.managed_long_text}
         <section class="detail-section prompt-card">
-          <h2>Managed strategy</h2>
+          <h2>Managed Long strategy</h2>
           <p class="muted strategy-context">
-            Used when a managed evaluator receives the portfolio's current state and prior decisions.
+            Used for long portfolios when a managed evaluator receives current state and prior decisions.
           </p>
-          <pre>{data.prompt.managed_text}</pre>
+          <pre>{data.prompt.managed_long_text}</pre>
         </section>
       {/if}
 
-      {#if data.prompt.rebuilt_text}
+      {#if data.prompt.managed_short_text}
         <section class="detail-section prompt-card">
-          <h2>Rebuilt strategy</h2>
+          <h2>Managed Short strategy</h2>
           <p class="muted strategy-context">
-            Used when a rebuilt evaluator creates an independent signal without prior portfolio context.
+            Used for short portfolios when a managed evaluator receives current state and prior decisions.
           </p>
-          <pre>{data.prompt.rebuilt_text}</pre>
+          <pre>{data.prompt.managed_short_text}</pre>
+        </section>
+      {/if}
+
+      {#if data.prompt.rebuilt_long_text}
+        <section class="detail-section prompt-card">
+          <h2>Rebuilt Long strategy</h2>
+          <p class="muted strategy-context">
+            Used for long portfolios when a rebuilt evaluator creates an independent signal.
+          </p>
+          <pre>{data.prompt.rebuilt_long_text}</pre>
+        </section>
+      {/if}
+
+      {#if data.prompt.rebuilt_short_text}
+        <section class="detail-section prompt-card">
+          <h2>Rebuilt Short strategy</h2>
+          <p class="muted strategy-context">
+            Used for short portfolios when a rebuilt evaluator creates an independent signal.
+          </p>
+          <pre>{data.prompt.rebuilt_short_text}</pre>
         </section>
       {/if}
 

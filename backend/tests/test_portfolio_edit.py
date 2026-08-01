@@ -17,8 +17,26 @@ def _create_mode_prompt(
             "name": name,
             "mode": mode,
             "direction": direction,
-            "managed_text": "Managed strategy." if mode in {"managed", "both"} else None,
-            "rebuilt_text": "Rebuilt strategy." if mode in {"rebuilt", "both"} else None,
+            "managed_long_text": (
+                "Managed long strategy."
+                if mode in {"managed", "both"} and direction in {"long", "both"}
+                else None
+            ),
+            "managed_short_text": (
+                "Managed short strategy."
+                if mode in {"managed", "both"} and direction in {"short", "both"}
+                else None
+            ),
+            "rebuilt_long_text": (
+                "Rebuilt long strategy."
+                if mode in {"rebuilt", "both"} and direction in {"long", "both"}
+                else None
+            ),
+            "rebuilt_short_text": (
+                "Rebuilt short strategy."
+                if mode in {"rebuilt", "both"} and direction in {"short", "both"}
+                else None
+            ),
         },
         headers=admin_headers,
     )
@@ -399,7 +417,7 @@ class TestEditPortfolio:
                 "name": "weekly-manager-v2",
                 "mode": "managed",
                 "direction": "long",
-                "managed_text": "Be bolder.",
+                "managed_long_text": "Be bolder.",
             },
             headers=admin_headers,
         ).json()
@@ -435,7 +453,7 @@ class TestEditPortfolio:
                 "name": "alternate-manager",
                 "mode": "managed",
                 "direction": "long",
-                "managed_text": "Use a different strategy.",
+                "managed_long_text": "Use a different strategy.",
             },
             headers=admin_headers,
         ).json()

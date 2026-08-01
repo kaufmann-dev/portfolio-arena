@@ -166,7 +166,7 @@ class TestCreation:
                 "name": "Concentrated",
                 "mode": "managed",
                 "direction": "long",
-                "managed_text": "Own a focused portfolio.",
+                "managed_long_text": "Own a focused portfolio.",
             },
             headers=admin_headers,
         ).json()
@@ -206,8 +206,8 @@ class TestCreation:
                 "name": "Mode Policy Test",
                 "mode": "both",
                 "direction": "long",
-                "managed_text": "Build a focused managed portfolio.",
-                "rebuilt_text": "Select the strongest independent signal.",
+                "managed_long_text": "Build a focused managed portfolio.",
+                "rebuilt_long_text": "Select the strongest independent signal.",
             },
             headers=admin_headers,
         )

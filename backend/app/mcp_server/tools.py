@@ -101,6 +101,7 @@ def get_portfolio(slug_or_id: str) -> dict:
                     "prompt": _portfolio_prompt_out(
                         portfolio.prompt,
                         portfolio.prompt_mode,
+                        portfolio.direction,
                         settings,
                     ),
                     "prompt_mode": "rebuilt",
@@ -123,7 +124,9 @@ def get_portfolio(slug_or_id: str) -> dict:
         prompt_id = prompt_payload.get("id") if prompt_payload else None
         prompt = session.get(Prompt, prompt_id) if prompt_id is not None else None
         if prompt is not None:
-            payload["prompt"] = _portfolio_prompt_out(prompt, portfolio.prompt_mode, settings)
+            payload["prompt"] = _portfolio_prompt_out(
+                prompt, portfolio.prompt_mode, portfolio.direction, settings
+            )
         now = datetime.now(UTC)
         payload["next_entry"] = {
             "entered_at": now.isoformat(),
@@ -315,14 +318,24 @@ def _portfolio_counts(session: Session, column) -> dict[int, int]:
     return {key: count for key, count in rows}
 
 
-def _portfolio_prompt_out(prompt: Prompt, prompt_mode: str, settings: dict) -> dict:
+def _portfolio_prompt_out(
+    prompt: Prompt,
+    prompt_mode: str,
+    direction: str,
+    settings: dict,
+) -> dict:
     """Expose only the strategy text applicable to one portfolio context."""
     payload = admin_ops.prompt_out(prompt, settings)
-    payload.pop("managed_text", None)
-    payload.pop("rebuilt_text", None)
+    for field in (
+        "managed_long_text",
+        "managed_short_text",
+        "rebuilt_long_text",
+        "rebuilt_short_text",
+    ):
+        payload.pop(field, None)
     policies = payload.pop("allocation_policies")
     payload["allocation_policy"] = policies[prompt_mode]
-    payload["text"] = prompt.text_for_mode(prompt_mode)
+    payload["text"] = prompt.text_for(prompt_mode, direction)
     return payload
 
 
@@ -534,11 +547,13 @@ def create_prompt(
     name: str,
     mode: str,
     direction: str,
-    managed_text: str | None = None,
-    rebuilt_text: str | None = None,
+    managed_long_text: str | None = None,
+    managed_short_text: str | None = None,
+    rebuilt_long_text: str | None = None,
+    rebuilt_short_text: str | None = None,
     notes: str = "",
 ) -> dict:
-    """Create mode-specific strategy text with long, short, or both direction support."""
+    """Create mode- and direction-specific strategy text."""
     with _session() as session:
         created = _guard(
             admin_ops.create_prompt,
@@ -546,8 +561,10 @@ def create_prompt(
             name=name,
             mode=mode,
             direction=direction,
-            managed_text=managed_text,
-            rebuilt_text=rebuilt_text,
+            managed_long_text=managed_long_text,
+            managed_short_text=managed_short_text,
+            rebuilt_long_text=rebuilt_long_text,
+            rebuilt_short_text=rebuilt_short_text,
             notes=notes,
         )
         prompt = session.get(Prompt, created["id"])
@@ -562,11 +579,13 @@ def update_prompt(
     name: str | None = None,
     mode: str | None = None,
     direction: str | None = None,
-    managed_text: str | None = None,
-    rebuilt_text: str | None = None,
+    managed_long_text: str | None = None,
+    managed_short_text: str | None = None,
+    rebuilt_long_text: str | None = None,
+    rebuilt_short_text: str | None = None,
     notes: str | None = None,
 ) -> dict:
-    """Edit mode-specific strategy text, direction support, or notes."""
+    """Edit mode- and direction-specific strategy text, support, or notes."""
     with _session() as session:
         updated = _guard(
             admin_ops.update_prompt,
@@ -575,8 +594,10 @@ def update_prompt(
             name=name,
             mode=mode,
             direction=direction,
-            managed_text=managed_text,
-            rebuilt_text=rebuilt_text,
+            managed_long_text=managed_long_text,
+            managed_short_text=managed_short_text,
+            rebuilt_long_text=rebuilt_long_text,
+            rebuilt_short_text=rebuilt_short_text,
             notes=notes,
         )
         prompt = session.get(Prompt, updated["id"])
