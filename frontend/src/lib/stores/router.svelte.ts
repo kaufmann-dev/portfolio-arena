@@ -1,5 +1,6 @@
 export type Route =
   | { name: "home"; params: Record<string, never> }
+  | { name: "meta"; params: Record<string, never> }
   | { name: "portfolio"; params: { slug: string } }
   | { name: "prompt"; params: { slug: string } }
   | { name: "agent"; params: { slug: string } }
@@ -14,7 +15,7 @@ function decodePart(value: string): string {
   }
 }
 
-function parsePath(pathname: string): Route {
+export function parsePath(pathname: string): Route {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "p" && parts[1]) {
     return { name: "portfolio", params: { slug: decodePart(parts[1]) } };
@@ -27,6 +28,9 @@ function parsePath(pathname: string): Route {
   }
   if (parts[0] === "admin") {
     return { name: "admin", params: {} };
+  }
+  if (parts[0] === "meta") {
+    return { name: "meta", params: {} };
   }
   if (parts[0] === "about") {
     return { name: "about", params: {} };

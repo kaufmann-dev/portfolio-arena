@@ -6,6 +6,7 @@
     RebuiltAnalysisContext,
     RebuiltArenaPortfolio,
     RebuiltArenaResponse,
+    RebuiltMetaControl,
     RebuiltView,
   } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
@@ -14,7 +15,7 @@
   import EvidenceBadge from "./EvidenceBadge.svelte";
   import SelectField from "./ui/SelectField.svelte";
 
-  type Row = RebuiltArenaResponse["portfolios"][number];
+  type Row = RebuiltArenaResponse["portfolios"][number] | RebuiltMetaControl;
   type SortKey =
     "rank_score" | "mean_daily_alpha" | "information_ratio" | "sharpe" | "hit_rate" | "completion_ratio";
 
@@ -71,6 +72,7 @@
   }
 
   const benchmark = $derived(rows.find((row): row is BenchmarkArenaPortfolio => row.kind === "benchmark"));
+  const control = $derived(rows.find((row): row is RebuiltMetaControl => row.kind === "control"));
   const contestants = $derived(
     [...rows.filter((row): row is RebuiltArenaPortfolio => row.kind === "rebuilt")].sort(compareRows),
   );
@@ -182,7 +184,9 @@
   >
     <table class="data-table">
       <caption>
-        Rebuilt portfolio rankings in {view} view. SPY is a pinned reference; portfolio rows are sorted by
+        Rebuilt portfolio rankings in {view} view. {control
+          ? "SPY and Consensus Control are pinned references"
+          : "SPY is a pinned reference"}; portfolio rows are sorted by
         {currentSortLabel}
         {sortDesc ? " descending" : " ascending"}.
       </caption>
@@ -226,6 +230,39 @@
             {/if}
             <td class="right num">—</td>
             <td class="right num">—</td>
+          </tr>
+        {/if}
+        {#if control}
+          <tr class="benchmark">
+            <td></td>
+            <td class="rank-col"><span class="badge">REF</span></td>
+            <th scope="row">
+              {control.name}
+              <span class="badge">same-cell average · {control.contributor_count} sources</span>
+              {#if control.stale_data}<span class="badge warn">stale data</span>{/if}
+              {#if control.error}<span class="badge neg" title={control.error}>error</span>{/if}
+            </th>
+            <td>—</td>
+            <td>Equal-weight normal signals</td>
+            <td class="right num">{control.selected_policy ? `H${control.selected_policy.horizon}` : "—"}</td>
+            {#if view !== "signal"}
+              <td class="right num">{pctPoints(control.selected_policy?.exposure_pct, 0)}</td>
+            {/if}
+            <td class="right num">—</td>
+            <td class="right num {pctSignClass(control.metrics.mean_daily_alpha, 2)}">
+              {pct(control.metrics.mean_daily_alpha, 2)}
+            </td>
+            {#if view !== "signal"}
+              <td class="right num">{num(control.metrics.information_ratio)}</td>
+              <td class="right num">{num(control.metrics.sharpe)}</td>
+            {/if}
+            <td class="right num">{pct(control.metrics.hit_rate, 0)}</td>
+            <td
+              class="right num"
+              title={`${control.completion.complete_count} complete, ${control.completion.open_count} open`}
+            >
+              {pct(control.completion.completion_ratio, 0)}
+            </td>
           </tr>
         {/if}
         {#each contestants as row (row.id)}
@@ -308,6 +345,17 @@
         <p>
           Zero-alpha benchmark · {benchmark.direction === "short" ? "daily −1× SPY" : "buy and hold SPY"}
         </p>
+      </article>
+    {/if}
+
+    {#if control}
+      <article class="mobile-card benchmark-card">
+        <header>
+          <span class="rank">REF</span><strong>{control.name}</strong><span class="badge"
+            >{control.contributor_count} sources</span
+          >
+        </header>
+        <p>Equal-weight normal signals · unranked consensus reference</p>
       </article>
     {/if}
 

@@ -165,14 +165,17 @@
     {@const rebuiltPortfolio = data.track === "rebuilt" ? (data.portfolio as RebuiltPortfolioDetail) : null}
     {@const rebuiltContext = data.track === "rebuilt" ? data.context : null}
     {@const benchmarkName = portfolio.direction === "short" ? "Short SPY" : "SPY"}
-    {@const arenaHref = `/?direction=${portfolio.direction}`}
+    {@const isMeta = portfolio.prompt.context_scope === "arena"}
+    {@const arenaHref = `${isMeta ? "/meta" : "/"}?direction=${portfolio.direction}`}
     {@const series = chartSeries(portfolio)}
     {@const markers = markersFor(data)}
     <article class="portfolio-detail">
       <header class="detail-head split">
         <div>
           <nav class="crumbs" aria-label="Breadcrumb">
-            <a href={arenaHref} onclick={(event) => link(event, arenaHref)}>Portfolio Arena</a>
+            <a href={arenaHref} onclick={(event) => link(event, arenaHref)}
+              >{isMeta ? "Meta Arena" : "Portfolio Arena"}</a
+            >
             <span aria-hidden="true">/</span>
             <span>{data.track === "rebuilt" ? "Rebuilt" : "Managed"}</span>
           </nav>
@@ -194,6 +197,9 @@
             · {portfolio.direction} · {data.track}
             {#if data.as_of}· as of <span class="num">{data.as_of}</span>{/if}
           </p>
+          {#if portfolio.execution_context_notice}
+            <p class="context-notice">{portfolio.execution_context_notice}</p>
+          {/if}
           {#if portfolio.execution_prompt}
             <div class="prompt-action">
               <button class="btn small" type="button" onclick={() => copyPrompt(portfolio.execution_prompt)}>
@@ -522,6 +528,17 @@
     margin-top: 9px;
     color: var(--text-secondary);
     font-size: 12px;
+  }
+
+  .context-notice {
+    max-width: 780px;
+    margin-top: 10px;
+    padding: 10px;
+    border-left: 2px solid var(--accent);
+    background: var(--accent-bg);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.55;
   }
 
   .prompt-action {

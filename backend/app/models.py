@@ -123,6 +123,7 @@ class Agent(Base):
 
     model: Mapped[ModelDefinition] = relationship(back_populates="agents")
     portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="agent")
+    meta_portfolio_sets: Mapped[list["MetaPortfolioSet"]] = relationship(back_populates="agent")
     evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(back_populates="agent")
 
 
@@ -140,10 +141,15 @@ class Prompt(Base):
             "(status = 'archived' AND archived_at IS NOT NULL)",
             name="prompts_archive_state_check",
         ),
+        CheckConstraint(
+            "context_scope IN ('portfolio', 'arena')",
+            name="prompts_context_scope_check",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    context_scope: Mapped[str] = mapped_column(Text, nullable=False, server_default="portfolio")
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     current_version_id: Mapped[int | None] = mapped_column(
@@ -177,6 +183,7 @@ class Prompt(Base):
         passive_deletes=True,
     )
     portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="prompt")
+    meta_portfolio_sets: Mapped[list["MetaPortfolioSet"]] = relationship(back_populates="prompt")
 
     @property
     def name(self) -> str:
@@ -308,6 +315,37 @@ class PromptVersion(Base):
         return text
 
 
+class MetaPortfolioSet(Base):
+    """One atomic four-cell family of arena-synthesis portfolios."""
+
+    __tablename__ = "meta_portfolio_sets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    family_name: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    prompt_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("prompts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    agent: Mapped[Agent] = relationship(back_populates="meta_portfolio_sets")
+    prompt: Mapped[Prompt] = relationship(back_populates="meta_portfolio_sets")
+    portfolios: Mapped[list["Portfolio"]] = relationship(
+        back_populates="meta_set",
+        passive_deletes=True,
+        order_by="Portfolio.id",
+    )
+
+
 class Portfolio(Base):
     __tablename__ = "portfolios"
     __table_args__ = (
@@ -321,6 +359,12 @@ class Portfolio(Base):
             "direction IN ('long', 'short')",
             name="portfolios_direction_check",
         ),
+        UniqueConstraint(
+            "meta_set_id",
+            "prompt_mode",
+            "direction",
+            name="portfolios_meta_set_cell_key",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -328,6 +372,11 @@ class Portfolio(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
     prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
+    meta_set_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("meta_portfolio_sets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     prompt_mode: Mapped[str] = mapped_column(Text, nullable=False)
     direction: Mapped[str] = mapped_column(Text, nullable=False)
     cost_bps: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -339,6 +388,7 @@ class Portfolio(Base):
 
     agent: Mapped[Agent] = relationship(back_populates="portfolios")
     prompt: Mapped[Prompt] = relationship(back_populates="portfolios")
+    meta_set: Mapped[MetaPortfolioSet | None] = relationship(back_populates="portfolios")
     allocations: Mapped[list["Allocation"]] = relationship(
         back_populates="portfolio",
         cascade="all, delete-orphan",
@@ -470,6 +520,40 @@ class SignalPosition(Base):
     signal: Mapped[Signal] = relationship(back_populates="positions")
 
 
+class MetaBatch(Base):
+    """Frozen normal-arena inputs shared by every meta run for one session."""
+
+    __tablename__ = "meta_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('waiting', 'ready', 'insufficient', 'failed')",
+            name="meta_batches_status_check",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="waiting")
+    source_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    due_source_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    target_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    pending_target_portfolio_ids: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    snapshot_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sources_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(back_populates="meta_batch")
+
+
 class EvaluationRun(Base):
     __tablename__ = "evaluation_runs"
     __table_args__ = (
@@ -490,6 +574,7 @@ class EvaluationRun(Base):
             name="evaluation_runs_result_exclusive_check",
         ),
         Index("idx_evaluation_runs_scheduled_id", "scheduled_for", "id"),
+        Index("idx_evaluation_runs_meta_batch_id", "meta_batch_id"),
         Index(
             "evaluation_runs_portfolio_session_key",
             "portfolio_id",
@@ -511,6 +596,11 @@ class EvaluationRun(Base):
     )
     agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
     model_id: Mapped[int] = mapped_column(Integer, ForeignKey("model_definitions.id"), nullable=False)
+    meta_batch_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("meta_batches.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     scheduled_for: Mapped[date | None] = mapped_column(Date, nullable=True)
     trigger_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
     retry_of_run_id: Mapped[int | None] = mapped_column(
@@ -546,6 +636,7 @@ class EvaluationRun(Base):
     portfolio: Mapped[Portfolio] = relationship(back_populates="evaluation_runs")
     agent: Mapped[Agent] = relationship(back_populates="evaluation_runs")
     model: Mapped[ModelDefinition] = relationship(back_populates="evaluation_runs")
+    meta_batch: Mapped[MetaBatch | None] = relationship(back_populates="evaluation_runs")
     allocation: Mapped[Allocation | None] = relationship()
     signal: Mapped[Signal | None] = relationship()
 

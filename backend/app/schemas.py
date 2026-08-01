@@ -70,6 +70,7 @@ class PromptCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None
+    context_scope: Literal["portfolio", "arena"] = "portfolio"
     mode: Literal["managed", "rebuilt", "both"]
     direction: Literal["long", "short", "both"]
     managed_long_text: str | None = None
@@ -142,6 +143,12 @@ class PortfolioCreate(BaseModel):
     prompt_mode: Literal["managed", "rebuilt"]
     direction: Literal["long", "short"]
     cost_bps: int | None = Field(default=None, ge=0)
+
+
+class MetaPortfolioSetCreate(BaseModel):
+    family_name: str = Field(min_length=1, max_length=180)
+    agent_id: int
+    prompt_id: int
 
 
 class PortfolioPatch(BaseModel):

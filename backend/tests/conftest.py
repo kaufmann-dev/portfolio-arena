@@ -127,9 +127,9 @@ def clean_db(client):
         session.execute(
             text(
                 "TRUNCATE auth_sessions, settings, model_harness_capabilities, model_definitions, "
-                "agents, prompts, portfolios, allocations, "
+                "agents, prompts, meta_portfolio_sets, portfolios, allocations, "
                 "positions, signals, signal_positions, evaluation_runs, evaluator_settings, "
-                "portfolio_evaluator_configs, "
+                "portfolio_evaluator_configs, meta_batches, "
                 "evaluator_instances, price_cache, api_keys RESTART IDENTITY CASCADE"
             )
         )

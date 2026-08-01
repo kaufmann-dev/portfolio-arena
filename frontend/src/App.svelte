@@ -8,6 +8,7 @@
   import Admin from "./lib/pages/Admin.svelte";
   import AgentDetail from "./lib/pages/AgentDetail.svelte";
   import Leaderboard from "./lib/pages/Leaderboard.svelte";
+  import MetaArena from "./lib/pages/MetaArena.svelte";
   import PortfolioDetail from "./lib/pages/PortfolioDetail.svelte";
   import PromptDetail from "./lib/pages/PromptDetail.svelte";
   import { auth } from "./lib/stores/auth.svelte";
@@ -18,6 +19,7 @@
   const ACTIVITY_EVENT_TYPES = new Set(["pointerdown", "keydown", "click"]);
   const navItems = [
     { href: "/", label: "Arena", route: "home" },
+    { href: "/meta", label: "Meta", route: "meta" },
     { href: "/about", label: "About", route: "about" },
     { href: "/admin", label: "Admin", route: "admin" },
   ] as const;
@@ -30,6 +32,8 @@
     switch (router.route.name) {
       case "home":
         return "Arena";
+      case "meta":
+        return "Meta Arena";
       case "portfolio":
         return `${router.route.params.slug} portfolio`;
       case "prompt":
@@ -248,6 +252,8 @@
       <main id="main-content" tabindex="-1" {@attach focusRoute}>
         {#if router.route.name === "home"}
           <Leaderboard />
+        {:else if router.route.name === "meta"}
+          <MetaArena />
         {:else if router.route.name === "portfolio"}
           <PortfolioDetail slug={router.route.params.slug} />
         {:else if router.route.name === "prompt"}

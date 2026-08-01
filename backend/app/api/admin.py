@@ -19,6 +19,7 @@ from ..schemas import (
     AllocationUpdate,
     EvaluationRunsCreate,
     EvaluatorSettingsUpdate,
+    MetaPortfolioSetCreate,
     ModelCreate,
     ModelPatch,
     PortfolioCreate,
@@ -152,6 +153,7 @@ def create_prompt(body: PromptCreate, session: Session = Depends(get_session)):
         admin_ops.create_prompt,
         session,
         name=body.name,
+        context_scope=body.context_scope,
         mode=body.mode,
         direction=body.direction,
         managed_long_text=body.managed_long_text,
@@ -257,6 +259,20 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
         direction=body.direction,
         slug=body.slug,
         cost_bps=body.cost_bps,
+    )
+
+
+@router.post("/admin/meta-portfolio-sets", status_code=201)
+def create_meta_portfolio_set(
+    body: MetaPortfolioSetCreate,
+    session: Session = Depends(get_session),
+):
+    return _run(
+        admin_ops.create_meta_portfolio_set,
+        session,
+        family_name=body.family_name,
+        agent_id=body.agent_id,
+        prompt_id=body.prompt_id,
     )
 
 

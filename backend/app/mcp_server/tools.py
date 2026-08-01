@@ -149,7 +149,11 @@ def get_arena_overview(direction: str) -> dict:
         managed_policy = settings["managed_allocation_policy"]
         rebuilt_policy = settings["rebuilt_allocation_policy"]
         portfolios = load_portfolios(session)
-        selected = [portfolio for portfolio in portfolios if portfolio.direction == selected_direction]
+        selected = [
+            portfolio
+            for portfolio in portfolios
+            if portfolio.prompt.context_scope == "portfolio" and portfolio.direction == selected_direction
+        ]
         valuations = compute_valuations(session, selected)
         managed_rows = []
         for portfolio in selected:
@@ -259,7 +263,11 @@ def get_rebuilt_analysis(
     with _session() as session:
         allocation_policy = admin_ops.get_app_settings(session)["rebuilt_allocation_policy"]
         portfolios = load_portfolios(session)
-        selected = [portfolio for portfolio in portfolios if portfolio.direction == selected_direction]
+        selected = [
+            portfolio
+            for portfolio in portfolios
+            if portfolio.prompt.context_scope == "portfolio" and portfolio.direction == selected_direction
+        ]
         arena = compute_rebuilt_arena(
             session,
             selected,
@@ -377,6 +385,7 @@ def list_prompts() -> dict:
                 {
                     "id": prompt.id,
                     "slug": prompt.slug,
+                    "context_scope": prompt.context_scope,
                     "name": prompt.name,
                     "mode": prompt.mode,
                     "direction": prompt.direction,
@@ -547,6 +556,7 @@ def create_prompt(
     name: str,
     mode: str,
     direction: str,
+    context_scope: str = "portfolio",
     managed_long_text: str | None = None,
     managed_short_text: str | None = None,
     rebuilt_long_text: str | None = None,
@@ -559,6 +569,7 @@ def create_prompt(
             admin_ops.create_prompt,
             session,
             name=name,
+            context_scope=context_scope,
             mode=mode,
             direction=direction,
             managed_long_text=managed_long_text,
@@ -648,6 +659,26 @@ def create_portfolio(
             prompt_mode=prompt_mode,
             direction=_direction(direction),
             cost_bps=cost_bps,
+        )
+
+
+@mcp.tool()
+def create_meta_portfolio_set(
+    family_name: str,
+    agent_id: int,
+    prompt_id: int,
+) -> dict:
+    """Atomically create and enable weekday automation for a four-cell arena
+    synthesis family: managed long Core, rebuilt long Pulse, managed short
+    Shadow, and rebuilt short Probe. The prompt must be arena-scoped and support
+    both modes and directions; the agent must support integrated automation."""
+    with _session() as session:
+        return _guard(
+            admin_ops.create_meta_portfolio_set,
+            session,
+            family_name=family_name,
+            agent_id=agent_id,
+            prompt_id=prompt_id,
         )
 
 

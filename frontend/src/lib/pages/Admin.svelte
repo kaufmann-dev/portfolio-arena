@@ -20,11 +20,13 @@
     HarnessesResponse,
     ManagedArenaResponse,
     ManagedPortfolioDetail,
+    MetaPortfolioSetCreated,
     ModelDefinition,
     ModelHarnessCapability,
     MarketDataStatus,
     PortfolioResetResult,
     PromptAvailability,
+    PromptContextScope,
     PromptMode,
     PromptVersion,
     PromptVersionsResponse,
@@ -96,6 +98,19 @@
   let notice = $state("");
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   const activePrompts = $derived(prompts.filter((prompt) => prompt.status === "active"));
+  const normalPortfolios = $derived(
+    portfolios.filter((portfolio) => portfolio.prompt.context_scope === "portfolio"),
+  );
+  const activeArenaPrompts = $derived(
+    activePrompts.filter(
+      (prompt) => prompt.context_scope === "arena" && prompt.mode === "both" && prompt.direction === "both",
+    ),
+  );
+  const automationAgents = $derived(
+    agents.filter((agent) =>
+      harnesses.some((harness) => harness.id === agent.harness?.id && harness.automation_supported),
+    ),
+  );
 
   function promptSupportsTrack(mode: PromptAvailability, track: PromptMode): boolean {
     return mode === "both" || mode === track;
@@ -115,11 +130,17 @@
     return direction === "long" ? "Long" : "Short";
   }
 
+  function promptScopeLabel(scope: PromptContextScope): string {
+    return scope === "arena" ? "Arena synthesis" : "Portfolio strategy";
+  }
+
   function promptIsCompatible(prompt: AdminPrompt, mode: PromptMode, direction: Direction): boolean {
     return promptSupportsTrack(prompt.mode, mode) && promptSupportsDirection(prompt.direction, direction);
   }
 
   function promptHasActivePortfolio(promptId: number): boolean {
+    const prompt = prompts.find((candidate) => candidate.id === promptId);
+    if (prompt?.context_scope === "arena") return Boolean(prompt.portfolio_count);
     return portfolios.some((portfolio) => portfolio.status === "active" && portfolio.prompt.id === promptId);
   }
 
@@ -423,12 +444,19 @@
   let newCostBps = $state<string>("");
   let portfolioError = $state("");
   const newPortfolioPrompts = $derived(
-    activePrompts.filter((prompt) => promptIsCompatible(prompt, newPromptMode, newDirection)),
+    activePrompts.filter(
+      (prompt) =>
+        prompt.context_scope === "portfolio" && promptIsCompatible(prompt, newPromptMode, newDirection),
+    ),
   );
 
   function clearIncompatibleNewPortfolioPrompt(): void {
     const selectedPrompt = prompts.find((prompt) => prompt.id === newPromptId);
-    if (!selectedPrompt || !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)) {
+    if (
+      !selectedPrompt ||
+      selectedPrompt.context_scope !== "portfolio" ||
+      !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)
+    ) {
       newPromptId = null;
     }
   }
@@ -455,7 +483,11 @@
       return;
     }
     const selectedPrompt = activePrompts.find((prompt) => prompt.id === newPromptId);
-    if (!selectedPrompt || !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)) {
+    if (
+      !selectedPrompt ||
+      selectedPrompt.context_scope !== "portfolio" ||
+      !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)
+    ) {
       newPromptId = null;
       portfolioError = `Select an active prompt that supports ${newDirection} ${newPromptMode} portfolios.`;
       return;
@@ -486,6 +518,45 @@
       await loadDetail(created.slug);
     } catch (e) {
       portfolioError = e instanceof Error ? e.message : "Create failed";
+    }
+  }
+
+  let newMetaFamilyName = $state("");
+  let newMetaAgentId = $state<number | null>(null);
+  let newMetaPromptId = $state<number | null>(null);
+  let metaFamilyError = $state("");
+  let metaFamilyBusy = $state(false);
+
+  async function createMetaFamily(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    metaFamilyError = "";
+    if (!newMetaFamilyName.trim() || newMetaAgentId === null || newMetaPromptId === null) {
+      metaFamilyError = "Family name, agent, and Arena synthesis prompt are required.";
+      return;
+    }
+    if (!activeArenaPrompts.some((prompt) => prompt.id === newMetaPromptId)) {
+      newMetaPromptId = null;
+      metaFamilyError = "Select an active Arena synthesis prompt that supports all four cells.";
+      return;
+    }
+
+    metaFamilyBusy = true;
+    try {
+      const created = await postJson<MetaPortfolioSetCreated>("/api/admin/meta-portfolio-sets", {
+        family_name: newMetaFamilyName.trim(),
+        agent_id: newMetaAgentId,
+        prompt_id: newMetaPromptId,
+      });
+      const familyName = newMetaFamilyName.trim();
+      newMetaFamilyName = "";
+      newMetaAgentId = null;
+      newMetaPromptId = null;
+      await loadAll();
+      flash(`Meta family ${familyName} created with ${created.portfolios.length} automated portfolios.`);
+    } catch (e) {
+      metaFamilyError = e instanceof Error ? e.message : "Meta family creation failed.";
+    } finally {
+      metaFamilyBusy = false;
     }
   }
 
@@ -707,6 +778,7 @@
   let promptStatusFilter = $state<PromptStatusFilter>("active");
   let editPrompt = $state<AdminPrompt | null>(null);
   let newPromptName = $state("");
+  let newPromptContextScope = $state<PromptContextScope>("portfolio");
   let newPromptAvailability = $state<PromptAvailability | "">("");
   let newPromptDirection = $state<DirectionAvailability | "">("");
   let newPromptManagedLongText = $state("");
@@ -744,6 +816,7 @@
     try {
       await postJson("/api/admin/prompts", {
         name: newPromptName.trim(),
+        context_scope: newPromptContextScope,
         mode,
         direction: newPromptDirection,
         managed_long_text: promptSupportsCell(mode, newPromptDirection, "managed", "long")
@@ -761,6 +834,7 @@
         notes: newPromptNotes.trim(),
       });
       newPromptName = "";
+      newPromptContextScope = "portfolio";
       newPromptAvailability = "";
       newPromptDirection = "";
       newPromptManagedLongText = "";
@@ -950,6 +1024,7 @@
     name: string;
     agent_id: number;
     prompt_id: number | null;
+    context_scope: PromptContextScope;
     prompt_mode: PromptMode;
     direction: Direction;
     direction_editable: boolean;
@@ -959,11 +1034,13 @@
 
   function promptsForPortfolio(
     currentPromptId: number | null,
+    contextScope: PromptContextScope,
     track: PromptMode,
     direction: Direction,
   ): AdminPrompt[] {
     return prompts.filter(
       (prompt) =>
+        prompt.context_scope === contextScope &&
         promptIsCompatible(prompt, track, direction) &&
         (prompt.status === "active" || prompt.id === currentPromptId),
     );
@@ -974,6 +1051,7 @@
     const selectedPrompt = prompts.find((prompt) => prompt.id === editPortfolio?.prompt_id);
     if (
       !selectedPrompt ||
+      selectedPrompt.context_scope !== editPortfolio.context_scope ||
       !promptIsCompatible(selectedPrompt, editPortfolio.prompt_mode, editPortfolio.direction)
     ) {
       editPortfolio.prompt_id = null;
@@ -1012,6 +1090,7 @@
         name: portfolio.name,
         agent_id: portfolio.agent.id,
         prompt_id: portfolio.prompt.id,
+        context_scope: portfolio.prompt.context_scope,
         prompt_mode: portfolio.prompt_mode,
         direction: portfolio.direction,
         direction_editable: directionEditable,
@@ -1040,6 +1119,7 @@
     const selectedPrompt = prompts.find((prompt) => prompt.id === editPortfolio?.prompt_id);
     if (
       !selectedPrompt ||
+      selectedPrompt.context_scope !== editPortfolio.context_scope ||
       !promptIsCompatible(selectedPrompt, editPortfolio.prompt_mode, editPortfolio.direction)
     ) {
       editPortfolio.prompt_id = null;
@@ -1649,8 +1729,68 @@
             <p class="muted hint">Enter its first allocation or daily signal from Portfolio state.</p>
           </form>
 
+          <h2 class="spaced">New meta family</h2>
+          <p class="muted cache-note">
+            Create Core, Pulse, Shadow, and Probe together for one agent. All four portfolios are enabled for
+            weekday automation and run only after their frozen normal-Arena source batch is complete. View
+            results in Meta and manage runs from Automation.
+          </p>
+          <form onsubmit={createMetaFamily}>
+            <div class="field">
+              <label for="nmf-name">Family name</label>
+              <input id="nmf-name" type="text" bind:value={newMetaFamilyName} placeholder="Confluence" />
+              {#if newMetaFamilyName.trim()}
+                <p class="muted hint">
+                  Creates {newMetaFamilyName.trim()} Core, {newMetaFamilyName.trim()} Pulse,
+                  {newMetaFamilyName.trim()} Shadow, and {newMetaFamilyName.trim()} Probe.
+                </p>
+              {/if}
+            </div>
+            <div class="grid-2 meta-family-grid">
+              <div class="field">
+                <label for="nmf-agent">Agent</label>
+                <select id="nmf-agent" bind:value={newMetaAgentId}>
+                  <option value={null} disabled>Select an agent…</option>
+                  {#each automationAgents as agent (agent.id)}
+                    <option value={agent.id}>{agent.name}</option>
+                  {/each}
+                </select>
+                {#if automationAgents.length === 0}
+                  <p class="muted hint">No agents currently support integrated automation.</p>
+                {/if}
+              </div>
+              <div class="field">
+                <label for="nmf-prompt">Arena synthesis prompt</label>
+                <select id="nmf-prompt" bind:value={newMetaPromptId}>
+                  <option value={null} disabled>Select a prompt…</option>
+                  {#each activeArenaPrompts as prompt (prompt.id)}
+                    <option value={prompt.id}>{prompt.name}</option>
+                  {/each}
+                </select>
+              </div>
+            </div>
+            {#if activeArenaPrompts.length === 0}
+              <p class="muted hint">
+                Create an active Arena synthesis prompt supporting both modes and both directions first.
+              </p>
+            {/if}
+            {#if metaFamilyError}
+              <div class="error-box" role="alert">{metaFamilyError}</div>
+            {/if}
+            <button
+              class="btn primary"
+              type="submit"
+              disabled={metaFamilyBusy ||
+                !newMetaFamilyName.trim() ||
+                newMetaAgentId === null ||
+                newMetaPromptId === null}
+            >
+              {metaFamilyBusy ? "Creating family…" : "Create four meta portfolios"}
+            </button>
+          </form>
+
           <h2 class="spaced">Existing portfolios</h2>
-          {#each portfolios as portfolio (portfolio.id)}
+          {#each normalPortfolios as portfolio (portfolio.id)}
             {#if editPortfolio?.id === portfolio.id}
               <form class="edit-form" onsubmit={savePortfolio}>
                 <div class="field">
@@ -1680,7 +1820,7 @@
                   <label for="epf-prompt-{portfolio.id}">Compatible prompt</label>
                   <select id="epf-prompt-{portfolio.id}" bind:value={editPortfolio.prompt_id}>
                     <option value={null} disabled>Select a prompt…</option>
-                    {#each promptsForPortfolio(editPortfolio.prompt_id, editPortfolio.prompt_mode, editPortfolio.direction) as prompt (prompt.id)}
+                    {#each promptsForPortfolio(editPortfolio.prompt_id, editPortfolio.context_scope, editPortfolio.prompt_mode, editPortfolio.direction) as prompt (prompt.id)}
                       <option value={prompt.id} disabled={prompt.status === "archived"}>
                         {prompt.name} · {promptModeLabel(prompt.mode)} · {promptDirectionLabel(
                           prompt.direction,
@@ -1688,6 +1828,7 @@
                       </option>
                     {/each}
                   </select>
+                  <p class="muted hint">{promptScopeLabel(editPortfolio.context_scope)}</p>
                 </div>
                 <div class="field">
                   <label for="epf-direction-{portfolio.id}">Direction</label>
@@ -1733,7 +1874,8 @@
                       >
                     {/if}
                     <span class="manage-meta muted">
-                      · {portfolio.direction} · {portfolio.agent.name} · {portfolio.prompt_mode} ·
+                      · {promptScopeLabel(portfolio.prompt.context_scope)} · {portfolio.direction} ·
+                      {portfolio.agent.name} · {portfolio.prompt_mode} ·
                       {portfolio.cost_bps} bps · {portfolio.status}
                     </span>
                   </div>
@@ -2069,6 +2211,18 @@
               <input id="np-prompt-name" type="text" bind:value={newPromptName} />
             </div>
             <div class="field">
+              <label for="np-prompt-scope">Context scope</label>
+              <select id="np-prompt-scope" bind:value={newPromptContextScope} required>
+                <option value="portfolio">Portfolio strategy</option>
+                <option value="arena">Arena synthesis</option>
+              </select>
+              <p class="muted hint">
+                Portfolio strategies evaluate one portfolio. Arena synthesis prompts receive a frozen packet
+                of normal-Arena decisions and can only be used by atomic meta families. Scope cannot change
+                after creation.
+              </p>
+            </div>
+            <div class="field">
               <label for="np-prompt-availability">Support mode</label>
               <select id="np-prompt-availability" bind:value={newPromptAvailability} required>
                 <option value="" disabled>Select support mode…</option>
@@ -2180,6 +2334,11 @@
                   <input id="ep-name-{prompt.id}" type="text" bind:value={editPrompt.name} />
                 </div>
                 <div class="field">
+                  <span class="field-label">Context scope</span>
+                  <span class="badge">{promptScopeLabel(editPrompt.context_scope)}</span>
+                  <p class="muted hint">Context scope is fixed for the life of this prompt.</p>
+                </div>
+                <div class="field">
                   <label for="ep-mode-{prompt.id}">Support mode</label>
                   <select id="ep-mode-{prompt.id}" value={editPrompt.mode} onchange={setEditPromptMode}>
                     <option value="managed">Managed only</option>
@@ -2270,6 +2429,7 @@
                   <div class="manage-summary">
                     <strong class="manage-name">{prompt.name}</strong>
                     <span class={["badge", prompt.status === "archived" && "warn"]}>{prompt.status}</span>
+                    <span class="badge">{promptScopeLabel(prompt.context_scope)}</span>
                     <span class="badge">{promptModeLabel(prompt.mode)}</span>
                     <span class="badge">{promptDirectionLabel(prompt.direction)}</span>
                     <span class="manage-meta muted">
@@ -2790,6 +2950,10 @@
   }
 
   .weight-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .meta-family-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

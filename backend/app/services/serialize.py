@@ -32,6 +32,7 @@ def prompt_ref(portfolio: Portfolio, allocation_policy: dict) -> dict:
         "id": portfolio.prompt.id,
         "slug": portfolio.prompt.slug,
         "name": portfolio.prompt.name,
+        "context_scope": portfolio.prompt.context_scope,
         "mode": portfolio.prompt.mode,
         "direction": portfolio.prompt.direction,
         "configurable": True,
