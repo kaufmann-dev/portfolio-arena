@@ -76,6 +76,99 @@ class _Lookup:
         return self.values[index - 1] if index else None
 
 
+@dataclass
+class PreparedMarket:
+    """Read-only market indexes reused across every portfolio and policy."""
+
+    prices: dict[str, Series]
+    calendar: list[str]
+    lookups: dict[str, _Lookup]
+    daily_returns: dict[tuple[str, str], dict[str, float]] = field(default_factory=dict)
+    short_benchmarks: dict[int, Series] = field(default_factory=dict)
+
+    def daily_return(self, symbol: str, previous_day: str, day: str) -> float:
+        try:
+            return self.daily_returns[(previous_day, day)][symbol]
+        except KeyError:
+            raise RebuiltValuationError(
+                f"No price at or before {previous_day} and {day} for {symbol}"
+            ) from None
+
+    def short_benchmark(self, first_index: int) -> Series:
+        benchmark = self.short_benchmarks.get(first_index)
+        if benchmark is None:
+            benchmark = rebase_series(
+                self.prices["SPY"],
+                self.calendar[first_index],
+                self.calendar[-1],
+                direction="short",
+            )
+            self.short_benchmarks[first_index] = benchmark
+        return benchmark
+
+
+def prepare_market(prices: dict[str, Series], calendar: list[str]) -> PreparedMarket:
+    market = PreparedMarket(
+        prices=prices,
+        calendar=calendar,
+        lookups={symbol: _Lookup(points) for symbol, points in prices.items()},
+    )
+    for previous_day, day in zip(calendar, calendar[1:], strict=False):
+        returns: dict[str, float] = {}
+        for symbol, lookup in market.lookups.items():
+            previous = lookup.at(previous_day)
+            current = lookup.at(day)
+            if previous is not None and current is not None:
+                returns[symbol] = current / previous - 1.0
+        market.daily_returns[(previous_day, day)] = returns
+    return market
+
+
+@dataclass
+class _PolicyContext:
+    market: PreparedMarket
+    signals: list[SignalInput]
+    mapped: list[MappedSignal]
+    mapped_by_session: dict[int, list[MappedSignal]]
+    base_targets: dict[tuple[int, int], tuple[dict[str, float], list[MappedSignal]]] = field(
+        default_factory=dict
+    )
+
+    @classmethod
+    def build(cls, market: PreparedMarket, signals: list[SignalInput]) -> _PolicyContext:
+        mapped = map_signals(signals, market.calendar)
+        return cls(
+            market=market,
+            signals=signals,
+            mapped=mapped,
+            mapped_by_session=_signals_by_session(mapped),
+        )
+
+    def target(
+        self,
+        day_index: int,
+        horizon: int,
+        exposure_pct: int,
+    ) -> tuple[dict[str, float], list[MappedSignal]]:
+        key = (day_index, horizon)
+        cached = self.base_targets.get(key)
+        if cached is None:
+            cached = _target_weights(
+                self.mapped_by_session,
+                day_index,
+                horizon,
+                100,
+            )
+            self.base_targets[key] = cached
+        base, active = cached
+        if exposure_pct == 100:
+            return base, active
+        factor = exposure_pct / 100.0
+        target = {symbol: weight * factor for symbol, weight in base.items() if symbol != "SPY"}
+        target["SPY"] = 1.0 + (base.get("SPY", 1.0) - 1.0) * factor
+        return target, active
+
+
 def map_signals(signals: list[SignalInput], calendar: list[str]) -> list[MappedSignal]:
     """Map effective dates to the first actual SPY session on or after them."""
     mapped: list[MappedSignal] = []
@@ -257,20 +350,23 @@ def signal_horizon_statistics(
     horizon: int,
     family_size: int = DIRECT_SEARCH_FAMILY_SIZE,
     direction: Direction = "long",
+    *,
+    _context: _PolicyContext | None = None,
 ) -> dict:
     """Direct, completed-cohort signal alpha for one holding horizon."""
     if horizon not in HORIZONS:
         raise ValueError("horizon must be between 1 and 20")
     if direction not in ("long", "short"):
         raise ValueError("direction must be long or short")
-    lookups = {symbol: _Lookup(points) for symbol, points in prices.items()}
+    context = _context or _PolicyContext.build(prepare_market(prices, calendar), signals)
+    lookups = context.market.lookups
     spy = lookups.get("SPY")
     if spy is None:
         raise RebuiltValuationError("SPY price series is required")
 
     completed_values: list[float] = []
     completed: list[dict] = []
-    mapped_signals = map_signals(signals, calendar)
+    mapped_signals = context.mapped
     # A signal after the last priced session has begun its lifecycle but has
     # no observable entry close yet. It is open evidence, not invalid evidence.
     open_count = len(signals) - len(mapped_signals)
@@ -414,6 +510,7 @@ def _construct_long_policy(
     exposure_pct: int,
     cost_bps: int,
     cost_basis: CostBasis,
+    context: _PolicyContext | None = None,
 ) -> PolicyResult:
     """Construct one overlapping-cohort aggregate policy."""
     if horizon not in HORIZONS:
@@ -422,7 +519,8 @@ def _construct_long_policy(
         raise ValueError("exposure_pct must be 10, 20, …, 100")
     if cost_basis not in ("gross", "net"):
         raise ValueError("cost_basis must be gross or net")
-    mapped = map_signals(signals, calendar)
+    context = context or _PolicyContext.build(prepare_market(prices, calendar), signals)
+    mapped = context.mapped
     if not mapped:
         return PolicyResult(
             horizon=horizon,
@@ -437,11 +535,10 @@ def _construct_long_policy(
             cumulative_turnover_pct=0.0,
         )
 
-    lookups = {symbol: _Lookup(points) for symbol, points in prices.items()}
+    lookups = context.market.lookups
     if "SPY" not in lookups:
         raise RebuiltValuationError("SPY price series is required")
     first_index = min(item.start_index for item in mapped)
-    mapped_by_session = _signals_by_session(mapped)
     nav = 100.0
     cumulative_cost = 0.0
     cumulative_turnover = 0.0
@@ -459,20 +556,26 @@ def _construct_long_policy(
         day = calendar[day_index]
         before_return = 100.0 if previous_day is not None and not daily else nav
         if previous_day is not None:
+            day_returns = context.market.daily_returns[(previous_day, day)]
             values: dict[str, float] = {}
             for symbol, weight in target.items():
                 lookup = lookups.get(symbol)
                 if lookup is None:
                     raise RebuiltValuationError(f"No price series for {symbol}")
-                values[symbol] = weight * (1.0 + _daily_return(lookup, previous_day, day))
+                try:
+                    daily_return = day_returns[symbol]
+                except KeyError:
+                    raise RebuiltValuationError(
+                        f"No price at or before {previous_day} and {day} for {symbol}"
+                    ) from None
+                values[symbol] = weight * (1.0 + daily_return)
             gross_factor = sum(values.values())
             nav *= gross_factor
             drifted = (
                 {symbol: value / gross_factor for symbol, value in values.items()} if gross_factor > 0 else {}
             )
 
-        next_target, active = _target_weights(
-            mapped_by_session,
+        next_target, active = context.target(
             day_index,
             horizon,
             exposure_pct,
@@ -487,7 +590,7 @@ def _construct_long_policy(
         cumulative_turnover += turnover * 100.0
 
         if previous_day is not None:
-            spy_return = _daily_return(lookups["SPY"], previous_day, day)
+            spy_return = day_returns["SPY"]
             strategy_return = nav / before_return - 1.0 if before_return > 0 else 0.0
             reported_cost = cost + deferred_cost
             reported_turnover_pct = turnover * 100.0 + deferred_turnover_pct
@@ -562,6 +665,7 @@ def _construct_short_policy(
     exposure_pct: int,
     cost_bps: int,
     cost_basis: CostBasis,
+    context: _PolicyContext | None = None,
 ) -> PolicyResult:
     if horizon not in HORIZONS:
         raise ValueError("horizon must be between 1 and 20")
@@ -569,7 +673,8 @@ def _construct_short_policy(
         raise ValueError("exposure_pct must be 10, 20, …, 100")
     if cost_basis not in ("gross", "net"):
         raise ValueError("cost_basis must be gross or net")
-    mapped = map_signals(signals, calendar)
+    context = context or _PolicyContext.build(prepare_market(prices, calendar), signals)
+    mapped = context.mapped
     if not mapped:
         return PolicyResult(
             horizon=horizon,
@@ -585,17 +690,11 @@ def _construct_short_policy(
             direction="short",
         )
 
-    lookups = {symbol: _Lookup(points) for symbol, points in prices.items()}
+    lookups = context.market.lookups
     if "SPY" not in lookups:
         raise RebuiltValuationError("SPY price series is required")
     first_index = min(item.start_index for item in mapped)
-    mapped_by_session = _signals_by_session(mapped)
-    benchmark = rebase_series(
-        prices["SPY"],
-        calendar[first_index],
-        calendar[-1],
-        direction="short",
-    )
+    benchmark = context.market.short_benchmark(first_index)
     benchmark_by_date = {point["date"]: point["nav"] for point in benchmark}
 
     nav = 100.0
@@ -629,6 +728,7 @@ def _construct_short_policy(
 
         before_return = 100.0 if previous_day is not None and not daily else nav
         if previous_day is not None:
+            day_returns = context.market.daily_returns[(previous_day, day)]
             notionals: dict[str, float] = {}
             underlying_pnl = 0.0
             nav_before_move = nav
@@ -636,7 +736,12 @@ def _construct_short_policy(
                 lookup = lookups.get(symbol)
                 if lookup is None:
                     raise RebuiltValuationError(f"No price series for {symbol}")
-                daily_return = _daily_return(lookup, previous_day, day)
+                try:
+                    daily_return = day_returns[symbol]
+                except KeyError:
+                    raise RebuiltValuationError(
+                        f"No price at or before {previous_day} and {day} for {symbol}"
+                    ) from None
                 prior_notional = nav_before_move * weight
                 notionals[symbol] = prior_notional * (1.0 + daily_return)
                 underlying_pnl += prior_notional * daily_return
@@ -666,8 +771,7 @@ def _construct_short_policy(
                 continue
             drifted = {symbol: notional / nav for symbol, notional in notionals.items()}
 
-        next_target, active = _target_weights(
-            mapped_by_session,
+        next_target, active = context.target(
             day_index,
             horizon,
             exposure_pct,
@@ -769,6 +873,8 @@ def construct_policy(
     cost_bps: int,
     cost_basis: CostBasis,
     direction: Direction = "long",
+    *,
+    _context: _PolicyContext | None = None,
 ) -> PolicyResult:
     """Construct one overlapping-cohort aggregate long or short policy."""
     if direction == "long":
@@ -780,6 +886,7 @@ def construct_policy(
             exposure_pct,
             cost_bps,
             cost_basis,
+            _context,
         )
     if direction == "short":
         return _construct_short_policy(
@@ -790,6 +897,7 @@ def construct_policy(
             exposure_pct,
             cost_bps,
             cost_basis,
+            _context,
         )
     raise ValueError("direction must be long or short")
 
@@ -922,8 +1030,15 @@ def evaluate_policy_grid(
     cost_basis: CostBasis,
     objective: Objective,
     direction: Direction = "long",
+    *,
+    policy_pairs: tuple[tuple[int, int], ...] | None = None,
+    prepared_market: PreparedMarket | None = None,
 ) -> tuple[list[dict], list[PolicyResult], PolicyResult | None]:
     """Evaluate the direct H=1..20 matrix and all admissible policies."""
+    context = _PolicyContext.build(
+        prepared_market or prepare_market(prices, calendar),
+        signals,
+    )
     horizon_stats = [
         signal_horizon_statistics(
             signals,
@@ -932,6 +1047,7 @@ def evaluate_policy_grid(
             horizon,
             family_size=DIRECT_SEARCH_FAMILY_SIZE,
             direction=direction,
+            _context=context,
         )
         for horizon in HORIZONS
     ]
@@ -939,22 +1055,23 @@ def evaluate_policy_grid(
     family_size = DIRECT_SEARCH_FAMILY_SIZE if objective == "canonical" else OPTIMIZED_SEARCH_FAMILY_SIZE
     policies: list[PolicyResult] = []
     completion_by_horizon = {item["horizon"]: item for item in horizon_stats}
-    for horizon in HORIZONS:
-        for exposure in EXPOSURES:
-            result = construct_policy(
-                signals,
-                prices,
-                calendar,
-                horizon,
-                exposure,
-                cost_bps,
-                cost_basis,
-                direction,
-            )
-            result.metrics = policy_metrics(
-                result,
-                completion_by_horizon[horizon],
-                family_size=family_size,
-            )
-            policies.append(result)
+    pairs = policy_pairs or tuple((horizon, exposure) for horizon in HORIZONS for exposure in EXPOSURES)
+    for horizon, exposure in pairs:
+        result = construct_policy(
+            signals,
+            prices,
+            calendar,
+            horizon,
+            exposure,
+            cost_bps,
+            cost_basis,
+            direction,
+            _context=context,
+        )
+        result.metrics = policy_metrics(
+            result,
+            completion_by_horizon[horizon],
+            family_size=family_size,
+        )
+        policies.append(result)
     return horizon_stats, policies, select_policy(policies, objective)

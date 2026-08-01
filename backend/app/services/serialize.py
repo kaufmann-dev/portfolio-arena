@@ -437,13 +437,10 @@ def serialize_rebuilt_detail(
         ),
         "policy_matrix": [
             {
-                "horizon": item.horizon,
-                "exposure_pct": item.exposure_pct,
-                "metrics": item.metrics,
+                "horizon": pair[0],
+                "exposure_pct": pair[1],
+                "metrics": metrics,
             }
-            for item in sorted(
-                analysis.policies.values(),
-                key=lambda item: (item.horizon, item.exposure_pct),
-            )
+            for pair, metrics in sorted(analysis.policy_metrics.items())
         ],
     }

@@ -155,6 +155,7 @@ def get_arena_overview(direction: str) -> dict:
         rebuilt = compute_rebuilt_arena(
             session,
             selected,
+            view="common",
             objective="canonical",
             cost_basis="net",
         )
@@ -250,8 +251,10 @@ def get_rebuilt_analysis(
         arena = compute_rebuilt_arena(
             session,
             selected,
+            view=view,
             objective=objective,
             cost_basis=cost_basis,
+            horizon=horizon,
         )
         rows = [
             serialize_rebuilt_summary(
