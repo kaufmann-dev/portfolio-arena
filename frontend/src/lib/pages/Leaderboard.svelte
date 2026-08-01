@@ -566,8 +566,6 @@
     flex: 0 0 auto;
     display: grid;
     gap: 3px;
-    padding-left: 18px;
-    border-left: 1px solid var(--border-strong);
     text-align: right;
   }
 
@@ -590,7 +588,6 @@
   .track-selector {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    border: 1px solid var(--border-strong);
   }
 
   .direction-selector button,
@@ -600,14 +597,9 @@
     align-content: center;
     gap: 3px;
     padding: 12px 16px;
-    border-right: 1px solid var(--border-strong);
     color: var(--text-secondary);
+    background: var(--bg-raised);
     text-align: left;
-  }
-
-  .direction-selector button:last-child,
-  .track-selector button:last-child {
-    border-right: 0;
   }
 
   .direction-selector button:hover,
@@ -661,7 +653,6 @@
   .analysis-controls {
     grid-template-columns: repeat(3, minmax(160px, 230px));
     padding: 14px 0;
-    border-bottom: 1px solid var(--border-subtle);
   }
 
   .locked-context {
@@ -670,7 +661,7 @@
     align-content: center;
     gap: 2px;
     padding: 5px 10px;
-    border-left: 1px solid var(--border-strong);
+    background: var(--bg-raised);
   }
 
   .locked-context strong {
@@ -701,7 +692,6 @@
     display: grid;
     gap: 12px;
     padding: 14px 0;
-    border-bottom: 1px solid var(--border-subtle);
   }
 
   .filter-controls {
@@ -726,8 +716,7 @@
     display: grid;
     gap: 14px;
     padding: 16px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-surface);
+    background: var(--bg-raised);
   }
 
   .comparison-panel header {
@@ -786,12 +775,6 @@
 
     .track-selector button {
       min-height: 60px;
-      border-right: 0;
-      border-bottom: 1px solid var(--border-strong);
-    }
-
-    .track-selector button:last-child {
-      border-bottom: 0;
     }
 
     .analysis-controls,

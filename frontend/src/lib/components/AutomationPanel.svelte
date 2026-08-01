@@ -706,17 +706,15 @@
   .runtime-grid {
     display: grid;
     grid-template-columns: repeat(5, minmax(120px, 1fr));
-    gap: 0;
+    gap: 1px;
     margin-bottom: 18px;
-    border-top: 1px solid var(--border-subtle);
-    border-left: 1px solid var(--border-subtle);
+    background: var(--border-subtle);
   }
 
   .runtime-grid > div {
     min-height: 82px;
     padding: 13px;
-    border-right: 1px solid var(--border-subtle);
-    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
   }
 
   .runtime-label,
@@ -734,7 +732,6 @@
     align-items: center;
     justify-content: space-between;
     padding-top: 16px;
-    border-top: 1px solid var(--border-subtle);
   }
 
   .runtime-error {
@@ -757,7 +754,6 @@
   }
 
   .portfolio-config {
-    border: 1px solid var(--border-subtle);
     background: var(--bg-surface);
   }
 
@@ -766,7 +762,6 @@
     margin-bottom: 0;
     align-items: center;
     background: var(--bg-inset);
-    border-bottom: 1px solid var(--border-subtle);
   }
 
   .config-title {
@@ -780,7 +775,6 @@
     padding: 10px 14px;
     margin: 0;
     color: var(--neg);
-    border-bottom: 1px solid var(--border-subtle);
     background: color-mix(in srgb, var(--neg) 7%, transparent);
     font-size: 12.5px;
   }
@@ -857,7 +851,6 @@
     margin-top: 8px;
     white-space: pre-wrap;
     background: var(--bg-inset);
-    border: 1px solid var(--border-subtle);
     font-family: var(--font-mono);
     font-size: 12px;
   }

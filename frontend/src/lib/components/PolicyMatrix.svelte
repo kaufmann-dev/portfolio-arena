@@ -79,6 +79,7 @@
   }
 
   .matrix-table td.selected {
-    box-shadow: inset 0 0 0 2px var(--accent);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 </style>

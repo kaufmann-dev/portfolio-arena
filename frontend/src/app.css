@@ -18,7 +18,7 @@
   --bg-overlay: rgba(0, 0, 0, 0.82);
 
   --border-subtle: #262626;
-  --border-strong: #404040;
+  --border-strong: #5c5c5c;
 
   --text-primary: #f4f4f5;
   --text-secondary: #a1a1aa;
@@ -37,9 +37,6 @@
   --chart-grid: #202020;
   --spark: #8b8b95;
 
-  --radius: 0;
-  --radius-sm: 0;
-  --shadow: none;
   --page-max: 1440px;
   --prose-max: 760px;
   --header-height: 60px;
@@ -55,13 +52,13 @@
 
   --bg-base: #fff;
   --bg-surface: #fff;
-  --bg-raised: #fff;
+  --bg-raised: #f7f7f5;
   --bg-surface-hover: #f5f5f5;
   --bg-inset: #fff;
   --bg-overlay: rgba(12, 12, 12, 0.54);
 
   --border-subtle: #d4d4cf;
-  --border-strong: #a6a6a0;
+  --border-strong: #8f8f89;
 
   --text-primary: #09090b;
   --text-secondary: #52525b;
@@ -201,7 +198,6 @@ h3 {
   justify-content: space-between;
   gap: 24px;
   padding: 10px 0 26px;
-  border-bottom: 1px solid var(--border-strong);
   margin-bottom: 24px;
 }
 
@@ -215,8 +211,7 @@ h3 {
   align-items: end;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0;
   margin: 0;
 }
 
@@ -233,8 +228,7 @@ h3 {
 }
 
 .detail-head {
-  padding-bottom: 22px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0;
 }
 
 .detail-head.split {
@@ -472,9 +466,7 @@ fieldset {
 
 .card {
   padding: 20px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  box-shadow: none;
+  background: var(--bg-raised);
 }
 
 .badge {
@@ -557,7 +549,6 @@ fieldset {
   width: 100%;
   overflow-x: auto;
   background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
   overscroll-behavior-inline: contain;
 }
 
@@ -881,7 +872,6 @@ th.sortable {
   display: flex;
   gap: 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border-subtle);
   scrollbar-width: none;
 }
 
@@ -934,7 +924,6 @@ th.sortable {
 
 .arena-rankings caption {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border-subtle);
   caption-side: top;
   color: var(--text-tertiary);
   font-size: 10px;
@@ -1121,8 +1110,7 @@ th.sortable {
 
   .arena-rankings .mobile-card {
     padding: 14px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-surface);
+    background: var(--bg-raised);
   }
 
   .arena-rankings .mobile-card header {

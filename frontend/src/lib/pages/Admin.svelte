@@ -2420,13 +2420,11 @@
   h2.spaced {
     padding-top: 24px;
     margin-top: 28px;
-    border-top: 1px solid var(--border-strong);
   }
 
   .capability {
     padding: 14px;
     margin: 14px 0;
-    border: 1px solid var(--border-subtle);
     background: var(--bg-inset);
   }
 
@@ -2493,7 +2491,6 @@
     padding-top: 24px;
     margin-top: 24px;
     margin-bottom: 12px;
-    border-top: 1px solid var(--border-strong);
   }
 
   .state-head h2 {
@@ -2547,7 +2544,6 @@
     gap: 18px;
     padding-top: 24px;
     margin-top: 28px;
-    border-top: 1px solid var(--border-strong);
   }
 
   .prompt-list-head h2 {
@@ -2572,7 +2568,6 @@
     gap: 12px;
     padding: 16px;
     margin: 0 0 16px;
-    border: 1px solid var(--border-subtle);
     background: var(--bg-inset);
   }
 
@@ -2662,7 +2657,6 @@
     white-space: nowrap;
     padding: 9px 10px;
     background: var(--bg-inset);
-    border: 1px solid var(--border-subtle);
     font-size: 12.5px;
   }
 

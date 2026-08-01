@@ -158,8 +158,6 @@
     margin-top: 0;
     padding: 22px 0;
     border: 0;
-    border-bottom: 1px solid var(--border-subtle);
-    border-radius: 0;
     background: transparent;
   }
 
@@ -171,9 +169,7 @@
     max-height: min(62vh, 560px);
     padding: 14px;
     overflow: auto;
-    border: 1px solid var(--border-subtle);
-    border-radius: 0;
-    background: var(--bg-inset);
+    background: var(--bg-raised);
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.65;
@@ -202,7 +198,6 @@
   .policy-stats {
     display: grid;
     grid-template-columns: 1fr;
-    border: 1px solid var(--border-subtle);
     background: var(--border-subtle);
     gap: 1px;
   }
@@ -213,7 +208,7 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    background: var(--bg-base);
+    background: var(--bg-raised);
   }
 
   .policy-stats span {
