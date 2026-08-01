@@ -564,7 +564,11 @@
   }
 
   .policy-context strong {
+    min-width: 0;
+    overflow: hidden;
     font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .metric-grid {

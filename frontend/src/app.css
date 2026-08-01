@@ -168,6 +168,13 @@ textarea,
   border: 0;
 }
 
+.truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 h1,
 h2,
 h3 {
@@ -199,6 +206,12 @@ h3 {
   gap: 24px;
   padding: 10px 0 26px;
   margin-bottom: 24px;
+}
+
+.page-head > :first-child,
+.section-head > :first-child,
+.detail-head.split > :first-child {
+  min-width: 0;
 }
 
 .page-head p {
@@ -247,12 +260,20 @@ h3 {
 }
 
 .crumbs {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+.crumbs > :last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .disclosure-list {
@@ -279,12 +300,14 @@ h3 {
 }
 
 .disclosure-primary {
+  min-width: 0;
   display: flex;
   align-items: baseline;
   gap: 10px;
 }
 
 .disclosure-primary strong {
+  flex: 0 0 auto;
   font-size: 12px;
 }
 
@@ -295,7 +318,19 @@ h3 {
 }
 
 .disclosure-meta {
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
   text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disclosure-primary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .disclosure-body {
@@ -462,6 +497,9 @@ textarea {
 
 fieldset {
   min-width: 0;
+  padding: 0;
+  border: 0;
+  margin: 0;
 }
 
 .card {
@@ -470,10 +508,10 @@ fieldset {
 }
 
 .badge {
-  display: inline-flex;
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
   min-height: 22px;
-  align-items: center;
-  gap: 5px;
   padding: 2px 6px;
   border: 1px solid var(--border-strong);
   color: var(--text-secondary);
@@ -481,8 +519,11 @@ fieldset {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.055em;
-  line-height: 1;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  vertical-align: middle;
   white-space: nowrap;
 }
 
@@ -554,6 +595,10 @@ fieldset {
 
 .table-scroll:focus-visible {
   outline-offset: 2px;
+}
+
+.table-scroll :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline-offset: -2px;
 }
 
 table {
@@ -653,15 +698,17 @@ th.sortable {
 
 /* Bits UI: select */
 .select-field {
-  min-width: 180px;
+  min-width: 0;
+  width: 100%;
 }
 
 .select-field.compact {
-  min-width: 150px;
+  min-width: 0;
 }
 
 .select-trigger {
   display: flex;
+  min-width: 0;
   width: 100%;
   min-height: 42px;
   align-items: center;
@@ -672,6 +719,18 @@ th.sortable {
   background: var(--bg-inset);
   border: 1px solid var(--border-strong);
   text-align: left;
+}
+
+.select-value {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-trigger > svg {
+  flex: 0 0 auto;
 }
 
 .select-trigger:hover {
@@ -700,6 +759,7 @@ th.sortable {
 
 .select-item {
   display: flex;
+  min-width: 0;
   min-height: 38px;
   align-items: center;
   justify-content: space-between;
@@ -707,6 +767,14 @@ th.sortable {
   padding: 8px 10px;
   outline: none;
   cursor: default;
+}
+
+.select-item > span:first-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .select-item[data-highlighted] {
@@ -725,6 +793,8 @@ th.sortable {
 /* Bits UI: switch */
 .switch-field {
   display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
   min-height: 40px;
   align-items: center;
   gap: 9px;
@@ -732,6 +802,13 @@ th.sortable {
   color: var(--text-primary);
   cursor: pointer;
   user-select: none;
+}
+
+.switch-field > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .switch-field.disabled {
@@ -897,6 +974,10 @@ th.sortable {
 .tab-trigger[data-state="active"] {
   color: var(--text-primary);
   border-bottom-color: var(--accent);
+}
+
+.tab-trigger:focus-visible {
+  outline-offset: -2px;
 }
 
 .tab-panel {
@@ -1120,6 +1201,18 @@ th.sortable {
     gap: 10px;
   }
 
+  .arena-rankings .mobile-card header > div {
+    min-width: 0;
+  }
+
+  .arena-rankings .mobile-card .portfolio-link {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .arena-rankings .rank {
     color: var(--accent);
     font-family: var(--font-mono);
@@ -1132,6 +1225,9 @@ th.sortable {
     margin: 10px 0;
     color: var(--text-secondary);
     font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .arena-rankings dl {

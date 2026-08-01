@@ -51,6 +51,7 @@
   let notice = $state("");
   let cancelTarget = $state.raw<EvaluationRun | null>(null);
   let cancelDialogOpen = $state(false);
+  let expandedRunIds = $state<number[]>([]);
 
   const enabledPortfolioIds = $derived(
     dashboard?.portfolios
@@ -75,6 +76,12 @@
   function retryBlocked(run: EvaluationRun): boolean {
     const config = dashboard?.portfolios.find((candidate) => candidate.portfolio.id === run.portfolio.id);
     return config ? evaluatorBlocked(config) : true;
+  }
+
+  function toggleRunReport(runId: number): void {
+    expandedRunIds = expandedRunIds.includes(runId)
+      ? expandedRunIds.filter((candidate) => candidate !== runId)
+      : [...expandedRunIds, runId];
   }
 
   function settingsBody(settings: EvaluatorSettings) {
@@ -564,6 +571,16 @@
     <div class="table-scroll" role="region" aria-label="Automated portfolio evaluation runs" tabindex="0">
       <table class="data-table runs-table">
         <caption class="visually-hidden">Automated portfolio evaluation runs, newest first</caption>
+        <colgroup>
+          <col class="run-column" />
+          <col class="portfolio-column" />
+          <col class="model-column" />
+          <col class="status-column" />
+          <col class="attempts-column" />
+          <col class="finished-column" />
+          <col />
+          <col class="actions-column" />
+        </colgroup>
         <thead>
           <tr>
             <th scope="col">Run</th>
@@ -578,42 +595,44 @@
         </thead>
         <tbody aria-live="polite">
           {#each runs as run (run.id)}
+            {@const reportOpen = expandedRunIds.includes(run.id)}
             <tr>
               <td>
                 <span class="badge">{run.trigger_kind}</span>
-                <div class="muted num">{run.scheduled_for ?? `#${run.id}`}</div>
+                <div class="cell-line muted num">{run.scheduled_for ?? `#${run.id}`}</div>
               </td>
               <td>
-                <strong>{run.portfolio.name}</strong>
+                <strong class="cell-line">{run.portfolio.name}</strong>
                 <span class="badge">{run.portfolio.direction}</span>
-                <div class="muted num">{run.portfolio.slug}</div>
+                <div class="cell-line muted num">{run.portfolio.slug}</div>
               </td>
               <td>
-                {run.execution_model_id}
-                <div class="muted num">
+                <span class="cell-line">{run.execution_model_id}</span>
+                <div class="cell-line muted num">
                   {run.harness}{run.reasoning_effort ? ` · ${run.reasoning_effort}` : ""}
                 </div>
-                <div class="muted num">{run.harness_version ?? "not claimed"}</div>
+                <div class="cell-line muted num">{run.harness_version ?? "not claimed"}</div>
               </td>
               <td><span class={`badge ${statusClass(run.status)}`}>{run.status}</span></td>
               <td class="right num">{run.attempt_count}/{run.max_attempts}</td>
-              <td class="num">{fmtDateTime(run.finished_at)}</td>
+              <td class="cell-line num">{fmtDateTime(run.finished_at)}</td>
               <td>
                 {#if run.result}
-                  <span class="muted">
+                  <span class="cell-line muted">
                     {run.result.kind === "allocation" ? "Allocation" : "Signal"} #{run.result.id}
                   </span>
                 {/if}
                 {#if run.report || run.error}
-                  <details>
-                    <summary>{run.error ? "Details" : "Report"}</summary>
-                    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-                    <pre
-                      class={{ "error-report": Boolean(run.error) }}
-                      tabindex="0"
-                      aria-label={`${run.error ? "Error details" : "Evaluation report"} for run ${run.id}`}>{run.error ??
-                        run.report}</pre>
-                  </details>
+                  <button
+                    class="report-toggle"
+                    type="button"
+                    aria-expanded={reportOpen}
+                    aria-controls={`run-report-${run.id}`}
+                    onclick={() => toggleRunReport(run.id)}
+                  >
+                    <span aria-hidden="true">{reportOpen ? "▾" : "▸"}</span>
+                    {run.error ? "Details" : "Report"}
+                  </button>
                 {:else if !run.result}
                   <span class="muted">—</span>
                 {/if}
@@ -646,6 +665,28 @@
                 </div>
               </td>
             </tr>
+            {#if (run.report || run.error) && reportOpen}
+              <tr class="run-report-row">
+                <td id={`run-report-${run.id}`} colspan="8" aria-live="off">
+                  <div class="run-report-panel">
+                    <div class="run-report-head">
+                      <strong class="run-report-title" id={`run-report-title-${run.id}`}>
+                        {run.error ? "Error details" : "Evaluation report"} for {run.portfolio.name} · run #{run.id}
+                      </strong>
+                      <button class="btn small" type="button" onclick={() => toggleRunReport(run.id)}>
+                        Close
+                      </button>
+                    </div>
+                    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                    <pre
+                      class={{ "error-report": Boolean(run.error) }}
+                      tabindex="0"
+                      role="region"
+                      aria-labelledby={`run-report-title-${run.id}`}>{run.error ?? run.report}</pre>
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {:else}
             {#if !loading}
               <tr><td colspan="8" class="table-empty">No evaluation runs match these filters.</td></tr>
@@ -832,27 +873,100 @@
 
   .runs-table {
     min-width: 1080px;
+    table-layout: fixed;
+  }
+
+  .runs-table .run-column {
+    width: 102px;
+  }
+
+  .runs-table .portfolio-column {
+    width: 190px;
+  }
+
+  .runs-table .model-column {
+    width: 170px;
+  }
+
+  .runs-table .status-column {
+    width: 116px;
+  }
+
+  .runs-table .attempts-column {
+    width: 86px;
+  }
+
+  .runs-table .finished-column {
+    width: 180px;
+  }
+
+  .runs-table .actions-column {
+    width: 86px;
   }
 
   .runs-table td {
     vertical-align: top;
   }
 
-  summary {
+  .cell-line {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .report-toggle {
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     color: var(--accent);
-    cursor: pointer;
+    font-size: 12px;
   }
 
   pre {
-    max-width: 420px;
-    max-height: 240px;
+    width: 100%;
+    max-height: min(60vh, 560px);
     overflow: auto;
-    padding: 10px;
-    margin-top: 8px;
+    padding: 14px;
+    margin: 0;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     background: var(--bg-inset);
     font-family: var(--font-mono);
     font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .run-report-row > td {
+    padding: 14px;
+    background: var(--bg-raised);
+  }
+
+  .runs-table .run-report-row:hover > td {
+    background: var(--bg-raised);
+  }
+
+  .run-report-head {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 10px;
+  }
+
+  .run-report-panel {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .run-report-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   pre.error-report {
@@ -924,6 +1038,17 @@
     .weekday {
       min-width: 0;
       padding-inline: 4px;
+    }
+
+    .run-report-row > td {
+      padding: 0;
+    }
+
+    .run-report-panel {
+      position: sticky;
+      left: 0;
+      width: calc(100vw - 56px);
+      padding: 14px;
     }
   }
 

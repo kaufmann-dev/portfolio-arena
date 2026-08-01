@@ -35,6 +35,11 @@
     flex: 0 0 auto;
   }
 
+  span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   @media (max-width: 640px) {
     .market-data-warning {
       align-items: flex-start;
