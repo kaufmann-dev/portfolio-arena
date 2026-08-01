@@ -231,6 +231,7 @@ class TestMcpTools:
         portfolio = data["portfolio"]
         assert data["market_data_status"] == "fresh"
         assert portfolio["prompt"]["mode"] == "both"
+        assert portfolio["prompt"]["direction"] == "both"
         assert portfolio["prompt"]["text"] == sample_prompt["managed_text"]
         assert "managed_text" not in portfolio["prompt"]
         assert "rebuilt_text" not in portfolio["prompt"]
@@ -278,6 +279,7 @@ class TestMcpTools:
         portfolio = data["portfolio"]
         assert portfolio["prompt_mode"] == "rebuilt"
         assert portfolio["prompt"]["mode"] == "both"
+        assert portfolio["prompt"]["direction"] == "both"
         assert portfolio["prompt"]["text"] == sample_prompt["rebuilt_text"]
         assert "managed_text" not in portfolio["prompt"]
         assert "rebuilt_text" not in portfolio["prompt"]
@@ -338,6 +340,7 @@ class TestMcpTools:
             {
                 "name": "MCP Prompt",
                 "mode": "managed",
+                "direction": "long",
                 "managed_text": "Beat SPY.",
             },
         )
@@ -392,6 +395,7 @@ class TestMcpTools:
             {
                 "name": "MCP Both Prompt",
                 "mode": "both",
+                "direction": "both",
                 "managed_text": "Managed MCP strategy.",
                 "rebuilt_text": "Rebuilt MCP strategy.",
             },
@@ -404,6 +408,7 @@ class TestMcpTools:
             {"slug_or_id": str(created["id"])},
         )
         assert generic["mode"] == "both"
+        assert generic["direction"] == "both"
         assert generic["managed_text"] == "Managed MCP strategy."
         assert generic["rebuilt_text"] == "Rebuilt MCP strategy."
         assert generic["allocation_policies"]["managed"]["max_position_weight_pct"] == 25

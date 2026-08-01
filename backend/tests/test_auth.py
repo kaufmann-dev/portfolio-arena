@@ -173,6 +173,7 @@ class TestWriteBoundaries:
                 json={
                     "name": "X",
                     "mode": "managed",
+                    "direction": "long",
                     "managed_text": "y",
                 },
             ).status_code

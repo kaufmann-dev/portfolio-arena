@@ -39,6 +39,8 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
             rebuilt_allocation_policy=app_settings["rebuilt_allocation_policy"],
             managed_wrapper_prompt=managed_wrapper,
             rebuilt_wrapper_prompt=app_settings["rebuilt_wrapper_prompt"],
+            long_direction_instructions=app_settings["long_direction_instructions"],
+            short_direction_instructions=app_settings["short_direction_instructions"],
         )
         evaluator.update_settings(session, attempt_timeout_seconds=7200)
         _enable(session, sample_portfolio)

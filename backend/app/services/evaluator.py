@@ -176,12 +176,14 @@ def _load_run(session: Session, run_id: int, *, lock: bool = False) -> Evaluatio
 def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
     app_settings = admin_ops.get_app_settings(session)
     wrapper_prompt = app_settings[f"{run.portfolio.prompt_mode}_wrapper_prompt"]
+    direction_instructions = app_settings[f"{run.portfolio.direction}_direction_instructions"]
     allocation_policy = app_settings[f"{run.portfolio.prompt_mode}_allocation_policy"]
     return {
         **run_out(run),
         "execution_prompt": automated_execution_prompt(
             run.portfolio,
             wrapper_prompt,
+            direction_instructions,
             allocation_policy,
         ),
     }

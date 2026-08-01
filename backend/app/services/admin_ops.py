@@ -30,12 +30,14 @@ from ..models import (
 )
 from ..seed import (
     DEFAULT_COST_BPS_KEY,
+    LONG_DIRECTION_INSTRUCTIONS_KEY,
     MANAGED_MAX_POSITION_WEIGHT_PCT_KEY,
     MANAGED_MIN_POSITION_WEIGHT_PCT_KEY,
     MANAGED_WRAPPER_PROMPT_KEY,
     REBUILT_MAX_POSITION_WEIGHT_PCT_KEY,
     REBUILT_MIN_POSITION_WEIGHT_PCT_KEY,
     REBUILT_WRAPPER_PROMPT_KEY,
+    SHORT_DIRECTION_INSTRUCTIONS_KEY,
 )
 from ..util import slugify
 from .arena import compute_rebuilt_arena, compute_valuations, load_portfolios
@@ -51,13 +53,19 @@ from .model_catalog import (
     validate_capabilities,
 )
 from .prompt_policy import (
+    DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
+    DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
+    PROMPT_DIRECTIONS,
     PROMPT_MODES,
+    PROMPT_VERSION_DIRECTIONS,
     allocation_policies_out,
     allocation_policy_from_limits,
     allocation_policy_out,
+    prompt_supports_direction,
     prompt_supports_mode,
+    validate_direction_instructions,
     validate_position_weights,
     validate_prompt_texts,
     validate_wrapper_prompt,
@@ -99,7 +107,7 @@ def _validate_prompt_mode(prompt_mode: str) -> None:
 
 
 def _validate_direction(direction: str) -> None:
-    if direction not in {"long", "short"}:
+    if direction not in PROMPT_DIRECTIONS:
         raise AdminOpError(422, "Direction must be 'long' or 'short'.")
 
 
@@ -343,6 +351,7 @@ def prompt_out(prompt: Prompt, settings: dict) -> dict:
         "slug": prompt.slug,
         "name": prompt.name,
         "mode": prompt.mode,
+        "direction": prompt.direction,
         "managed_text": prompt.managed_text,
         "rebuilt_text": prompt.rebuilt_text,
         "notes": prompt.notes,
@@ -355,6 +364,7 @@ def _prompt_version_out(version: PromptVersion) -> dict:
         "version": version.version,
         "name": version.name,
         "mode": version.mode,
+        "direction": version.direction,
         "managed_text": version.managed_text,
         "rebuilt_text": version.rebuilt_text,
         "notes": version.notes,
@@ -387,6 +397,7 @@ def _admin_prompt_out(
         "portfolio_count": portfolio_count,
         "name": current.name,
         "mode": current.mode,
+        "direction": current.direction,
         "managed_text": current.managed_text,
         "rebuilt_text": current.rebuilt_text,
         "notes": current.notes,
@@ -493,9 +504,19 @@ def _validate_prompt_text_contract(
         raise AdminOpError(422, str(exc)) from None
 
 
+def _validate_prompt_direction(direction: str) -> None:
+    if direction not in PROMPT_VERSION_DIRECTIONS:
+        raise AdminOpError(422, "Prompt direction must be 'long', 'short', or 'both'.")
+
+
 def _ensure_prompt_supports_portfolio_mode(prompt: Prompt, prompt_mode: str) -> None:
     if not prompt_supports_mode(prompt_mode, prompt.mode):
         raise AdminOpError(422, f"Prompt does not support {prompt_mode} portfolios.")
+
+
+def _ensure_prompt_supports_portfolio_direction(prompt: Prompt, direction: str) -> None:
+    if not prompt_supports_direction(direction, prompt.direction):
+        raise AdminOpError(422, f"Prompt does not support {direction} portfolios.")
 
 
 def _ensure_prompt_mode_preserves_references(
@@ -526,6 +547,35 @@ def _ensure_prompt_mode_preserves_references(
         )
 
 
+def _ensure_prompt_direction_preserves_references(
+    session: Session,
+    prompt_id: int,
+    version_direction: str,
+) -> None:
+    removed_directions = [
+        direction
+        for direction in sorted(PROMPT_DIRECTIONS)
+        if not prompt_supports_direction(direction, version_direction)
+    ]
+    if not removed_directions:
+        return
+    references = session.execute(
+        select(Portfolio.direction, func.count())
+        .where(
+            Portfolio.prompt_id == prompt_id,
+            Portfolio.direction.in_(removed_directions),
+        )
+        .group_by(Portfolio.direction)
+    ).all()
+    if references:
+        detail = ", ".join(f"{count} {direction}" for direction, count in references)
+        raise AdminOpError(
+            409,
+            "Prompt direction cannot remove support used by existing active or archived "
+            f"portfolios ({detail}).",
+        )
+
+
 def _ensure_prompt_has_no_running_evaluation(session: Session, prompt_id: int) -> None:
     run_count = session.scalar(
         select(func.count())
@@ -549,6 +599,7 @@ def _append_prompt_version(
     *,
     name: str,
     mode: str,
+    direction: str,
     managed_text: str | None,
     rebuilt_text: str | None,
     notes: str,
@@ -562,6 +613,7 @@ def _append_prompt_version(
         version=current.version + 1,
         name=name,
         mode=mode,
+        direction=direction,
         managed_text=managed_text,
         rebuilt_text=rebuilt_text,
         notes=notes,
@@ -579,6 +631,7 @@ def create_prompt(
     *,
     name: str,
     mode: str,
+    direction: str,
     managed_text: str | None,
     rebuilt_text: str | None,
     slug: str | None = None,
@@ -586,6 +639,7 @@ def create_prompt(
 ) -> dict:
     if not name.strip():
         raise AdminOpError(422, "Prompt name is required")
+    _validate_prompt_direction(direction)
     _validate_prompt_text_contract(mode, managed_text, rebuilt_text)
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
@@ -600,6 +654,7 @@ def create_prompt(
         version=1,
         name=name,
         mode=mode,
+        direction=direction,
         managed_text=managed_text,
         rebuilt_text=rebuilt_text,
         notes=notes,
@@ -623,6 +678,7 @@ def update_prompt(
     *,
     name: str | None = None,
     mode: str | None = None,
+    direction: str | None = None,
     managed_text: str | None = None,
     rebuilt_text: str | None = None,
     notes: str | None = None,
@@ -639,6 +695,8 @@ def update_prompt(
     if not next_name.strip():
         raise AdminOpError(422, "Prompt name is required")
     next_mode = mode if mode is not None else current.mode
+    next_direction = direction if direction is not None else current.direction
+    _validate_prompt_direction(next_direction)
     if next_mode == "managed":
         if rebuilt_text is not None:
             raise AdminOpError(422, "Rebuilt prompt text must be null for mode 'managed'.")
@@ -658,10 +716,12 @@ def update_prompt(
         next_rebuilt_text,
     )
     _ensure_prompt_mode_preserves_references(session, prompt.id, next_mode)
+    _ensure_prompt_direction_preserves_references(session, prompt.id, next_direction)
     next_notes = notes if notes is not None else current.notes
     changed = (
         next_name != current.name
         or next_mode != current.mode
+        or next_direction != current.direction
         or next_managed_text != current.managed_text
         or next_rebuilt_text != current.rebuilt_text
         or next_notes != current.notes
@@ -681,6 +741,7 @@ def update_prompt(
         prompt,
         name=next_name,
         mode=next_mode,
+        direction=next_direction,
         managed_text=next_managed_text,
         rebuilt_text=next_rebuilt_text,
         notes=next_notes,
@@ -732,12 +793,15 @@ def restore_prompt_version(
         source.managed_text,
         source.rebuilt_text,
     )
+    _validate_prompt_direction(source.direction)
     _ensure_prompt_mode_preserves_references(session, prompt.id, source.mode)
+    _ensure_prompt_direction_preserves_references(session, prompt.id, source.direction)
     _append_prompt_version(
         session,
         prompt,
         name=source.name,
         mode=source.mode,
+        direction=source.direction,
         managed_text=source.managed_text,
         rebuilt_text=source.rebuilt_text,
         notes=source.notes,
@@ -808,6 +872,7 @@ def create_portfolio(
         raise AdminOpError(422, "Agent not found")
     prompt = _active_prompt_for_portfolio(session, prompt_id)
     _ensure_prompt_supports_portfolio_mode(prompt, prompt_mode)
+    _ensure_prompt_supports_portfolio_direction(prompt, direction)
     clean_name = name.strip()
     requested_slug = slugify(slug or clean_name)
     if clean_name.casefold() == "spy" or requested_slug == "spy":
@@ -855,12 +920,14 @@ def update_portfolio(
     if direction is not None:
         _validate_direction(direction)
     final_prompt_mode = prompt_mode if prompt_mode is not None else portfolio.prompt_mode
-    if prompt_id is not None or prompt_mode is not None:
+    final_direction = direction if direction is not None else portfolio.direction
+    if prompt_id is not None or prompt_mode is not None or direction is not None:
         final_prompt_id = prompt_id if prompt_id is not None else portfolio.prompt_id
         final_prompt = _active_prompt_for_portfolio(session, final_prompt_id)
     else:
         final_prompt = portfolio.prompt
     _ensure_prompt_supports_portfolio_mode(final_prompt, final_prompt_mode)
+    _ensure_prompt_supports_portfolio_direction(final_prompt, final_direction)
     changing_prompt = prompt_id is not None and prompt_id != portfolio.prompt_id
     if name is not None:
         if name.strip().casefold() == "spy":
@@ -1024,6 +1091,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
         raise AdminOpError(404, "Portfolio not found")
     settings = get_app_settings(session)
     wrapper_prompt = settings[f"{match.prompt_mode}_wrapper_prompt"]
+    direction_instructions = settings[f"{match.direction}_direction_instructions"]
     allocation_policy = allocation_policy_out(settings, match.prompt_mode)
     if match.prompt_mode == "rebuilt":
         same_direction = [
@@ -1047,6 +1115,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
                 analysis,
                 arena,
                 allocation_policy,
+                direction_instructions,
                 view="tuned",
                 horizon=None,
                 admin=True,
@@ -1065,6 +1134,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
             valuation,
             valuations,
             allocation_policy,
+            direction_instructions,
             admin=True,
             wrapper_prompt=wrapper_prompt,
         ),
@@ -1412,6 +1482,16 @@ def get_app_settings(session: Session) -> dict:
             REBUILT_WRAPPER_PROMPT_KEY,
             DEFAULT_REBUILT_WRAPPER_PROMPT,
         ),
+        "long_direction_instructions": _setting_value(
+            session,
+            LONG_DIRECTION_INSTRUCTIONS_KEY,
+            DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+        ),
+        "short_direction_instructions": _setting_value(
+            session,
+            SHORT_DIRECTION_INSTRUCTIONS_KEY,
+            DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
+        ),
     }
 
 
@@ -1432,6 +1512,8 @@ def update_app_settings(
     rebuilt_allocation_policy: dict,
     managed_wrapper_prompt: str,
     rebuilt_wrapper_prompt: str,
+    long_direction_instructions: str,
+    short_direction_instructions: str,
 ) -> dict:
     if default_cost_bps < 0:
         raise AdminOpError(422, "Default cost bps cannot be negative")
@@ -1454,6 +1536,8 @@ def update_app_settings(
         REBUILT_MAX_POSITION_WEIGHT_PCT_KEY: str(rebuilt_policy["max_position_weight_pct"]),
         MANAGED_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(managed_wrapper_prompt),
         REBUILT_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(rebuilt_wrapper_prompt),
+        LONG_DIRECTION_INSTRUCTIONS_KEY: validate_direction_instructions(long_direction_instructions),
+        SHORT_DIRECTION_INSTRUCTIONS_KEY: validate_direction_instructions(short_direction_instructions),
     }
     for key, value in values.items():
         setting = session.get(Setting, key)

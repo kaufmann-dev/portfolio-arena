@@ -56,17 +56,19 @@ _arena_: honest, deterministic measurement — not trading and not advice.
   allocation history or rebuilt signal history, cancels in-flight evaluator work, and preserves its
   identity, configuration, schedule, and evaluator audit records. A portfolio cannot switch mode or
   direction until its history has been reset and in-flight cancellation has completed.
-- **Mode-aware strategy prompts.** Every prompt supports Managed, Rebuilt, or Both and stores a
-  complete strategy text for each supported mode. Managed evaluations receive holdings, allocation
-  history, notes, performance, and costs; rebuilt evaluations receive no prior portfolio state and
-  construct each signal independently. The applicable strategy text is inserted into that mode's
-  global editable wrapper under Admin → Settings.
+- **Mode- and direction-aware strategy prompts.** Every prompt independently supports Managed,
+  Rebuilt, or Both and Long, Short, or Both. It stores a complete strategy text for each supported
+  mode; direction support controls which portfolios may use it. Managed evaluations receive
+  holdings, allocation history, notes, performance, and costs; rebuilt evaluations receive no prior
+  portfolio state and construct each signal independently. The applicable strategy text and the
+  editable Long or Short direction instructions are inserted into that mode's global wrapper under
+  Admin → Settings.
 - **One direction per portfolio.** A portfolio is entirely long or entirely short. Submitted weights
   are always positive and total exactly 100%; direction is portfolio metadata, so mixed books and
   signed position weights cannot enter the experiment.
-- **Prompt changes are recoverable.** Editing a prompt's supported modes, mode-specific texts, or
-  metadata appends an immutable version. Prompts are archived rather than deleted, and restoring an
-  older snapshot creates another new version.
+- **Prompt changes are recoverable.** Editing a prompt's supported modes, supported directions,
+  mode-specific texts, or metadata appends an immutable version. Prompts are archived rather than
+  deleted, and restoring an older snapshot creates another new version.
   Archived prompts and version history are browser-admin-only; public and MCP reads expose only the
   current version of active prompts.
 - **Mode-level allocation policies.** Admin → Settings defines server-enforced minimum and maximum
@@ -138,11 +140,11 @@ admin panel.
   Rebuilt analysis exposes Common Policy, Tuned, and Signal Alpha views. Use `create_allocation` for
   managed portfolios and `create_signal` for rebuilt portfolios.
 - **Prompt tools.** MCP can list, read, create, update, and archive active prompts, including their
-  Managed/Rebuilt/Both support and current mode-specific texts. It cannot expose archived prompt
-  content, immutable history, unarchive, or restore operations; those recovery controls remain in
-  the browser admin.
+  Managed/Rebuilt/Both and Long/Short/Both support and current mode-specific texts. It cannot expose
+  archived prompt content, immutable history, unarchive, or restore operations; those recovery
+  controls remain in the browser admin.
 - **Settings tools.** MCP can read and atomically update the default cost, both mode-level allocation
-  policies, and both wrapper prompts.
+  policies, both wrapper prompts, and the Long and Short direction instructions.
 - **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
   `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
   `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
@@ -219,6 +221,11 @@ copied into both fields only for prompts used by both modes or by no portfolio.
 Migration `0019` moves position-sizing limits from prompt versions into global Managed and Rebuilt
 settings, installs 10–25% and 10–100% defaults respectively, and updates both default evaluation
 wrappers without modifying strategy text or portfolio history.
+
+Migration `0020` adds Long/Short/Both support to immutable prompt versions, classifies every existing
+version as Long only, and moves the existing whole-book direction rules into editable Long and Short
+settings inserted through `{{direction_instructions}}`. It does not modify strategy text or portfolio
+history.
 
 ## Development
 

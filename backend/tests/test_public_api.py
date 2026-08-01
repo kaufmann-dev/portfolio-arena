@@ -3,8 +3,10 @@
 from datetime import UTC, datetime, timedelta
 
 from app.services.prompt_policy import (
+    DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
+    DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
 )
 
 from .util import backdate_allocation
@@ -240,6 +242,7 @@ class TestPortfolioDetail:
 
         assert portfolio["prompt"]["slug"] == "weekly-manager-v1"
         assert portfolio["prompt"]["mode"] == "both"
+        assert portfolio["prompt"]["direction"] == "both"
         assert "managed_text" not in portfolio["prompt"]
         assert "rebuilt_text" not in portfolio["prompt"]
         assert "text" not in portfolio["prompt"]
@@ -257,6 +260,7 @@ class TestPortfolioDetail:
         assert "Do not target either low or high\nturnover" in execution_prompt
         assert "prefer retaining the existing allocation" not in execution_prompt
         assert "call `create_allocation` exactly once" in execution_prompt
+        assert execution_prompt.count("This is an all-long portfolio") == 1
         assert "{{" not in execution_prompt
 
         allocation = portfolio["allocations"][0]
@@ -378,6 +382,7 @@ class TestPromptsAndAgents:
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
         payload = client.get("/api/prompts/weekly-manager-v1").json()
         assert payload["prompt"]["mode"] == "both"
+        assert payload["prompt"]["direction"] == "both"
         assert payload["prompt"]["managed_text"].startswith("Manage a portfolio")
         assert payload["prompt"]["rebuilt_text"].startswith("Select a fresh portfolio")
         assert "text" not in payload["prompt"]
@@ -391,6 +396,7 @@ class TestPromptsAndAgents:
             if prompt["id"] == payload["prompt"]["id"]
         )
         assert row["mode"] == "both"
+        assert row["direction"] == "both"
         assert row["managed_text"] == payload["prompt"]["managed_text"]
         assert row["rebuilt_text"] == payload["prompt"]["rebuilt_text"]
         assert "text" not in row
@@ -434,11 +440,14 @@ class TestAdminMisc:
             },
             "managed_wrapper_prompt": DEFAULT_MANAGED_WRAPPER_PROMPT,
             "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+            "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+            "short_direction_instructions": DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
         }
         updated_managed = DEFAULT_MANAGED_WRAPPER_PROMPT.replace(
             "produce its next allocation",
             "produce a carefully reviewed next allocation",
         )
+        updated_short = f"{DEFAULT_SHORT_DIRECTION_INSTRUCTIONS}\n- Reconfirm short exposure."
         response = client.put(
             "/api/settings",
             json={
@@ -453,6 +462,8 @@ class TestAdminMisc:
                 },
                 "managed_wrapper_prompt": updated_managed,
                 "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+                "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+                "short_direction_instructions": updated_short,
             },
             headers=admin_headers,
         )
@@ -473,6 +484,8 @@ class TestAdminMisc:
             },
             "managed_wrapper_prompt": updated_managed,
             "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+            "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+            "short_direction_instructions": updated_short,
         }
 
     def test_settings_reject_invalid_wrapper_placeholders(self, client, admin_headers):
@@ -495,10 +508,21 @@ class TestAdminMisc:
                     },
                     "managed_wrapper_prompt": invalid,
                     "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
+                    "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+                    "short_direction_instructions": DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
                 },
                 headers=admin_headers,
             )
             assert response.status_code == 422, response.text
+
+    def test_settings_reject_blank_direction_instructions_atomically(self, client, admin_headers):
+        original = client.get("/api/settings", headers=admin_headers).json()
+        payload = {**original, "short_direction_instructions": "   "}
+
+        response = client.put("/api/settings", json=payload, headers=admin_headers)
+
+        assert response.status_code == 422, response.text
+        assert client.get("/api/settings", headers=admin_headers).json() == original
 
     def test_settings_reject_infeasible_allocation_policy_atomically(self, client, admin_headers):
         original = client.get("/api/settings", headers=admin_headers).json()
@@ -526,6 +550,7 @@ class TestAdminMisc:
             "min_position_weight_pct": 20,
             "max_position_weight_pct": 50,
         }
+        settings["long_direction_instructions"] = "Use the custom long direction block."
         response = client.put("/api/settings", json=settings, headers=admin_headers)
         assert response.status_code == 200, response.text
 
@@ -540,6 +565,8 @@ class TestAdminMisc:
         }
         assert "Use between 2 and 5 positions." in portfolio["execution_prompt"]
         assert "between 20% and 50% of NAV" in portfolio["execution_prompt"]
+        assert "Use the custom long direction block." in portfolio["execution_prompt"]
+        assert "This is an all-long portfolio" not in portfolio["execution_prompt"]
 
     def test_clear_price_cache(self, client, admin_headers, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"])

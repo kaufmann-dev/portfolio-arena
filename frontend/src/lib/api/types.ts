@@ -25,6 +25,7 @@ export interface PromptRef {
   slug: string;
   name: string;
   mode: PromptAvailability;
+  direction: DirectionAvailability;
   configurable: boolean;
   allocation_policy: AllocationPolicy;
 }
@@ -32,6 +33,7 @@ export interface PromptRef {
 export type PromptMode = "managed" | "rebuilt";
 export type PromptAvailability = PromptMode | "both";
 export type Direction = "long" | "short";
+export type DirectionAvailability = Direction | "both";
 export type MarketDataStatus = "fresh" | "stale" | "unavailable";
 export type ArenaTrack = PromptMode;
 export type RebuiltView = "common" | "tuned" | "signal";
@@ -45,6 +47,8 @@ export interface AppSettings {
   rebuilt_allocation_policy: AllocationPolicy;
   managed_wrapper_prompt: string;
   rebuilt_wrapper_prompt: string;
+  long_direction_instructions: string;
+  short_direction_instructions: string;
 }
 
 export interface Metrics {
@@ -368,6 +372,7 @@ export interface PromptOut {
   slug: string;
   name: string;
   mode: PromptAvailability;
+  direction: DirectionAvailability;
   managed_text: string | null;
   rebuilt_text: string | null;
   notes: string;
@@ -390,6 +395,7 @@ export interface PromptVersion {
   version: number;
   name: string;
   mode: PromptAvailability;
+  direction: DirectionAvailability;
   managed_text: string | null;
   rebuilt_text: string | null;
   notes: string;

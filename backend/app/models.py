@@ -187,6 +187,10 @@ class Prompt(Base):
         return self._required_current_version().mode
 
     @property
+    def direction(self) -> str:
+        return self._required_current_version().direction
+
+    @property
     def managed_text(self) -> str | None:
         return self._required_current_version().managed_text
 
@@ -218,6 +222,10 @@ class PromptVersion(Base):
             name="prompt_versions_mode_check",
         ),
         CheckConstraint(
+            "direction IN ('long', 'short', 'both')",
+            name="prompt_versions_direction_check",
+        ),
+        CheckConstraint(
             "(mode = 'managed' AND managed_text IS NOT NULL "
             "AND btrim(managed_text) <> '' AND rebuilt_text IS NULL) OR "
             "(mode = 'rebuilt' AND managed_text IS NULL "
@@ -244,6 +252,7 @@ class PromptVersion(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     mode: Mapped[str] = mapped_column(Text, nullable=False)
+    direction: Mapped[str] = mapped_column(Text, nullable=False)
     managed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     rebuilt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")

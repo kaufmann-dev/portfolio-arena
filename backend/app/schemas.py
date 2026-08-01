@@ -5,7 +5,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .services.prompt_policy import validate_prompt_texts, validate_wrapper_prompt
+from .services.prompt_policy import (
+    validate_direction_instructions,
+    validate_prompt_texts,
+    validate_wrapper_prompt,
+)
 
 
 class CurrentUser(BaseModel):
@@ -67,6 +71,7 @@ class PromptCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None
     mode: Literal["managed", "rebuilt", "both"]
+    direction: Literal["long", "short", "both"]
     managed_text: str | None = None
     rebuilt_text: str | None = None
     notes: str = ""
@@ -82,6 +87,7 @@ class PromptPatch(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     mode: Literal["managed", "rebuilt", "both"] | None = None
+    direction: Literal["long", "short", "both"] | None = None
     managed_text: str | None = None
     rebuilt_text: str | None = None
     notes: str | None = None
@@ -141,6 +147,8 @@ class SettingsUpdate(BaseModel):
     default_cost_bps: int = Field(ge=0)
     managed_wrapper_prompt: str = Field(min_length=1)
     rebuilt_wrapper_prompt: str = Field(min_length=1)
+    long_direction_instructions: str = Field(min_length=1)
+    short_direction_instructions: str = Field(min_length=1)
     managed_allocation_policy: AllocationPolicyIn
     rebuilt_allocation_policy: AllocationPolicyIn
 
@@ -149,6 +157,14 @@ class SettingsUpdate(BaseModel):
     def validate_wrapper(cls, value: str) -> str:
         try:
             return validate_wrapper_prompt(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+
+    @field_validator("long_direction_instructions", "short_direction_instructions")
+    @classmethod
+    def validate_direction_block(cls, value: str) -> str:
+        try:
+            return validate_direction_instructions(value)
         except ValueError as exc:
             raise ValueError(str(exc)) from None
 

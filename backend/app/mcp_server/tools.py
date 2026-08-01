@@ -354,7 +354,7 @@ def list_models() -> dict:
 
 @mcp.tool()
 def list_prompts() -> dict:
-    """List active prompts (names, modes, and notes, without full text) with
+    """List active prompts (names, modes, directions, and notes, without full text) with
     portfolio usage counts. Use `get_prompt` for current mode-specific text."""
     with _session() as session:
         counts = _portfolio_counts(session, Portfolio.prompt_id)
@@ -366,6 +366,7 @@ def list_prompts() -> dict:
                     "slug": prompt.slug,
                     "name": prompt.name,
                     "mode": prompt.mode,
+                    "direction": prompt.direction,
                     "notes": prompt.notes,
                     "portfolio_count": counts.get(prompt.id, 0),
                 }
@@ -532,17 +533,19 @@ def delete_agent(agent_id: int) -> dict:
 def create_prompt(
     name: str,
     mode: str,
+    direction: str,
     managed_text: str | None = None,
     rebuilt_text: str | None = None,
     notes: str = "",
 ) -> dict:
-    """Create mode-specific strategy text using the arena's mode-level sizing policy."""
+    """Create mode-specific strategy text with long, short, or both direction support."""
     with _session() as session:
         created = _guard(
             admin_ops.create_prompt,
             session,
             name=name,
             mode=mode,
+            direction=direction,
             managed_text=managed_text,
             rebuilt_text=rebuilt_text,
             notes=notes,
@@ -558,11 +561,12 @@ def update_prompt(
     prompt_id: int,
     name: str | None = None,
     mode: str | None = None,
+    direction: str | None = None,
     managed_text: str | None = None,
     rebuilt_text: str | None = None,
     notes: str | None = None,
 ) -> dict:
-    """Edit mode-specific strategy text or notes."""
+    """Edit mode-specific strategy text, direction support, or notes."""
     with _session() as session:
         updated = _guard(
             admin_ops.update_prompt,
@@ -570,6 +574,7 @@ def update_prompt(
             prompt_id,
             name=name,
             mode=mode,
+            direction=direction,
             managed_text=managed_text,
             rebuilt_text=rebuilt_text,
             notes=notes,
@@ -836,7 +841,7 @@ def list_evaluation_runs(
 
 @mcp.tool()
 def get_settings() -> dict:
-    """Read the default cost and managed/rebuilt wrapper prompt templates."""
+    """Read costs, allocation policies, wrappers, and long/short direction instructions."""
     with _session() as session:
         return admin_ops.get_app_settings(session)
 
@@ -848,8 +853,10 @@ def update_settings(
     rebuilt_allocation_policy: AllocationPolicyIn,
     managed_wrapper_prompt: str,
     rebuilt_wrapper_prompt: str,
+    long_direction_instructions: str,
+    short_direction_instructions: str,
 ) -> dict:
-    """Atomically update costs, mode-level sizing, and both wrapper templates."""
+    """Atomically update costs, sizing, wrappers, and direction instructions."""
     with _session() as session:
         return _guard(
             admin_ops.update_app_settings,
@@ -859,4 +866,6 @@ def update_settings(
             rebuilt_allocation_policy=rebuilt_allocation_policy.model_dump(),
             managed_wrapper_prompt=managed_wrapper_prompt,
             rebuilt_wrapper_prompt=rebuilt_wrapper_prompt,
+            long_direction_instructions=long_direction_instructions,
+            short_direction_instructions=short_direction_instructions,
         )

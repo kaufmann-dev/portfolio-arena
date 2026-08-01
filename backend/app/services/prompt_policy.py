@@ -7,9 +7,12 @@ from ..models import Portfolio, Prompt
 
 PROMPT_MODES = {"managed", "rebuilt"}
 PROMPT_VERSION_MODES = {"managed", "rebuilt", "both"}
+PROMPT_DIRECTIONS = {"long", "short"}
+PROMPT_VERSION_DIRECTIONS = {"long", "short", "both"}
 WRAPPER_PLACEHOLDERS = {
     "portfolio_slug",
     "strategy_text",
+    "direction_instructions",
     "allocation_policy",
     "submission_instructions",
 }
@@ -22,6 +25,14 @@ def prompt_supports_mode(prompt_mode: str, version_mode: str) -> bool:
     if version_mode not in PROMPT_VERSION_MODES:
         raise ValueError("Prompt version mode must be 'managed', 'rebuilt', or 'both'.")
     return version_mode == "both" or version_mode == prompt_mode
+
+
+def prompt_supports_direction(portfolio_direction: str, version_direction: str) -> bool:
+    if portfolio_direction not in PROMPT_DIRECTIONS:
+        raise ValueError("Portfolio direction must be 'long' or 'short'.")
+    if version_direction not in PROMPT_VERSION_DIRECTIONS:
+        raise ValueError("Prompt direction must be 'long', 'short', or 'both'.")
+    return version_direction == "both" or version_direction == portfolio_direction
 
 
 def validate_prompt_texts(
@@ -41,6 +52,12 @@ def validate_prompt_texts(
             raise ValueError(f"{prompt_mode.title()} prompt text is required for mode '{mode}'.")
         if not supported and text is not None:
             raise ValueError(f"{prompt_mode.title()} prompt text must be null for mode '{mode}'.")
+
+
+def validate_direction_instructions(value: str) -> str:
+    if not value.strip():
+        raise ValueError("Direction instructions cannot be blank.")
+    return value
 
 
 DEFAULT_MANAGED_WRAPPER_PROMPT = """\
@@ -66,6 +83,9 @@ turnover. Change holdings or target weights when the current evidence indicates 
 allocation should materially improve strategy-aligned prospective excess return after transaction
 costs. Do not trade solely because of ordinary price noise, repeated information, or small or
 unstable ranking differences.
+
+Direction instructions:
+{{direction_instructions}}
 
 Strategy:
 {{strategy_text}}
@@ -105,6 +125,9 @@ rather than convenience or familiarity.
 At every evaluation, construct the complete signal independently from scratch. Search broadly and
 evaluate candidates without regard to previous signals.
 
+Direction instructions:
+{{direction_instructions}}
+
 Strategy:
 {{strategy_text}}
 
@@ -114,6 +137,25 @@ Allocation policy:
 Research all decision-relevant current information with Massive and live web search.
 
 {{submission_instructions}}"""
+
+DEFAULT_LONG_DIRECTION_INSTRUCTIONS = """\
+- This is an all-long portfolio. Every submitted position is a long position.
+- Invest exactly 100% of NAV across USD-denominated equities and ETFs.
+- Do not use cash, shorts, or leverage."""
+
+DEFAULT_SHORT_DIRECTION_INSTRUCTIONS = "\n".join(
+    [
+        (
+            "- This is an all-short portfolio. Select securities whose prices are expected to "
+            "underperform SPY so the short book can outperform the Short SPY reference."
+        ),
+        (
+            "- Submit positive weights totaling exactly 100%; the server interprets every position "
+            "as gross short exposure."
+        ),
+        "- Do not use cash, long positions, or gross exposure above 100%.",
+    ]
+)
 
 MANAGED_AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
 Do not call any write tool: the worker will validate and submit the final structured proposal
@@ -327,31 +369,9 @@ def validate_wrapper_prompt(template: str) -> str:
     return template
 
 
-def allocation_policy_text(policy: dict, direction: str) -> str:
-    if direction not in {"long", "short"}:
-        raise ValueError("Portfolio direction must be long or short")
-    direction_rules = (
-        [
-            "- This is an all-long portfolio. Every submitted position is a long position.",
-            "- Invest exactly 100% of NAV across USD-denominated equities and ETFs.",
-            "- Do not use cash, shorts, or leverage.",
-        ]
-        if direction == "long"
-        else [
-            (
-                "- This is an all-short portfolio. Select securities whose prices are expected to "
-                "underperform SPY so the short book can outperform the Short SPY reference."
-            ),
-            (
-                "- Submit positive weights totaling exactly 100%; the server interprets every "
-                "position as gross short exposure."
-            ),
-            "- Do not use cash, long positions, or gross exposure above 100%.",
-        ]
-    )
+def allocation_policy_text(policy: dict) -> str:
     return "\n".join(
         [
-            *direction_rules,
             (
                 f"- Use between {policy['derived_min_positions']} and "
                 f"{policy['derived_max_positions']} positions."
@@ -369,6 +389,7 @@ def allocation_policy_text(policy: dict, direction: str) -> str:
 def render_execution_prompt(
     portfolio: Portfolio,
     wrapper_prompt: str,
+    direction_instructions: str,
     submission_instructions: str,
     allocation_policy: dict,
 ) -> str:
@@ -379,7 +400,8 @@ def render_execution_prompt(
     values = {
         "portfolio_slug": portfolio.slug,
         "strategy_text": prompt.text_for_mode(portfolio.prompt_mode).strip(),
-        "allocation_policy": allocation_policy_text(allocation_policy, portfolio.direction),
+        "direction_instructions": validate_direction_instructions(direction_instructions).strip(),
+        "allocation_policy": allocation_policy_text(allocation_policy),
         "submission_instructions": submission_instructions.strip(),
     }
     validated = validate_wrapper_prompt(wrapper_prompt)
@@ -389,6 +411,7 @@ def render_execution_prompt(
 def manual_execution_prompt(
     portfolio: Portfolio,
     wrapper_prompt: str,
+    direction_instructions: str,
     allocation_policy: dict,
 ) -> str:
     """Build the complete prompt copied from a portfolio's public detail page."""
@@ -397,12 +420,19 @@ def manual_execution_prompt(
         if portfolio.prompt_mode == "rebuilt"
         else MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS
     )
-    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions, allocation_policy)
+    return render_execution_prompt(
+        portfolio,
+        wrapper_prompt,
+        direction_instructions,
+        submission_instructions,
+        allocation_policy,
+    )
 
 
 def automated_execution_prompt(
     portfolio: Portfolio,
     wrapper_prompt: str,
+    direction_instructions: str,
     allocation_policy: dict,
 ) -> str:
     """Build the complete prompt sent to an integrated evaluator worker."""
@@ -411,4 +441,10 @@ def automated_execution_prompt(
         if portfolio.prompt_mode == "rebuilt"
         else MANAGED_AUTOMATED_SUBMISSION_INSTRUCTIONS
     )
-    return render_execution_prompt(portfolio, wrapper_prompt, submission_instructions, allocation_policy)
+    return render_execution_prompt(
+        portfolio,
+        wrapper_prompt,
+        direction_instructions,
+        submission_instructions,
+        allocation_policy,
+    )

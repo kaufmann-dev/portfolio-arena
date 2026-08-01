@@ -5,11 +5,18 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .models import EvaluatorSettings, Setting
-from .services.prompt_policy import DEFAULT_MANAGED_WRAPPER_PROMPT, DEFAULT_REBUILT_WRAPPER_PROMPT
+from .services.prompt_policy import (
+    DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+    DEFAULT_MANAGED_WRAPPER_PROMPT,
+    DEFAULT_REBUILT_WRAPPER_PROMPT,
+    DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
+)
 
 DEFAULT_COST_BPS_KEY = "default_cost_bps"
 MANAGED_WRAPPER_PROMPT_KEY = "managed_wrapper_prompt"
 REBUILT_WRAPPER_PROMPT_KEY = "rebuilt_wrapper_prompt"
+LONG_DIRECTION_INSTRUCTIONS_KEY = "long_direction_instructions"
+SHORT_DIRECTION_INSTRUCTIONS_KEY = "short_direction_instructions"
 MANAGED_MIN_POSITION_WEIGHT_PCT_KEY = "managed_min_position_weight_pct"
 MANAGED_MAX_POSITION_WEIGHT_PCT_KEY = "managed_max_position_weight_pct"
 REBUILT_MIN_POSITION_WEIGHT_PCT_KEY = "rebuilt_min_position_weight_pct"
@@ -21,6 +28,8 @@ def seed_settings(session: Session) -> None:
         DEFAULT_COST_BPS_KEY: str(get_settings().default_cost_bps),
         MANAGED_WRAPPER_PROMPT_KEY: DEFAULT_MANAGED_WRAPPER_PROMPT,
         REBUILT_WRAPPER_PROMPT_KEY: DEFAULT_REBUILT_WRAPPER_PROMPT,
+        LONG_DIRECTION_INSTRUCTIONS_KEY: DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
+        SHORT_DIRECTION_INSTRUCTIONS_KEY: DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
         MANAGED_MIN_POSITION_WEIGHT_PCT_KEY: "10",
         MANAGED_MAX_POSITION_WEIGHT_PCT_KEY: "25",
         REBUILT_MIN_POSITION_WEIGHT_PCT_KEY: "10",

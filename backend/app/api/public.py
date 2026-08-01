@@ -192,6 +192,7 @@ def portfolio_detail(
         raise HTTPException(422, f"{match.name} belongs to the {match.prompt_mode} track.")
     settings = admin_ops.get_app_settings(session)
     wrapper = settings[f"{match.prompt_mode}_wrapper_prompt"]
+    direction_instructions = settings[f"{match.direction}_direction_instructions"]
     allocation_policy = allocation_policy_out(settings, match.prompt_mode)
     if selected_track == "managed":
         if view != "common" or objective != "canonical" or cost_basis != "net" or horizon is not None:
@@ -210,6 +211,7 @@ def portfolio_detail(
                 valuation,
                 valuations,
                 allocation_policy,
+                direction_instructions,
                 wrapper_prompt=wrapper,
             ),
         }
@@ -243,6 +245,7 @@ def portfolio_detail(
             analysis,
             arena,
             allocation_policy,
+            direction_instructions,
             view=view,
             horizon=horizon,
             wrapper_prompt=wrapper,
@@ -455,6 +458,7 @@ def list_prompts(request: Request, session: Session = Depends(get_session)):
                 "slug": prompt.slug,
                 "name": prompt.name,
                 "mode": prompt.mode,
+                "direction": prompt.direction,
                 "managed_text": prompt.managed_text,
                 "rebuilt_text": prompt.rebuilt_text,
                 "notes": prompt.notes,
@@ -486,6 +490,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
             "slug": prompt.slug,
             "name": prompt.name,
             "mode": prompt.mode,
+            "direction": prompt.direction,
             "managed_text": prompt.managed_text,
             "rebuilt_text": prompt.rebuilt_text,
             "notes": prompt.notes,

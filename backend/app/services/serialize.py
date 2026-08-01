@@ -33,6 +33,7 @@ def prompt_ref(portfolio: Portfolio, allocation_policy: dict) -> dict:
         "slug": portfolio.prompt.slug,
         "name": portfolio.prompt.name,
         "mode": portfolio.prompt.mode,
+        "direction": portfolio.prompt.direction,
         "configurable": True,
         "allocation_policy": allocation_policy,
     }
@@ -145,6 +146,7 @@ def serialize_detail(
     valuation: PortfolioValuation,
     valuations: ArenaValuations,
     allocation_policy: dict,
+    direction_instructions: str,
     admin: bool = False,
     wrapper_prompt: str | None = None,
 ) -> dict:
@@ -169,6 +171,7 @@ def serialize_detail(
         "execution_prompt": manual_execution_prompt(
             portfolio,
             wrapper_prompt or "",
+            direction_instructions,
             allocation_policy,
         ),
         "series": series,
@@ -421,6 +424,7 @@ def serialize_rebuilt_detail(
     analysis: RebuiltPortfolioAnalysis,
     arena: RebuiltArena,
     allocation_policy: dict,
+    direction_instructions: str,
     *,
     view: str,
     horizon: int | None,
@@ -454,6 +458,7 @@ def serialize_rebuilt_detail(
         "execution_prompt": manual_execution_prompt(
             analysis.portfolio,
             wrapper_prompt,
+            direction_instructions,
             allocation_policy,
         ),
         "series": series,

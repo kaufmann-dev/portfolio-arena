@@ -29,6 +29,7 @@ def _create_prompt(client, admin_headers, name: str) -> dict:
         json={
             "name": name,
             "mode": "both",
+            "direction": "both",
             "managed_text": "Manage evidence-backed opportunities.",
             "rebuilt_text": "Select fresh evidence-backed opportunities.",
         },

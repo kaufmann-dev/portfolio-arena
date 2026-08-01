@@ -13,6 +13,7 @@ def _create_prompt(
     *,
     name: str = "Alpha Strategy",
     mode: str = "both",
+    direction: str = "both",
     managed_text: str | None = "Choose evidence-backed managed opportunities.",
     rebuilt_text: str | None = "Choose fresh evidence-backed rebuilt opportunities.",
 ) -> dict:
@@ -21,6 +22,7 @@ def _create_prompt(
         json={
             "name": name,
             "mode": mode,
+            "direction": direction,
             "managed_text": managed_text,
             "rebuilt_text": rebuilt_text,
             "notes": "initial note",
@@ -38,6 +40,7 @@ def _create_portfolio(
     prompt_id: int,
     *,
     prompt_mode: str = "managed",
+    direction: str = "long",
 ) -> dict:
     response = client.post(
         "/api/portfolios",
@@ -46,7 +49,7 @@ def _create_portfolio(
             "agent_id": sample_agent["id"],
             "prompt_id": prompt_id,
             "prompt_mode": prompt_mode,
-            "direction": "long",
+            "direction": direction,
         },
         headers=admin_headers,
     )
@@ -64,6 +67,7 @@ def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
     assert created["portfolio_count"] == 0
     assert created["name"] == "Alpha Strategy"
     assert created["mode"] == "both"
+    assert created["direction"] == "both"
     assert created["managed_text"] == "Choose evidence-backed managed opportunities."
     assert created["rebuilt_text"] == "Choose fresh evidence-backed rebuilt opportunities."
     assert "text" not in created
@@ -80,6 +84,7 @@ def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
         assert prompt.current_version is not None
         assert prompt.current_version.version == 1
         assert prompt.current_version.mode == "both"
+        assert prompt.current_version.direction == "both"
         assert prompt.current_version.managed_text == created["managed_text"]
         assert prompt.current_version.rebuilt_text == created["rebuilt_text"]
         assert (
@@ -98,6 +103,7 @@ def test_prompt_requests_reject_legacy_per_prompt_allocation_policy(client, admi
         json={
             "name": "Legacy Policy",
             "mode": "managed",
+            "direction": "long",
             "managed_text": "Choose managed opportunities.",
             "allocation_policy": {
                 "min_position_weight_pct": 10,
@@ -158,23 +164,45 @@ def test_update_appends_immutable_version_and_noop_does_not(client, admin_header
     assert [version["version"] for version in payload["versions"]] == [2, 1]
     assert payload["versions"][0]["name"] == "Alpha Strategy v2"
     assert payload["versions"][0]["mode"] == "both"
+    assert payload["versions"][0]["direction"] == "both"
     assert payload["versions"][0]["managed_text"] == "Choose managed opportunities with a specific catalyst."
     assert payload["versions"][0]["rebuilt_text"] == created["rebuilt_text"]
     assert payload["versions"][0]["restored_from_version"] is None
     assert payload["versions"][1]["name"] == "Alpha Strategy"
     assert payload["versions"][1]["mode"] == "both"
+    assert payload["versions"][1]["direction"] == "both"
     assert payload["versions"][1]["managed_text"] == created["managed_text"]
     assert payload["versions"][1]["rebuilt_text"] == created["rebuilt_text"]
     assert set(payload["versions"][0]) == {
         "version",
         "name",
         "mode",
+        "direction",
         "managed_text",
         "rebuilt_text",
         "notes",
         "created_at",
         "restored_from_version",
     }
+
+
+def test_direction_edit_appends_immutable_version(client, admin_headers):
+    created = _create_prompt(client, admin_headers, direction="both")
+
+    updated = client.patch(
+        f"/api/admin/prompts/{created['id']}",
+        json={"direction": "long"},
+        headers=admin_headers,
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["direction"] == "long"
+    assert updated.json()["current_version"] == 2
+    history = client.get(
+        f"/api/admin/prompts/{created['id']}/versions",
+        headers=admin_headers,
+    ).json()["versions"]
+    assert [version["direction"] for version in history] == ["long", "both"]
 
 
 @pytest.mark.parametrize(
@@ -203,6 +231,7 @@ def test_create_rejects_invalid_mode_text_combinations(
         json={
             "name": "Invalid mode contract",
             "mode": mode,
+            "direction": "long",
             "managed_text": managed_text,
             "rebuilt_text": rebuilt_text,
         },
@@ -237,9 +266,33 @@ def test_create_serializes_normalized_mode_texts(
     )
 
     assert created["mode"] == mode
+    assert created["direction"] == "both"
     assert created["managed_text"] == managed_text
     assert created["rebuilt_text"] == rebuilt_text
     assert "text" not in created
+
+
+@pytest.mark.parametrize("direction", ["long", "short", "both"])
+def test_create_serializes_direction_support(client, admin_headers, direction):
+    created = _create_prompt(client, admin_headers, direction=direction)
+
+    assert created["direction"] == direction
+    assert created["current_version"] == 1
+
+
+@pytest.mark.parametrize("direction", [None, "unsupported"])
+def test_create_rejects_invalid_direction_support(client, admin_headers, direction):
+    payload = {
+        "name": "Invalid direction contract",
+        "mode": "managed",
+        "managed_text": "Managed strategy.",
+    }
+    if direction is not None:
+        payload["direction"] = direction
+
+    response = client.post("/api/admin/prompts", json=payload, headers=admin_headers)
+
+    assert response.status_code == 422
 
 
 def test_legacy_generic_text_field_is_rejected(client, admin_headers):
@@ -248,6 +301,7 @@ def test_legacy_generic_text_field_is_rejected(client, admin_headers):
         json={
             "name": "Legacy create",
             "mode": "managed",
+            "direction": "long",
             "managed_text": "Managed strategy.",
             "text": "Legacy generic strategy.",
         },
@@ -336,6 +390,38 @@ def test_narrowing_rejects_removing_mode_used_by_any_portfolio(
     assert response.status_code == 409
 
 
+@pytest.mark.parametrize("portfolio_status", ["active", "archived"])
+def test_narrowing_rejects_removing_direction_used_by_any_portfolio(
+    client,
+    admin_headers,
+    sample_agent,
+    portfolio_status,
+):
+    created = _create_prompt(client, admin_headers, direction="both")
+    portfolio = _create_portfolio(
+        client,
+        admin_headers,
+        sample_agent,
+        created["id"],
+        direction="short",
+    )
+    if portfolio_status == "archived":
+        archived = client.patch(
+            f"/api/portfolios/{portfolio['id']}",
+            json={"status": "archived"},
+            headers=admin_headers,
+        )
+        assert archived.status_code == 200, archived.text
+
+    response = client.patch(
+        f"/api/admin/prompts/{created['id']}",
+        json={"direction": "long"},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 409
+
+
 def test_restore_rejects_removing_mode_used_by_archived_portfolio(
     client,
     admin_headers,
@@ -378,6 +464,40 @@ def test_restore_rejects_removing_mode_used_by_archived_portfolio(
     assert restored.status_code == 409
 
 
+def test_restore_rejects_removing_direction_used_by_archived_portfolio(
+    client,
+    admin_headers,
+    sample_agent,
+):
+    created = _create_prompt(client, admin_headers, direction="long")
+    expanded = client.patch(
+        f"/api/admin/prompts/{created['id']}",
+        json={"direction": "both"},
+        headers=admin_headers,
+    )
+    assert expanded.status_code == 200, expanded.text
+    portfolio = _create_portfolio(
+        client,
+        admin_headers,
+        sample_agent,
+        created["id"],
+        direction="short",
+    )
+    archived = client.patch(
+        f"/api/portfolios/{portfolio['id']}",
+        json={"status": "archived"},
+        headers=admin_headers,
+    )
+    assert archived.status_code == 200, archived.text
+
+    restored = client.post(
+        f"/api/admin/prompts/{created['id']}/versions/1/restore",
+        headers=admin_headers,
+    )
+
+    assert restored.status_code == 409
+
+
 def test_admin_list_has_status_history_and_usage_metadata(
     client,
     admin_headers,
@@ -401,6 +521,7 @@ def test_admin_list_has_status_history_and_usage_metadata(
         "portfolio_count",
         "name",
         "mode",
+        "direction",
         "managed_text",
         "rebuilt_text",
         "notes",
@@ -461,6 +582,7 @@ def test_restore_appends_version_and_preserves_archive_status(client, admin_head
     ).json()
     assert history["versions"][0]["version"] == 2
     assert history["versions"][0]["mode"] == "both"
+    assert history["versions"][0]["direction"] == "both"
     assert history["versions"][0]["managed_text"] == created["managed_text"]
     assert history["versions"][0]["rebuilt_text"] == created["rebuilt_text"]
     assert history["versions"][0]["restored_from_version"] == 1
