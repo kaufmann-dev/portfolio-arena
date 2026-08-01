@@ -667,18 +667,36 @@ def create_meta_portfolio_set(
     family_name: str,
     agent_id: int,
     prompt_id: int,
+    variant_label: str | None = None,
 ) -> dict:
     """Atomically create and enable weekday automation for a four-cell arena
     synthesis family: managed long Core, rebuilt long Pulse, managed short
     Shadow, and rebuilt short Probe. The prompt must be arena-scoped and support
-    both modes and directions; the agent must support integrated automation."""
+    both modes and directions; the agent must support integrated automation.
+    An optional variant label distinguishes a comparison set and is appended to
+    every member name, for example `Confluence Core Ultra`."""
     with _session() as session:
         return _guard(
             admin_ops.create_meta_portfolio_set,
             session,
             family_name=family_name,
+            variant_label=variant_label,
             agent_id=agent_id,
             prompt_id=prompt_id,
+        )
+
+
+@mcp.tool()
+def update_meta_portfolio_set(meta_set_id: int, agent_id: int) -> dict:
+    """Atomically reassign all four members of a Meta family to one
+    automation-capable agent. Existing decisions and queued run snapshots are
+    preserved; the new profile applies to future runs."""
+    with _session() as session:
+        return _guard(
+            admin_ops.update_meta_portfolio_set,
+            session,
+            meta_set_id,
+            agent_id=agent_id,
         )
 
 

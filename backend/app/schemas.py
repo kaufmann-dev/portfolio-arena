@@ -146,9 +146,18 @@ class PortfolioCreate(BaseModel):
 
 
 class MetaPortfolioSetCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     family_name: str = Field(min_length=1, max_length=180)
+    variant_label: str | None = Field(default=None, min_length=1, max_length=80)
     agent_id: int
     prompt_id: int
+
+
+class MetaPortfolioSetPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: int
 
 
 class PortfolioPatch(BaseModel):

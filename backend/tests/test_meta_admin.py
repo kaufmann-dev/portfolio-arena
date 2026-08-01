@@ -87,6 +87,7 @@ def test_create_meta_portfolio_set_is_atomic_and_automated(
 
     assert created["slug"] == "confluence"
     assert created["family_name"] == "Confluence"
+    assert created["variant_label"] is None
     assert created["agent_id"] == sample_agent["id"]
     assert created["prompt_id"] == prompt["id"]
     assert [portfolio["name"] for portfolio in created["portfolios"]] == [
@@ -120,6 +121,96 @@ def test_create_meta_portfolio_set_is_atomic_and_automated(
         ).all()
         assert len(configs) == 4
         assert all(config.enabled and config.weekdays == [0, 1, 2, 3, 4] for config in configs)
+
+
+def test_meta_set_variant_appends_member_names_and_keeps_shared_family(
+    client,
+    admin_headers,
+    sample_agent,
+):
+    prompt = _create_arena_prompt(client, admin_headers)
+    base = client.post(
+        "/api/admin/meta-portfolio-sets",
+        json={
+            "family_name": "Confluence",
+            "agent_id": sample_agent["id"],
+            "prompt_id": prompt["id"],
+        },
+        headers=admin_headers,
+    )
+    assert base.status_code == 201, base.text
+
+    response = client.post(
+        "/api/admin/meta-portfolio-sets",
+        json={
+            "family_name": "Confluence",
+            "variant_label": "Ultra",
+            "agent_id": sample_agent["id"],
+            "prompt_id": prompt["id"],
+        },
+        headers=admin_headers,
+    )
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created["slug"] == "confluence-ultra"
+    assert created["family_name"] == "Confluence"
+    assert created["variant_label"] == "Ultra"
+    assert [portfolio["name"] for portfolio in created["portfolios"]] == [
+        "Confluence Core Ultra",
+        "Confluence Pulse Ultra",
+        "Confluence Shadow Ultra",
+        "Confluence Probe Ultra",
+    ]
+
+
+def test_meta_set_agent_reassignment_updates_every_member_atomically(
+    client,
+    admin_headers,
+    sample_agent,
+    sample_model,
+):
+    prompt = _create_arena_prompt(client, admin_headers)
+    created = client.post(
+        "/api/admin/meta-portfolio-sets",
+        json={
+            "family_name": "Confluence",
+            "agent_id": sample_agent["id"],
+            "prompt_id": prompt["id"],
+        },
+        headers=admin_headers,
+    ).json()
+    replacement_response = client.post(
+        "/api/agents",
+        json={
+            "model_id": sample_model["id"],
+            "harness": "codex",
+            "reasoning_effort": "high",
+        },
+        headers=admin_headers,
+    )
+    assert replacement_response.status_code == 201, replacement_response.text
+    replacement = replacement_response.json()
+
+    response = client.patch(
+        f"/api/admin/meta-portfolio-sets/{created['id']}",
+        json={"agent_id": replacement["id"]},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert updated["agent_id"] == replacement["id"]
+    assert [portfolio["id"] for portfolio in updated["portfolios"]] == [
+        portfolio["id"] for portfolio in created["portfolios"]
+    ]
+
+    with session_factory()() as session:
+        meta_set = session.get(MetaPortfolioSet, created["id"])
+        assert meta_set is not None
+        assert meta_set.agent_id == replacement["id"]
+        member_agent_ids = session.scalars(
+            select(Portfolio.agent_id).where(Portfolio.meta_set_id == meta_set.id)
+        ).all()
+        assert member_agent_ids == [replacement["id"]] * 4
 
 
 def test_meta_set_conflict_rolls_back_every_new_member(

@@ -89,6 +89,7 @@ class TestMcpTools:
             "delete_model",
             "create_allocation",
             "create_meta_portfolio_set",
+            "update_meta_portfolio_set",
             "create_signal",
             "update_signal",
             "delete_signal",
@@ -392,7 +393,14 @@ class TestMcpTools:
         detail = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers).json()
         assert detail["portfolio"]["allocations"] == []
 
-    def test_create_meta_portfolio_set(self, client, mcp_headers, sample_agent):
+    def test_create_and_update_meta_portfolio_set(
+        self,
+        client,
+        admin_headers,
+        mcp_headers,
+        sample_agent,
+        sample_model,
+    ):
         prompt = _call_tool(
             client,
             mcp_headers,
@@ -422,6 +430,81 @@ class TestMcpTools:
         )
         assert len(created["portfolios"]) == 4
         assert all(portfolio["evaluator"]["enabled"] for portfolio in created["portfolios"])
+
+        replacement_response = client.post(
+            "/api/agents",
+            json={
+                "model_id": sample_model["id"],
+                "harness": "codex",
+                "reasoning_effort": "high",
+            },
+            headers=admin_headers,
+        )
+        assert replacement_response.status_code == 201, replacement_response.text
+        replacement = replacement_response.json()
+        updated = _call_tool(
+            client,
+            mcp_headers,
+            "update_meta_portfolio_set",
+            {"meta_set_id": created["id"], "agent_id": replacement["id"]},
+        )
+        assert updated["agent_id"] == replacement["id"]
+
+        variant = _call_tool(
+            client,
+            mcp_headers,
+            "create_meta_portfolio_set",
+            {
+                "family_name": "MCP Confluence",
+                "variant_label": "Ultra",
+                "agent_id": sample_agent["id"],
+                "prompt_id": prompt["id"],
+            },
+        )
+        assert variant["slug"] == "mcp-confluence-ultra"
+        assert variant["variant_label"] == "Ultra"
+        assert [portfolio["name"] for portfolio in variant["portfolios"]] == [
+            "MCP Confluence Core Ultra",
+            "MCP Confluence Pulse Ultra",
+            "MCP Confluence Shadow Ultra",
+            "MCP Confluence Probe Ultra",
+        ]
+
+    def test_update_normal_portfolio_agent(
+        self,
+        client,
+        admin_headers,
+        mcp_headers,
+        sample_portfolio,
+        sample_model,
+    ):
+        replacement_response = client.post(
+            "/api/agents",
+            json={
+                "model_id": sample_model["id"],
+                "harness": "codex",
+                "reasoning_effort": "high",
+            },
+            headers=admin_headers,
+        )
+        assert replacement_response.status_code == 201, replacement_response.text
+        replacement = replacement_response.json()
+
+        updated = _call_tool(
+            client,
+            mcp_headers,
+            "update_portfolio",
+            {"portfolio_id": sample_portfolio["id"], "agent_id": replacement["id"]},
+        )
+        assert updated["agent_id"] == replacement["id"]
+
+        detail = _call_tool(
+            client,
+            mcp_headers,
+            "get_portfolio",
+            {"slug_or_id": str(sample_portfolio["id"])},
+        )
+        assert detail["portfolio"]["agent"]["id"] == replacement["id"]
 
     def test_generic_prompt_exposes_both_fields_but_archive_hides_it(self, client, mcp_headers):
         created = _call_tool(

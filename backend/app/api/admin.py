@@ -20,6 +20,7 @@ from ..schemas import (
     EvaluationRunsCreate,
     EvaluatorSettingsUpdate,
     MetaPortfolioSetCreate,
+    MetaPortfolioSetPatch,
     ModelCreate,
     ModelPatch,
     PortfolioCreate,
@@ -271,8 +272,23 @@ def create_meta_portfolio_set(
         admin_ops.create_meta_portfolio_set,
         session,
         family_name=body.family_name,
+        variant_label=body.variant_label,
         agent_id=body.agent_id,
         prompt_id=body.prompt_id,
+    )
+
+
+@router.patch("/admin/meta-portfolio-sets/{meta_set_id}")
+def patch_meta_portfolio_set(
+    meta_set_id: int,
+    body: MetaPortfolioSetPatch,
+    session: Session = Depends(get_session),
+):
+    return _run(
+        admin_ops.update_meta_portfolio_set,
+        session,
+        meta_set_id,
+        agent_id=body.agent_id,
     )
 
 
