@@ -267,6 +267,13 @@
         {/if}
       </main>
     {/key}
+
+    <footer class="site-footer">
+      <nav class="legal-links" aria-label="Legal">
+        <a href="https://legal.kaufmann.dev/imprint?site=arena.kaufmann.dev">Imprint</a>
+        <a href="https://legal.kaufmann.dev/privacy?site=arena.kaufmann.dev">Privacy</a>
+      </nav>
+    </footer>
   </div>
 </Tooltip.Provider>
 
@@ -380,6 +387,33 @@
 
   main:focus {
     outline: none;
+  }
+
+  .site-footer {
+    width: min(100%, 1440px);
+    margin: 0 auto;
+    padding: 0 12px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .legal-links {
+    min-height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .legal-links a {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-tertiary);
+    font-size: 12px;
+  }
+
+  .legal-links a:hover,
+  .legal-links a:focus-visible {
+    color: var(--text-primary);
   }
 
   .route-announcer {
@@ -629,11 +663,16 @@
     main {
       padding: 36px 24px 64px;
     }
+
+    .site-footer {
+      padding-inline: 24px;
+    }
   }
 
   @media (min-width: 1200px) {
     .topbar-inner,
-    main {
+    main,
+    .site-footer {
       padding-inline: 32px;
     }
   }
