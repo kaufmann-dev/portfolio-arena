@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDirection, portfolioAnalysisHref, rebuiltContext, rebuiltContextParams } from "./arena";
+import {
+  DEFAULT_REBUILT_VIEW,
+  parseDirection,
+  portfolioAnalysisHref,
+  rebuiltContext,
+  rebuiltContextParams,
+} from "./arena";
 
 describe("arena direction", () => {
   it("defaults invalid or absent values to long", () => {
@@ -20,6 +26,15 @@ describe("arena direction", () => {
 });
 
 describe("rebuilt analysis context", () => {
+  it("defaults rebuilt overviews to a net portfolio-tuned policy", () => {
+    expect(rebuiltContext(DEFAULT_REBUILT_VIEW, "canonical", "net", 5)).toEqual({
+      view: "tuned",
+      objective: "canonical",
+      cost_basis: "net",
+      horizon: null,
+    });
+  });
+
   it("omits a horizon from constructed-policy views", () => {
     const context = rebuiltContext("common", "max_alpha", "net", 17);
 

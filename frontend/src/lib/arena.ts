@@ -6,6 +6,8 @@ import type {
   RebuiltView,
 } from "./api/types";
 
+export const DEFAULT_REBUILT_VIEW: RebuiltView = "tuned";
+
 export function parseDirection(value: string | null): Direction {
   return value === "short" ? "short" : "long";
 }

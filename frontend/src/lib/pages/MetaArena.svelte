@@ -14,7 +14,7 @@
     RebuiltObjective,
     RebuiltView,
   } from "../api/types";
-  import { parseDirection, rebuiltContext, rebuiltContextParams } from "../arena";
+  import { DEFAULT_REBUILT_VIEW, parseDirection, rebuiltContext, rebuiltContextParams } from "../arena";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import ManagedArenaTable from "../components/ManagedArenaTable.svelte";
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
@@ -76,7 +76,7 @@
     parseDirection(new URLSearchParams(window.location.search).get("direction")),
   );
   let track = $state<ArenaTrack>("rebuilt");
-  let rebuiltView = $state<RebuiltView>("common");
+  let rebuiltView = $state<RebuiltView>(DEFAULT_REBUILT_VIEW);
   let objective = $state<RebuiltObjective>("canonical");
   let costBasis = $state<CostBasis>("net");
   let horizon = $state(5);
