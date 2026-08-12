@@ -62,6 +62,20 @@ describe("frontend geometry", () => {
     expect(ruleBody(appCss, ".tab-trigger:focus-visible")).toMatch(/outline-offset\s*:\s*-2px/);
   });
 
+  it("constrains mobile ranking cards to the viewport", () => {
+    const mobileRankingRules = [
+      ...sourceEnding("app.css").matchAll(/\.arena-rankings \.mobile-rankings\s*\{([^}]+)\}/g),
+    ].map((match) => match[1]);
+
+    expect(
+      mobileRankingRules.some(
+        (declarations) =>
+          /display\s*:\s*grid/.test(declarations) &&
+          /grid-template-columns\s*:\s*minmax\(0,\s*1fr\)/.test(declarations),
+      ),
+    ).toBe(true);
+  });
+
   it("renders evaluation reports in a full-width table row", () => {
     const automationPanel = sourceEnding("AutomationPanel.svelte");
 
