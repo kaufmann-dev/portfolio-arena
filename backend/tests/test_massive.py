@@ -35,6 +35,16 @@ def test_parse_daily_bars_uses_eastern_session_date_and_deduplicates():
     assert massive.parse_aggregate_bars(payload) == [{"date": "2026-07-06", "close": 102.0}]
 
 
+def test_parse_daily_bars_accepts_delayed_entitlement_status():
+    payload = {
+        "status": "DELAYED",
+        "adjusted": True,
+        "results": [{"t": int(datetime(2026, 8, 17, 20, 0, tzinfo=UTC).timestamp() * 1000), "c": 772.67}],
+    }
+
+    assert massive.parse_aggregate_bars(payload) == [{"date": "2026-08-17", "close": 772.67}]
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -50,9 +60,9 @@ def test_parse_daily_bars_rejects_malformed_responses(payload):
         massive.parse_aggregate_bars(payload)
 
 
-def test_parse_grouped_session_filters_requested_symbols():
+def test_parse_grouped_session_accepts_delayed_status_and_filters_requested_symbols():
     payload = {
-        "status": "OK",
+        "status": "DELAYED",
         "adjusted": True,
         "results": [
             {"T": "AAPL", "c": 231.42},
@@ -65,8 +75,23 @@ def test_parse_grouped_session_filters_requested_symbols():
     }
 
 
+def test_parse_grouped_session_skips_one_malformed_requested_symbol():
+    payload = {
+        "status": "DELAYED",
+        "adjusted": True,
+        "results": [
+            {"T": "AAPL", "c": 231.42},
+            {"T": "BAD", "c": None},
+        ],
+    }
+
+    assert massive.parse_grouped_session(payload, date(2026, 8, 17), {"AAPL", "BAD"}) == {
+        "AAPL": [{"date": "2026-08-17", "close": 231.42}]
+    }
+
+
 def test_grouped_session_combines_dividend_and_split_history_factors():
-    factors = massive._session_action_factors(
+    factors, invalid_symbols = massive._session_action_factors(
         [
             {
                 "ticker": "AAPL",
@@ -79,6 +104,7 @@ def test_grouped_session_combines_dividend_and_split_history_factors():
                 "historical_adjustment_factor": 0.98,
             },
             {"ticker": "IGNORED"},
+            {"ticker": "BAD", "ex_dividend_date": "2026-08-17"},
         ],
         [
             {
@@ -88,11 +114,12 @@ def test_grouped_session_combines_dividend_and_split_history_factors():
             },
             {"ticker": "IGNORED"},
         ],
-        {"AAPL"},
+        {"AAPL", "BAD"},
         date(2026, 8, 17),
     )
 
     assert factors == {"AAPL": pytest.approx(0.49)}
+    assert invalid_symbols == {"BAD"}
 
 
 def test_download_grouped_session_uses_three_market_wide_requests(monkeypatch):
@@ -104,9 +131,12 @@ def test_download_grouped_session_uses_three_market_wide_requests(monkeypatch):
             return httpx.Response(
                 200,
                 json={
-                    "status": "OK",
+                    "status": "DELAYED",
                     "adjusted": True,
-                    "results": [{"T": "AAPL", "c": 231.42}],
+                    "results": [
+                        {"T": "AAPL", "c": 231.42},
+                        {"T": "BAD", "c": 10.0},
+                    ],
                 },
             )
         if request.url.path == "/stocks/v1/dividends":
@@ -119,7 +149,8 @@ def test_download_grouped_session_uses_three_market_wide_requests(monkeypatch):
                             "ticker": "AAPL",
                             "ex_dividend_date": "2026-08-17",
                             "historical_adjustment_factor": 0.99,
-                        }
+                        },
+                        {"ticker": "BAD", "ex_dividend_date": "2026-08-17"},
                     ],
                 },
             )
@@ -129,7 +160,7 @@ def test_download_grouped_session_uses_three_market_wide_requests(monkeypatch):
 
     monkeypatch.setattr(massive, "_new_client", lambda: _client(handler))
 
-    result = REAL_DOWNLOAD_GROUPED_SESSION(["AAPL"], date(2026, 8, 17))
+    result = REAL_DOWNLOAD_GROUPED_SESSION(["AAPL", "BAD"], date(2026, 8, 17))
 
     assert result.prices == {"AAPL": [{"date": "2026-08-17", "close": 231.42}]}
     assert result.historical_factors == {"AAPL": 0.99}
