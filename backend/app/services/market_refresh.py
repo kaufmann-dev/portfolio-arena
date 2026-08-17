@@ -5,25 +5,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..config import (
-    MARKET_DATA_UPDATE_GRACE_MINUTES,
-    MARKET_REFRESH_RETRY_SECONDS,
-    MASSIVE_DATA_DELAY_MINUTES,
-)
+from ..config import MARKET_REFRESH_RETRY_SECONDS, PRICE_FETCH_MAX_WORKERS
 from ..db import get_engine
 from . import massive, price_cache
-from .trading_calendar import close_at
+from .trading_calendar import is_trading_day
 
 logger = logging.getLogger(__name__)
 
 # Connection-scoped PostgreSQL advisory lock shared by every web process.
 MARKET_REFRESH_LOCK_KEY = 0x504152454E41
 READY_POLL_SECONDS = 60
+GROUPED_CATCHUP_MAX_SESSIONS = 5
+REGULAR_REFRESH_BATCH_SIZE = PRICE_FETCH_MAX_WORKERS
 
 
 @dataclass(frozen=True)
@@ -78,6 +76,15 @@ def _refresh_locked(session: Session, now: datetime, target) -> RefreshOutcome:
     requirements, readiness = global_pricing_requirements(load_portfolios(session), target)
     symbols = sorted(requirements)
     entries = price_cache.get_cache_entries(session, symbols)
+    updated_symbols = _refresh_grouped_sessions(
+        session,
+        now,
+        target,
+        requirements,
+        readiness,
+        entries,
+    )
+    entries = price_cache.get_cache_entries(session, symbols)
     due = [
         symbol
         for symbol in symbols
@@ -88,14 +95,22 @@ def _refresh_locked(session: Session, now: datetime, target) -> RefreshOutcome:
             True,
             _snapshot_complete(entries, requirements, readiness, target),
             target.isoformat(),
+            tuple(sorted(updated_symbols)),
         )
 
+    due = sorted(
+        due,
+        key=lambda symbol: (
+            symbol != "SPY",
+            symbol not in readiness,
+            symbol,
+        ),
+    )[:REGULAR_REFRESH_BATCH_SIZE]
     fetch_start = min(
         min(requirements[symbol], entries[symbol].start_date) if symbol in entries else requirements[symbol]
         for symbol in due
     )
     fetched = massive.download_prices(due, fetch_start, target)
-    working = dict(entries)
     updates: dict[str, massive.Series | None] = {}
 
     for symbol in due:
@@ -107,44 +122,129 @@ def _refresh_locked(session: Session, now: datetime, target) -> RefreshOutcome:
         candidate = price_cache.cache_entry(merged, now)
         if candidate is None:
             continue
-        working[symbol] = candidate
         updates[symbol] = merged
+        if current is None or merged != current.series:
+            updated_symbols.add(symbol)
 
-    ready_to_publish = _readiness_complete(working, requirements, readiness, target)
-    grace_elapsed = now >= close_at(target) + timedelta(
-        minutes=MASSIVE_DATA_DELAY_MINUTES + MARKET_DATA_UPDATE_GRACE_MINUTES
-    )
-    if updates and (ready_to_publish or grace_elapsed):
-        # One transaction exposes all successful target-session series together.
+    if updates:
         price_cache.set_cached_series(session, updates, fetched_at=now)
         logger.info(
-            "published market-data batch target=%s symbols=%d complete=%s",
+            "published regular market-data batch target=%s symbols=%d",
             target,
             len(updates),
-            ready_to_publish,
-        )
-    elif updates:
-        logger.info(
-            "withheld incomplete market-data batch target=%s ready=%d/%d",
-            target,
-            sum(
-                1
-                for symbol in readiness
-                if _entry_ready(working.get(symbol), requirements.get(symbol), target)
-            ),
-            len(readiness),
         )
 
     for symbol, error in fetched.errors.items():
         logger.warning("market-data refresh failed symbol=%s error=%s", symbol, type(error).__name__)
 
-    complete = _snapshot_complete(working, requirements, readiness, target)
+    entries = price_cache.get_cache_entries(session, symbols)
+    complete = _snapshot_complete(entries, requirements, readiness, target)
     return RefreshOutcome(
         acquired=True,
         complete=complete,
         target_as_of=target.isoformat(),
-        updated_symbols=tuple(sorted(updates)) if updates and (ready_to_publish or grace_elapsed) else (),
+        updated_symbols=tuple(sorted(updated_symbols)),
     )
+
+
+def _refresh_grouped_sessions(
+    session: Session,
+    now: datetime,
+    target: date,
+    requirements: dict[str, date],
+    readiness: set[str],
+    entries: dict[str, price_cache.CacheEntry],
+) -> set[str]:
+    """Append recent closes for live symbols using one market-wide response per session."""
+    working = dict(entries)
+    candidates: set[str] = set()
+    sessions: set[date] = set()
+    for symbol in readiness:
+        entry = working.get(symbol)
+        required_start = requirements.get(symbol)
+        if entry is None or required_start is None or not entry.covers(required_start):
+            continue
+        missing = _forward_sessions(entry.latest_date, target)
+        if 0 < len(missing) <= GROUPED_CATCHUP_MAX_SESSIONS:
+            candidates.add(symbol)
+            sessions.update(missing)
+
+    updated: set[str] = set()
+    for session_date in sorted(sessions):
+        pending = sorted(
+            symbol
+            for symbol in candidates
+            if (latest := working[symbol].latest_date) is not None and latest < session_date
+        )
+        if not pending:
+            continue
+        try:
+            grouped = massive.download_grouped_session(pending, session_date)
+        except massive.MassiveError as exc:
+            logger.warning(
+                "grouped market-data refresh failed target=%s error=%s",
+                session_date,
+                type(exc).__name__,
+            )
+            break
+
+        batch: dict[str, massive.Series | None] = {}
+        for symbol in pending:
+            points = grouped.prices.get(symbol)
+            if not massive.is_valid_series(points):
+                continue
+            current = working[symbol]
+            historical = _apply_historical_factor(
+                current.series,
+                grouped.historical_factors.get(symbol, 1.0),
+                session_date,
+            )
+            merged = price_cache.merge_series(points, historical)
+            candidate = price_cache.cache_entry(merged, now)
+            if candidate is None:
+                continue
+            working[symbol] = candidate
+            batch[symbol] = merged
+            if merged != current.series:
+                updated.add(symbol)
+
+        if batch:
+            price_cache.set_cached_series(session, batch, fetched_at=now)
+            logger.info(
+                "published grouped market-data session=%s symbols=%d requested=%d",
+                session_date,
+                len(batch),
+                len(pending),
+            )
+
+    return updated
+
+
+def _forward_sessions(latest: date | None, target: date) -> list[date]:
+    if latest is None or latest >= target:
+        return []
+    sessions: list[date] = []
+    day = latest + timedelta(days=1)
+    while day <= target:
+        if is_trading_day(day):
+            sessions.append(day)
+        day += timedelta(days=1)
+    return sessions
+
+
+def _apply_historical_factor(series: massive.Series, factor: float, session_date: date) -> massive.Series:
+    if factor == 1.0:
+        return series
+    cutoff = session_date.isoformat()
+    return [
+        {
+            "date": point["date"],
+            "close": round(float(point["close"]) * factor, 6)
+            if str(point["date"]) < cutoff
+            else point["close"],
+        }
+        for point in series
+    ]
 
 
 def _snapshot_complete(entries, requirements, readiness, target) -> bool:

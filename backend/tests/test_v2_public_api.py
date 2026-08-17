@@ -380,7 +380,8 @@ def test_rebuilt_rows_flag_stale_and_frozen_symbol_coverage(
 
     from app.db import session_factory
     from app.models import PriceCache
-    from app.services import arena
+    from app.services import arena, price_cache
+    from app.services.trading_calendar import is_trading_day
 
     portfolio = _create_rebuilt(
         client,
@@ -389,7 +390,17 @@ def test_rebuilt_rows_flag_stale_and_frozen_symbol_coverage(
         sample_prompt,
         "Frozen Rebuilt",
     )
-    _insert_signals(portfolio["id"], _weekdays(date(2026, 4, 1), 5), "AAPL")
+    target = price_cache.latest_available_session(datetime.now(UTC))
+    effective_dates = []
+    day = target
+    while len(effective_dates) < 5:
+        if is_trading_day(day):
+            effective_dates.append(day)
+        day -= timedelta(days=1)
+    history_start = target - timedelta(days=45)
+    while not is_trading_day(history_start):
+        history_start += timedelta(days=1)
+    _insert_signals(portfolio["id"], sorted([history_start, *effective_dates]), "AAPL")
 
     with session_factory()() as session:
         cached = {

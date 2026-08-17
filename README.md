@@ -27,21 +27,23 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
   restarts the worker if it fails, and shuts both down together.
 - **Admin authentication** — confidential OpenID Connect Authorization Code + PKCE, backed by
   opaque server-side sessions. Public leaderboard and detail views remain anonymous.
-- **Prices** — Massive daily stock aggregates, fetched in parallel by a background refresher and
-  converted to a split-and-dividend total-return basis. Series are cached in Postgres with a ~1h
-  TTL; valuation requests never wait on Massive.
+- **Prices** — Massive's grouped daily stock response refreshes every live symbol in one background
+  batch; same-session dividend and split factors keep cached history on a total-return basis. A
+  bounded per-ticker fallback repairs missing history without monopolizing the refresh loop. Series
+  are cached in Postgres with a ~1h TTL, and valuation requests never wait on Massive.
 - **No persistent NAV snapshots.** Managed NAVs derive from allocations; rebuilt NAVs derive from
   immutable daily signals and overlapping cohorts. Exact-input analytics are memoized in a bounded
   in-process cache, and any portfolio or price-content change selects a new result automatically.
   Corporate-action adjustments change retroactively, so deterministic recomputation remains _more_
   correct than database snapshots.
 - **Atomic last-known-data fallback.** The background refresher runs after startup, after cache TTL,
-  and when a newly closed session should be available after Massive's 15-minute delay. A target
-  close becomes visible only when every currently relevant symbol is ready; publication-lag
-  responses stay on the prior complete `as_of` and report `updating`. Short 15/30/60-second retries
-  handle provider lag without delaying page loads. After a 10-minute publication SLA, incomplete
-  data is explicitly `stale`; missing required history is `unavailable`. Updating pages poll a
-  lightweight status endpoint and refresh once the batch is ready.
+  and when a newly closed session should be available after Massive's 15-minute delay. One grouped
+  response publishes the available live-symbol closes in a single transaction; publication-lag
+  responses stay on the prior complete `as_of` and report `updating` until every active allocation
+  and H1-H20 cohort is ready. Short 15/30/60-second retries handle provider lag without delaying page
+  loads. After a 10-minute publication SLA, incomplete data is explicitly `stale`; missing required
+  history is `unavailable`. Updating pages poll a lightweight status endpoint and refresh once the
+  batch is ready.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
   endpoint exposing the operational arena surface as tools, including evaluator administration.
   API-key management and archived prompt recovery stay browser-only; the worker-only queue and

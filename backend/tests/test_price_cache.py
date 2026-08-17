@@ -48,14 +48,15 @@ def _seed(symbol: str, *, fetched_at: datetime = UPDATING_NOW, series=None) -> N
         )
 
 
-def _stub_requirements(monkeypatch) -> None:
+def _stub_requirements(monkeypatch, *symbols: str) -> None:
+    symbols = symbols or ("SPY", "AAPL")
     monkeypatch.setattr(arena, "load_portfolios", lambda _session: [])
     monkeypatch.setattr(
         arena,
         "global_pricing_requirements",
         lambda _portfolios, _target: (
-            _requirements("SPY", "AAPL"),
-            {"SPY", "AAPL"},
+            _requirements(*symbols),
+            set(symbols),
         ),
     )
 
@@ -121,14 +122,22 @@ def test_missing_history_is_unavailable_without_provider_io(monkeypatch):
     assert loaded.unavailable_symbols == {"AAPL"}
 
 
-def test_background_refresh_withholds_partial_target_batch(monkeypatch):
+def test_background_refresh_publishes_grouped_progress_without_waiting_for_every_symbol(monkeypatch):
     _seed("SPY")
     _seed("AAPL")
     _stub_requirements(monkeypatch)
     monkeypatch.setattr(
         massive,
+        "download_grouped_session",
+        lambda _symbols, _session: massive.GroupedSessionDownload(
+            prices={"SPY": [NEW_SERIES[-1]]},
+            historical_factors={},
+        ),
+    )
+    monkeypatch.setattr(
+        massive,
         "download_prices",
-        lambda _symbols, _start, _end: massive.PriceDownloadResult({"SPY": NEW_SERIES, "AAPL": OLD_SERIES}),
+        lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: OLD_SERIES for symbol in symbols}),
     )
 
     with session_factory()() as session:
@@ -137,8 +146,8 @@ def test_background_refresh_withholds_partial_target_batch(monkeypatch):
         rows = {row.symbol: row for row in session.scalars(select(PriceCache)).all()}
 
     assert outcome.complete is False
-    assert outcome.updated_symbols == ()
-    assert rows["SPY"].series == OLD_SERIES
+    assert outcome.updated_symbols == ("SPY",)
+    assert rows["SPY"].end_date == TARGET
     assert rows["AAPL"].series == OLD_SERIES
 
 
@@ -148,10 +157,24 @@ def test_background_refresh_publishes_complete_target_batch(monkeypatch):
     _stub_requirements(monkeypatch)
     monkeypatch.setattr(
         massive,
-        "download_prices",
-        lambda symbols, _start, _end: massive.PriceDownloadResult(
-            {symbol: _series(base_close=101.0 if symbol == "SPY" else 201.0) for symbol in symbols}
+        "download_grouped_session",
+        lambda symbols, session_date: massive.GroupedSessionDownload(
+            prices={
+                symbol: [
+                    {
+                        "date": session_date.isoformat(),
+                        "close": 601.0 if symbol == "SPY" else 251.0,
+                    }
+                ]
+                for symbol in symbols
+            },
+            historical_factors={},
         ),
+    )
+    monkeypatch.setattr(
+        massive,
+        "download_prices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("slow fallback used")),
     )
 
     with session_factory()() as session:
@@ -170,37 +193,85 @@ def test_background_refresh_publishes_complete_target_batch(monkeypatch):
     assert loaded.as_of == TARGET.isoformat()
 
 
-def test_after_grace_background_publishes_degraded_snapshot(monkeypatch):
+def test_grouped_refresh_scales_to_the_live_symbol_count_with_one_provider_batch(monkeypatch):
+    symbols = ("SPY", *(f"SYM{index:03d}" for index in range(488)))
+    with session_factory()() as session:
+        price_cache.set_cached_series(
+            session,
+            {symbol: OLD_SERIES for symbol in symbols},
+            fetched_at=UPDATING_NOW,
+        )
+    _stub_requirements(monkeypatch, *symbols)
+    calls = []
+
+    def grouped(batch, session_date):
+        calls.append((len(batch), session_date))
+        return massive.GroupedSessionDownload(
+            prices={symbol: [{"date": session_date.isoformat(), "close": 101.0}] for symbol in batch},
+            historical_factors={},
+        )
+
+    monkeypatch.setattr(massive, "download_grouped_session", grouped)
+    monkeypatch.setattr(
+        massive,
+        "download_prices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("slow fallback used")),
+    )
+
+    with session_factory()() as session:
+        outcome = market_refresh._refresh_locked(session, UPDATING_NOW, TARGET)
+
+    assert outcome.complete is True
+    assert len(outcome.updated_symbols) == len(symbols)
+    assert calls == [(len(symbols), TARGET)]
+
+
+def test_grouped_refresh_applies_session_corporate_actions_to_cached_history(monkeypatch):
     _seed("SPY")
     _seed("AAPL")
     _stub_requirements(monkeypatch)
     monkeypatch.setattr(
         massive,
+        "download_grouped_session",
+        lambda symbols, session_date: massive.GroupedSessionDownload(
+            prices={
+                symbol: [
+                    {
+                        "date": session_date.isoformat(),
+                        "close": 601.0 if symbol == "SPY" else 251.0,
+                    }
+                ]
+                for symbol in symbols
+            },
+            historical_factors={"AAPL": 0.5},
+        ),
+    )
+    monkeypatch.setattr(
+        massive,
         "download_prices",
-        lambda _symbols, _start, _end: massive.PriceDownloadResult({"SPY": NEW_SERIES, "AAPL": OLD_SERIES}),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("slow fallback used")),
     )
 
     with session_factory()() as session:
-        outcome = market_refresh._refresh_locked(session, STALE_NOW, TARGET)
+        outcome = market_refresh._refresh_locked(session, UPDATING_NOW, TARGET)
     with session_factory()() as session:
-        loaded = arena.load_price_series(
-            session,
-            _requirements("SPY", "AAPL"),
-            {"SPY", "AAPL"},
-            now=STALE_NOW,
-        )
+        aapl = session.get(PriceCache, "AAPL")
 
-    assert outcome.complete is False
+    assert outcome.complete is True
     assert outcome.updated_symbols == ("AAPL", "SPY")
-    assert loaded.status == "stale"
-    assert loaded.as_of == TARGET.isoformat()
-    assert loaded.stale_symbols == {"AAPL"}
+    assert aapl.series[0]["close"] == OLD_SERIES[0]["close"] * 0.5
+    assert aapl.series[-1] == {"date": TARGET.isoformat(), "close": 251.0}
 
 
 def test_provider_failure_preserves_last_complete_snapshot(monkeypatch):
     _seed("SPY")
     _seed("AAPL")
     _stub_requirements(monkeypatch)
+    monkeypatch.setattr(
+        massive,
+        "download_grouped_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(massive.MassiveServiceError("unavailable")),
+    )
     monkeypatch.setattr(
         massive,
         "download_prices",
@@ -215,6 +286,32 @@ def test_provider_failure_preserves_last_complete_snapshot(monkeypatch):
     assert outcome.complete is False
     assert rows["SPY"].series == OLD_SERIES
     assert rows["AAPL"].series == OLD_SERIES
+
+
+def test_regular_fallback_is_prioritized_and_bounded(monkeypatch):
+    symbols = ("SPY", *(f"SYM{index:02d}" for index in range(20)))
+    for symbol in symbols:
+        _seed(symbol)
+    _stub_requirements(monkeypatch, *symbols)
+    monkeypatch.setattr(
+        massive,
+        "download_grouped_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(massive.MassiveServiceError("unavailable")),
+    )
+    requested = []
+
+    def download(batch, _start, _end):
+        requested.extend(batch)
+        return massive.PriceDownloadResult({symbol: None for symbol in batch})
+
+    monkeypatch.setattr(massive, "download_prices", download)
+
+    with session_factory()() as session:
+        outcome = market_refresh._refresh_locked(session, UPDATING_NOW, TARGET)
+
+    assert outcome.complete is False
+    assert requested[0] == "SPY"
+    assert len(requested) == market_refresh.REGULAR_REFRESH_BATCH_SIZE
 
 
 def test_older_fetch_cannot_overwrite_newer_cache_row():

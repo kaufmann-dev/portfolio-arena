@@ -271,9 +271,20 @@ def stub_massive(monkeypatch):
             result[symbol] = points
         return result
 
+    def fake_grouped_download(symbols, session_date):
+        return massive.GroupedSessionDownload(
+            prices={
+                symbol: [{"date": session_date.isoformat(), "close": base_prices[symbol]}]
+                for symbol in symbols
+                if symbol in base_prices
+            },
+            historical_factors={},
+        )
+
     monkeypatch.setattr(massive, "fetch_ticker_details", fake_meta)
     monkeypatch.setattr(massive, "has_complete_dividend_adjustments", lambda _symbol: True)
     monkeypatch.setattr(massive, "download_prices", fake_download)
+    monkeypatch.setattr(massive, "download_grouped_session", fake_grouped_download)
     monkeypatch.setattr(
         massive,
         "search_tickers",

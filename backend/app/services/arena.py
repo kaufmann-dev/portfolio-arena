@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
@@ -37,7 +37,7 @@ from .rebuilt import (
     prepare_market,
     selected_objective_score,
 )
-from .trading_calendar import NY, close_at
+from .trading_calendar import NY, close_at, is_trading_day
 from .valuation import (
     FROZEN_AFTER_TRADING_DAYS,
     AllocationInput,
@@ -227,14 +227,16 @@ def managed_readiness_symbols(portfolios: list[Portfolio], target: date) -> set[
 def rebuilt_readiness_symbols(portfolios: list[Portfolio], target: date) -> set[str]:
     """Symbols in cohorts that can still affect an H1-H20 rebuilt policy."""
     symbols = {SPY_SYMBOL}
-    cohort_count = max(HORIZONS)
+    earliest_active = target
+    remaining_sessions = max(HORIZONS)
+    while remaining_sessions:
+        earliest_active -= timedelta(days=1)
+        if is_trading_day(earliest_active):
+            remaining_sessions -= 1
     for portfolio in portfolios:
-        eligible = sorted(
-            (signal for signal in portfolio.signals if signal.effective_date <= target),
-            key=lambda signal: (signal.effective_date, signal.id),
-            reverse=True,
-        )[:cohort_count]
-        for signal in eligible:
+        for signal in portfolio.signals:
+            if not earliest_active <= signal.effective_date <= target:
+                continue
             symbols.update(position.symbol for position in signal.positions)
     return symbols
 
@@ -1047,16 +1049,24 @@ def _rebuilt_market_flags(
     series: dict[str, Series],
     calendar: list[str],
     as_of: str | None,
-    stale_symbols: set[str],
 ) -> tuple[bool, list[str]]:
-    symbol_starts: dict[str, str] = {}
+    required_by_symbol: dict[str, set[str]] = {}
+    current_symbols: set[str] = set()
+    final_index = len(calendar) - 1
+    maximum_horizon = max(HORIZONS)
     for signal in portfolio.signals:
-        effective = signal.effective_date.isoformat()
+        start_index = bisect_left(calendar, signal.effective_date.isoformat())
+        if start_index > final_index:
+            continue
+        end_index = min(final_index, start_index + maximum_horizon)
+        required = calendar[start_index : end_index + 1]
         for position in signal.positions:
-            current = symbol_starts.get(position.symbol)
-            if current is None or effective < current:
-                symbol_starts[position.symbol] = effective
-    if not symbol_starts:
+            if float(position.weight_pct) <= 0:
+                continue
+            required_by_symbol.setdefault(position.symbol, set()).update(required)
+            if end_index == final_index:
+                current_symbols.add(position.symbol)
+    if not required_by_symbol:
         return False, []
 
     frozen: list[str] = []
@@ -1066,17 +1076,18 @@ def _rebuilt_market_flags(
         if len(calendar) >= FROZEN_AFTER_TRADING_DAYS
         else (calendar[0] if calendar else None)
     )
-    for symbol, effective in symbol_starts.items():
+    for symbol, required in required_by_symbol.items():
         available = {
             str(point["date"])
             for point in series.get(symbol, [])
             if point.get("close") is not None and (as_of is None or str(point["date"]) <= as_of)
         }
-        required = [day for day in calendar if day >= effective]
         last_print = max(available, default=None)
-        if last_print is None or symbol in stale_symbols or any(day not in available for day in required):
+        if last_print is None or any(day not in available for day in required):
             stale = True
-        if last_print is None or (frozen_threshold is not None and last_print < frozen_threshold):
+        if symbol in current_symbols and (
+            last_print is None or (frozen_threshold is not None and last_print < frozen_threshold)
+        ):
             frozen.append(symbol)
     return stale, sorted(frozen)
 
@@ -1313,7 +1324,6 @@ def compute_rebuilt_arena(
                 price_load.series,
                 calendar,
                 as_of,
-                price_load.stale_symbols,
             )
             try:
                 horizon_stats, policies, selected = evaluate_policy_grid(
