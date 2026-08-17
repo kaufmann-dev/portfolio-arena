@@ -27,6 +27,7 @@ CORPORATE_ACTION_LIMIT = 5_000
 MAX_PAGES = 20
 TICKER_SEARCH_PROVIDER_LIMIT = 1_000
 DIVIDEND_HISTORY_LOOKBACK_DAYS = 5 * 366
+SUCCESS_RESPONSE_STATUSES = {"OK", "DELAYED"}
 
 Series = list[dict]  # [{"date": "YYYY-MM-DD", "close": float}, ...]
 
@@ -152,7 +153,7 @@ def _request_json(
 
 
 def _results(payload: dict) -> list[dict]:
-    if payload.get("status") != "OK" or not isinstance(payload.get("results"), list):
+    if payload.get("status") not in SUCCESS_RESPONSE_STATUSES or not isinstance(payload.get("results"), list):
         raise MassiveMalformedResponse("Massive returned an invalid result envelope")
     if not all(isinstance(item, dict) for item in payload["results"]):
         raise MassiveMalformedResponse("Massive returned an invalid result item")
@@ -243,10 +244,12 @@ def parse_grouped_session(
             continue
         try:
             close = float(item["c"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MassiveMalformedResponse("Massive returned a malformed grouped bar") from exc
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Massive returned a malformed grouped bar symbol=%s", symbol)
+            continue
         if not math.isfinite(close) or close <= 0:
-            raise MassiveMalformedResponse("Massive returned an invalid grouped close")
+            logger.warning("Massive returned an invalid grouped close symbol=%s", symbol)
+            continue
         prices[symbol] = [{"date": session_date.isoformat(), "close": round(close, 6)}]
     return prices
 
@@ -316,16 +319,21 @@ def _session_action_factors(
     splits: list[dict],
     symbols: set[str],
     session_date: date,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], set[str]]:
     requested = {symbol.upper() for symbol in symbols}
     dividend_factors: dict[str, float] = {}
     split_factors: dict[str, float] = {}
+    invalid_symbols: set[str] = set()
 
     for dividend in dividends:
         symbol = str(dividend.get("ticker") or "").strip().upper()
         if symbol not in requested:
             continue
-        ex_date, factor = _parse_dividend_adjustment(dividend)
+        try:
+            ex_date, factor = _parse_dividend_adjustment(dividend)
+        except MassiveMalformedResponse:
+            invalid_symbols.add(symbol)
+            continue
         if ex_date == session_date:
             dividend_factors[symbol] = min(factor, dividend_factors.get(symbol, factor))
 
@@ -336,17 +344,20 @@ def _session_action_factors(
         try:
             execution_date = date.fromisoformat(split["execution_date"])
             factor = float(split["historical_adjustment_factor"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MassiveMalformedResponse("Massive returned a malformed split adjustment") from exc
+        except (KeyError, TypeError, ValueError):
+            invalid_symbols.add(symbol)
+            continue
         if not math.isfinite(factor) or factor <= 0:
-            raise MassiveMalformedResponse("Massive returned an invalid split adjustment")
+            invalid_symbols.add(symbol)
+            continue
         if execution_date == session_date:
             split_factors[symbol] = split_factors.get(symbol, 1.0) * factor
 
-    return {
+    factors = {
         symbol: dividend_factors.get(symbol, 1.0) * split_factors.get(symbol, 1.0)
-        for symbol in dividend_factors.keys() | split_factors.keys()
+        for symbol in (dividend_factors.keys() | split_factors.keys()) - invalid_symbols
     }
+    return factors, invalid_symbols
 
 
 def download_grouped_session(symbols: list[str], session_date: date) -> GroupedSessionDownload:
@@ -386,10 +397,21 @@ def download_grouped_session(symbols: list[str], session_date: date) -> GroupedS
             deadline=deadline,
         )
 
-    return GroupedSessionDownload(
-        prices=parse_grouped_session(grouped, session_date, requested),
-        historical_factors=_session_action_factors(dividends, splits, requested, session_date),
+    prices = parse_grouped_session(grouped, session_date, requested)
+    historical_factors, invalid_symbols = _session_action_factors(
+        dividends,
+        splits,
+        requested,
+        session_date,
     )
+    for symbol in invalid_symbols:
+        prices.pop(symbol, None)
+    if invalid_symbols:
+        logger.warning(
+            "Massive grouped session skipped malformed corporate actions symbols=%s",
+            ",".join(sorted(invalid_symbols)),
+        )
+    return GroupedSessionDownload(prices=prices, historical_factors=historical_factors)
 
 
 def _fetch_one(
