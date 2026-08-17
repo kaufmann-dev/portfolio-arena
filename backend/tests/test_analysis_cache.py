@@ -93,8 +93,10 @@ def test_rebuilt_cache_reuses_analysis_and_invalidates_on_signal_change(
     monkeypatch,
 ):
     from app.services import arena
+    from app.services.market_refresh import refresh_market_data_once
 
     portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt)
+    refresh_market_data_once()
     original = arena.evaluate_policy_grid
     calls = 0
 
@@ -127,6 +129,7 @@ def test_rebuilt_cache_reuses_analysis_and_invalidates_on_signal_change(
         headers=admin_headers,
     )
     assert signal.status_code == 201, signal.text
+    refresh_market_data_once()
     assert client.get(url).status_code == 200
     assert calls == 2
 
@@ -219,8 +222,10 @@ def test_rebuilt_policy_scope_avoids_unused_grid_cells(
     monkeypatch,
 ):
     from app.services import arena
+    from app.services.market_refresh import refresh_market_data_once
 
     portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt)
+    refresh_market_data_once()
     original = arena.evaluate_policy_grid
     pair_counts = []
 

@@ -25,4 +25,7 @@ def backdate_allocation(allocation_id: int, days_back: int = 30):
         allocation.effective_date = day
         allocation.entered_at = datetime.combine(day - timedelta(days=1), datetime.min.time(), tzinfo=UTC)
         session.commit()
+    from app.services.market_refresh import refresh_market_data_once
+
+    refresh_market_data_once()
     return day

@@ -395,7 +395,13 @@
   <p class="selector-description">{activeTrackDescription}</p>
 
   {#if currentData}
-    <MarketDataWarning status={displayedMarketData.status} asOf={displayedMarketData.asOf} />
+    {#key `${displayedMarketData.status}:${displayedMarketData.asOf}`}
+      <MarketDataWarning
+        status={displayedMarketData.status}
+        asOf={displayedMarketData.asOf}
+        onReady={loadMetaArena}
+      />
+    {/key}
   {/if}
 
   {#if error}

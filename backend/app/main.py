@@ -1,5 +1,6 @@
 """FastAPI application factory: API routers plus SPA static serving."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +21,7 @@ from .mcp_server import build_mcp_asgi_app, mcp
 from .migrate import run_migrations
 from .ratelimit import limiter
 from .seed import run_seed
+from .services.market_refresh import run_market_refresh_loop
 from .static_files import static_cache_headers
 
 logger = logging.getLogger(__name__)
@@ -45,11 +47,17 @@ async def lifespan(app: FastAPI):
     run_migrations()
     with session_factory()() as session:
         run_seed(session)
+    refresh_stop = asyncio.Event()
+    refresh_task = asyncio.create_task(run_market_refresh_loop(refresh_stop))
     # A mounted sub-app's own lifespan never runs, so the MCP session manager
     # must be started here or every /mcp request fails.
-    async with mcp.session_manager.run():
-        yield
-    dispose_engine()
+    try:
+        async with mcp.session_manager.run():
+            yield
+    finally:
+        refresh_stop.set()
+        await refresh_task
+        dispose_engine()
 
 
 def create_app() -> FastAPI:

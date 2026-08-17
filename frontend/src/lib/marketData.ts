@@ -18,8 +18,9 @@ export interface MarketDataWarningContent {
 
 const MARKET_DATA_SEVERITY: Record<MarketDataStatus, number> = {
   fresh: 0,
-  stale: 1,
-  unavailable: 2,
+  updating: 1,
+  stale: 2,
+  unavailable: 3,
 };
 
 export function combineMarketData(...sources: (MarketDataSource | null | undefined)[]): CombinedMarketData {
@@ -48,7 +49,17 @@ export function combineMarketData(...sources: (MarketDataSource | null | undefin
 export function marketDataWarning(
   status: MarketDataStatus,
   asOf: string | null,
+  targetAsOf: string | null = null,
 ): MarketDataWarningContent | null {
+  if (status === "updating") {
+    return {
+      title: targetAsOf ? `Updating ${targetAsOf} close` : "Updating latest close",
+      message: asOf
+        ? `Valuations remain on the complete ${asOf} snapshot and will refresh automatically.`
+        : "Valuations will appear automatically as soon as the complete snapshot is ready.",
+      role: "status",
+    };
+  }
   if (status !== "unavailable") return null;
 
   return {

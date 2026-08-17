@@ -9,6 +9,7 @@ is cached at first use.
 import os
 import subprocess
 import time
+from unittest.mock import patch
 from uuid import uuid4
 
 os.environ.setdefault("ARENA_PUBLIC_URL", "https://testserver")
@@ -106,9 +107,13 @@ def client(database_url):
     from app.db import dispose_engine
     from app.main import app
 
+    async def idle_market_refresh(stop):
+        await stop.wait()
+
     dispose_engine()
-    with TestClient(app, base_url=PUBLIC_URL) as test_client:
-        yield test_client
+    with patch("app.main.run_market_refresh_loop", idle_market_refresh):
+        with TestClient(app, base_url=PUBLIC_URL) as test_client:
+            yield test_client
     dispose_engine()
 
 
@@ -119,7 +124,7 @@ def clean_db(client):
     from app.oidc import get_oidc_client
     from app.ratelimit import limiter
     from app.seed import run_seed
-    from app.services import arena, price_cache
+    from app.services import arena
 
     limiter.reset()
 
@@ -135,8 +140,6 @@ def clean_db(client):
         )
         session.commit()
         run_seed(session)
-    with price_cache._failure_cache_lock:
-        price_cache._failure_cache.clear()
     arena.clear_analysis_caches()
     get_oidc_client.cache_clear()
     client.cookies.clear()
