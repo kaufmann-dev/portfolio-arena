@@ -9,6 +9,7 @@ from app.services import massive
 
 REAL_FETCH_TICKER_DETAILS = massive.fetch_ticker_details
 REAL_HAS_COMPLETE_DIVIDEND_ADJUSTMENTS = massive.has_complete_dividend_adjustments
+REAL_DOWNLOAD_GROUPED_SESSION = massive.download_grouped_session
 REAL_DOWNLOAD_PRICES = massive.download_prices
 REAL_SEARCH_TICKERS = massive.search_tickers
 
@@ -47,6 +48,96 @@ def test_parse_daily_bars_uses_eastern_session_date_and_deduplicates():
 def test_parse_daily_bars_rejects_malformed_responses(payload):
     with pytest.raises(massive.MassiveMalformedResponse):
         massive.parse_aggregate_bars(payload)
+
+
+def test_parse_grouped_session_filters_requested_symbols():
+    payload = {
+        "status": "OK",
+        "adjusted": True,
+        "results": [
+            {"T": "AAPL", "c": 231.42},
+            {"T": "MSFT", "c": 521.0},
+        ],
+    }
+
+    assert massive.parse_grouped_session(payload, date(2026, 8, 17), {"AAPL"}) == {
+        "AAPL": [{"date": "2026-08-17", "close": 231.42}]
+    }
+
+
+def test_grouped_session_combines_dividend_and_split_history_factors():
+    factors = massive._session_action_factors(
+        [
+            {
+                "ticker": "AAPL",
+                "ex_dividend_date": "2026-08-17",
+                "historical_adjustment_factor": 0.99,
+            },
+            {
+                "ticker": "AAPL",
+                "ex_dividend_date": "2026-08-17",
+                "historical_adjustment_factor": 0.98,
+            },
+            {"ticker": "IGNORED"},
+        ],
+        [
+            {
+                "ticker": "AAPL",
+                "execution_date": "2026-08-17",
+                "historical_adjustment_factor": 0.5,
+            },
+            {"ticker": "IGNORED"},
+        ],
+        {"AAPL"},
+        date(2026, 8, 17),
+    )
+
+    assert factors == {"AAPL": pytest.approx(0.49)}
+
+
+def test_download_grouped_session_uses_three_market_wide_requests(monkeypatch):
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request):
+        requests.append(request)
+        if request.url.path.startswith("/v2/aggs/grouped/"):
+            return httpx.Response(
+                200,
+                json={
+                    "status": "OK",
+                    "adjusted": True,
+                    "results": [{"T": "AAPL", "c": 231.42}],
+                },
+            )
+        if request.url.path == "/stocks/v1/dividends":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "OK",
+                    "results": [
+                        {
+                            "ticker": "AAPL",
+                            "ex_dividend_date": "2026-08-17",
+                            "historical_adjustment_factor": 0.99,
+                        }
+                    ],
+                },
+            )
+        if request.url.path == "/stocks/v1/splits":
+            return httpx.Response(200, json={"status": "OK", "results": []})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    monkeypatch.setattr(massive, "_new_client", lambda: _client(handler))
+
+    result = REAL_DOWNLOAD_GROUPED_SESSION(["AAPL"], date(2026, 8, 17))
+
+    assert result.prices == {"AAPL": [{"date": "2026-08-17", "close": 231.42}]}
+    assert result.historical_factors == {"AAPL": 0.99}
+    assert [request.url.path for request in requests] == [
+        "/v2/aggs/grouped/locale/us/market/stocks/2026-08-17",
+        "/stocks/v1/dividends",
+        "/stocks/v1/splits",
+    ]
 
 
 def test_request_authenticates_with_bearer_header(monkeypatch):

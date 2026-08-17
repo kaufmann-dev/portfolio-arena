@@ -4,6 +4,7 @@ import logging
 import math
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from time import monotonic
 from urllib.parse import quote, urljoin, urlsplit
@@ -78,6 +79,12 @@ class PriceDownloadResult(dict):
     @property
     def permanent_failures(self) -> set[str]:
         return {symbol for symbol, error in self.errors.items() if is_permanent_symbol_error(error)}
+
+
+@dataclass(frozen=True)
+class GroupedSessionDownload:
+    prices: dict[str, Series]
+    historical_factors: dict[str, float]
 
 
 def is_valid_series(data) -> bool:
@@ -219,6 +226,31 @@ def parse_aggregate_bars(payload: dict) -> Series | None:
     return parsed or None
 
 
+def parse_grouped_session(
+    payload: dict,
+    session_date: date,
+    symbols: set[str],
+) -> dict[str, Series]:
+    """Extract requested adjusted closes from one market-wide daily response."""
+    if payload.get("adjusted") is not True:
+        raise MassiveMalformedResponse("Massive grouped response was not split-adjusted")
+
+    requested = {symbol.upper() for symbol in symbols}
+    prices: dict[str, Series] = {}
+    for item in _results(payload):
+        symbol = str(item.get("T") or "").strip().upper()
+        if symbol not in requested:
+            continue
+        try:
+            close = float(item["c"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MassiveMalformedResponse("Massive returned a malformed grouped bar") from exc
+        if not math.isfinite(close) or close <= 0:
+            raise MassiveMalformedResponse("Massive returned an invalid grouped close")
+        prices[symbol] = [{"date": session_date.isoformat(), "close": round(close, 6)}]
+    return prices
+
+
 def _parse_dividend_adjustment(dividend: dict) -> tuple[date, float]:
     try:
         ex_date = date.fromisoformat(dividend["ex_dividend_date"])
@@ -277,6 +309,87 @@ def _fetch_dividends(
         deadline=deadline,
     )
     return dividends
+
+
+def _session_action_factors(
+    dividends: list[dict],
+    splits: list[dict],
+    symbols: set[str],
+    session_date: date,
+) -> dict[str, float]:
+    requested = {symbol.upper() for symbol in symbols}
+    dividend_factors: dict[str, float] = {}
+    split_factors: dict[str, float] = {}
+
+    for dividend in dividends:
+        symbol = str(dividend.get("ticker") or "").strip().upper()
+        if symbol not in requested:
+            continue
+        ex_date, factor = _parse_dividend_adjustment(dividend)
+        if ex_date == session_date:
+            dividend_factors[symbol] = min(factor, dividend_factors.get(symbol, factor))
+
+    for split in splits:
+        symbol = str(split.get("ticker") or "").strip().upper()
+        if symbol not in requested:
+            continue
+        try:
+            execution_date = date.fromisoformat(split["execution_date"])
+            factor = float(split["historical_adjustment_factor"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MassiveMalformedResponse("Massive returned a malformed split adjustment") from exc
+        if not math.isfinite(factor) or factor <= 0:
+            raise MassiveMalformedResponse("Massive returned an invalid split adjustment")
+        if execution_date == session_date:
+            split_factors[symbol] = split_factors.get(symbol, 1.0) * factor
+
+    return {
+        symbol: dividend_factors.get(symbol, 1.0) * split_factors.get(symbol, 1.0)
+        for symbol in dividend_factors.keys() | split_factors.keys()
+    }
+
+
+def download_grouped_session(symbols: list[str], session_date: date) -> GroupedSessionDownload:
+    """Fetch one U.S. session for many symbols in three market-wide requests."""
+    requested = {symbol.upper() for symbol in symbols}
+    if not requested:
+        return GroupedSessionDownload(prices={}, historical_factors={})
+
+    deadline = _price_fetch_deadline()
+    with _new_client() as client:
+        grouped = _request_json(
+            client,
+            f"/v2/aggs/grouped/locale/us/market/stocks/{session_date.isoformat()}",
+            {"adjusted": "true"},
+            deadline=deadline,
+        )
+        dividends, _ = _paginated_results(
+            client,
+            "/stocks/v1/dividends",
+            {
+                "ex_dividend_date.gte": session_date.isoformat(),
+                "ex_dividend_date.lte": session_date.isoformat(),
+                "sort": "ex_dividend_date.asc",
+                "limit": CORPORATE_ACTION_LIMIT,
+            },
+            deadline=deadline,
+        )
+        splits, _ = _paginated_results(
+            client,
+            "/stocks/v1/splits",
+            {
+                "execution_date.gte": session_date.isoformat(),
+                "execution_date.lte": session_date.isoformat(),
+                "sort": "execution_date.asc",
+                "limit": CORPORATE_ACTION_LIMIT,
+            },
+            deadline=deadline,
+        )
+
+    return GroupedSessionDownload(
+        prices=parse_grouped_session(grouped, session_date, requested),
+        historical_factors=_session_action_factors(dividends, splits, requested, session_date),
+    )
 
 
 def _fetch_one(
