@@ -13,6 +13,7 @@ from ..models import Agent, ModelDefinition, Portfolio, Prompt, Signal
 from ..ratelimit import limiter
 from ..services import admin_ops
 from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
+from ..services.market_refresh import market_snapshot
 from ..services.meta import (
     control_history,
     is_meta_portfolio,
@@ -42,6 +43,17 @@ Objective = Literal["canonical", "max_alpha", "max_information_ratio", "max_shar
 CostBasis = Literal["net", "gross"]
 Track = Literal["managed", "rebuilt"]
 Direction = Literal["long", "short"]
+
+
+@router.get("/market-data")
+@limiter.limit("120/minute")
+def market_data(request: Request, session: Session = Depends(get_session)):
+    snapshot = market_snapshot(session)
+    return {
+        "as_of": snapshot.as_of,
+        "target_as_of": snapshot.target_as_of,
+        "market_data_status": snapshot.status,
+    }
 
 
 def _validate_rebuilt_context(

@@ -166,7 +166,9 @@ def test_meta_barrier_waits_through_retry_then_uses_failure_fallback(
 ):
     from app.db import session_factory
     from app.models import MetaBatch
+    from tests.util import backdate_allocation
 
+    backdate_allocation(sample_portfolio["allocation"]["id"], days_back=30)
     _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
     with session_factory()() as session:
@@ -491,7 +493,9 @@ def test_unlinked_active_source_blocks_batch_past_close(
 ):
     from app.db import session_factory
     from app.models import MetaBatch
+    from tests.util import backdate_allocation
 
+    backdate_allocation(sample_portfolio["allocation"]["id"], days_back=30)
     _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 18, 40, tzinfo=UTC)
     with session_factory()() as session:

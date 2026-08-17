@@ -20,8 +20,9 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from ..config import MARKET_DATA_UPDATE_GRACE_MINUTES, MASSIVE_DATA_DELAY_MINUTES
 from ..models import Agent, Allocation, ModelDefinition, Portfolio, Signal
-from . import massive, price_cache
+from . import price_cache
 from .analysis_cache import SingleFlightLru, fingerprint
 from .rebuilt import (
     EXPOSURES,
@@ -36,7 +37,7 @@ from .rebuilt import (
     prepare_market,
     selected_objective_score,
 )
-from .trading_calendar import NY
+from .trading_calendar import NY, close_at
 from .valuation import (
     FROZEN_AFTER_TRADING_DAYS,
     AllocationInput,
@@ -53,7 +54,7 @@ from .valuation import (
 logger = logging.getLogger(__name__)
 
 SPY_SYMBOL = "SPY"
-MarketDataStatus = Literal["fresh", "stale", "unavailable"]
+MarketDataStatus = Literal["fresh", "updating", "stale", "unavailable"]
 AnalysisView = Literal["common", "tuned", "signal"]
 ANALYTICS_ENGINE_VERSION = 1
 COMMON_INCUBATION_POLICY = (20, 100)
@@ -81,6 +82,8 @@ class ArenaValuations:
 class PriceSeriesLoad:
     series: dict[str, Series]
     status: MarketDataStatus
+    as_of: str | None
+    target_as_of: str
     stale_symbols: set[str] = field(default_factory=set)
     unavailable_symbols: set[str] = field(default_factory=set)
 
@@ -199,111 +202,135 @@ def signal_pricing_requirements(signals: list[Signal], fallback_start: date) -> 
     return requirements
 
 
+def merge_pricing_requirements(*groups: dict[str, date]) -> dict[str, date]:
+    merged: dict[str, date] = {}
+    for group in groups:
+        for symbol, required_start in group.items():
+            current = merged.get(symbol)
+            if current is None or required_start < current:
+                merged[symbol] = required_start
+    return merged
+
+
+def managed_readiness_symbols(portfolios: list[Portfolio], target: date) -> set[str]:
+    """Symbols whose latest managed allocations must print before publication."""
+    symbols = {SPY_SYMBOL}
+    for portfolio in portfolios:
+        eligible = [item for item in portfolio.allocations if item.effective_date <= target]
+        if not eligible:
+            continue
+        latest = max(eligible, key=lambda item: (item.effective_date, item.id))
+        symbols.update(position.symbol for position in latest.positions)
+    return symbols
+
+
+def rebuilt_readiness_symbols(portfolios: list[Portfolio], target: date) -> set[str]:
+    """Symbols in cohorts that can still affect an H1-H20 rebuilt policy."""
+    symbols = {SPY_SYMBOL}
+    cohort_count = max(HORIZONS)
+    for portfolio in portfolios:
+        eligible = sorted(
+            (signal for signal in portfolio.signals if signal.effective_date <= target),
+            key=lambda signal: (signal.effective_date, signal.id),
+            reverse=True,
+        )[:cohort_count]
+        for signal in eligible:
+            symbols.update(position.symbol for position in signal.positions)
+    return symbols
+
+
+def global_pricing_requirements(
+    portfolios: list[Portfolio], target: date
+) -> tuple[dict[str, date], set[str]]:
+    """All persisted price history plus the subset required for today's watermark."""
+    managed = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "managed"]
+    rebuilt = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "rebuilt"]
+    allocations = [
+        allocation
+        for portfolio in managed
+        for allocation in portfolio.allocations
+        if allocation.effective_date <= target
+    ]
+    signals = [
+        signal for portfolio in rebuilt for signal in portfolio.signals if signal.effective_date <= target
+    ]
+    managed_requirements = pricing_requirements(allocations) if allocations else {}
+    rebuilt_requirements = signal_pricing_requirements(
+        signals,
+        fallback_start=target - timedelta(days=45),
+    )
+    requirements = merge_pricing_requirements(managed_requirements, rebuilt_requirements)
+    readiness = managed_readiness_symbols(managed, target) | rebuilt_readiness_symbols(rebuilt, target)
+    return requirements, readiness
+
+
 def load_price_series(
     session: Session,
     required_starts: dict[str, date],
+    readiness_symbols: set[str] | None = None,
     now: datetime | None = None,
 ) -> PriceSeriesLoad:
-    """Refresh due rows without discarding the last usable cached series."""
+    """Read a coherent cache snapshot without performing provider I/O."""
     now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
     symbols = sorted(required_starts)
+    latest_available = price_cache.latest_available_session(now)
     if not symbols:
-        return PriceSeriesLoad(series={}, status="fresh")
+        return PriceSeriesLoad(
+            series={},
+            status="fresh",
+            as_of=None,
+            target_as_of=latest_available.isoformat(),
+        )
 
     entries = price_cache.get_cache_entries(session, symbols)
     series: dict[str, Series] = {}
-    stale_symbols: set[str] = set()
     unavailable_symbols: set[str] = set()
-    latest_available = price_cache.latest_available_session(now)
-
-    due = [
-        symbol
-        for symbol in symbols
-        if price_cache.refresh_due(entries.get(symbol), required_starts[symbol], now)
-    ]
-    cooled_down = set(price_cache.recent_failed_symbols(due))
-    to_fetch = [symbol for symbol in due if symbol not in cooled_down]
-    accepted: dict[str, price_cache.CacheEntry] = {}
-    successful: set[str] = set()
-    failed: set[str] = set()
-
-    if to_fetch:
-        fetch_start = min(
-            min(required_starts[symbol], entries[symbol].start_date)
-            if symbol in entries
-            else required_starts[symbol]
-            for symbol in to_fetch
-        )
-        fetched = massive.download_prices(to_fetch, fetch_start, latest_available)
-        complete_updates: dict[str, Series | None] = {}
-        lagging_updates: dict[str, Series | None] = {}
-        lagging_inserts: dict[str, Series | None] = {}
-
-        for symbol in to_fetch:
-            data = fetched.get(symbol)
-            candidate = price_cache.cache_entry(data, now)
-            covers_history = bool(candidate and candidate.covers(required_starts[symbol]))
-            refresh_complete = bool(candidate and candidate.has_session(latest_available))
-
-            if covers_history and refresh_complete:
-                accepted[symbol] = candidate
-                complete_updates[symbol] = data
-                successful.add(symbol)
-                continue
-
-            failed.add(symbol)
-            current = entries.get(symbol)
-            # A lagging but historically complete response remains useful
-            # last-known data. Preserve a current row when it already covers
-            # history; otherwise retain both non-overlapping coverage edges.
-            if covers_history and not (current and current.covers(required_starts[symbol])):
-                if current:
-                    merged = price_cache.merge_series(candidate.series, current.series)
-                    retained = price_cache.cache_entry(
-                        merged,
-                        price_cache.expired_fetched_at(now),
-                    )
-                    if retained and retained.covers(required_starts[symbol]):
-                        accepted[symbol] = retained
-                        lagging_updates[symbol] = merged
-                else:
-                    accepted[symbol] = candidate
-                    lagging_inserts[symbol] = data
-
-        price_cache.record_refresh_results(successful, failed)
-        price_cache.set_cached_series(session, complete_updates, fetched_at=now)
-        price_cache.set_cached_series(
-            session,
-            lagging_updates,
-            fetched_at=price_cache.expired_fetched_at(now),
-        )
-        price_cache.insert_cached_series_if_missing(
-            session,
-            lagging_inserts,
-            fetched_at=now,
-        )
 
     for symbol in symbols:
-        entry = accepted.get(symbol) or entries.get(symbol)
+        entry = entries.get(symbol)
         if not entry or not entry.covers(required_starts[symbol]):
-            if entry and massive.is_valid_series(entry.series):
+            if entry:
                 series[symbol] = entry.series
             unavailable_symbols.add(symbol)
             continue
-
         series[symbol] = entry.series
-        if symbol in due and symbol not in successful:
-            stale_symbols.add(symbol)
 
-    status: MarketDataStatus = "fresh"
+    readiness = set(readiness_symbols or symbols)
+    readiness.add(SPY_SYMBOL)
+    ready_dates: dict[str, date | None] = {}
+    for symbol in readiness:
+        entry = entries.get(symbol)
+        dates = [day for day in entry.dates if day <= latest_available] if entry else []
+        ready_dates[symbol] = dates[-1] if dates else None
+
+    available_ready_dates = [day for day in ready_dates.values() if day is not None]
+    coherent_date = min(available_ready_dates, default=None)
+    spy_date = ready_dates.get(SPY_SYMBOL)
+    lagging_symbols = {symbol for symbol, day in ready_dates.items() if day is None or day < latest_available}
+
+    status: MarketDataStatus
     if unavailable_symbols:
         status = "unavailable"
-    elif stale_symbols:
-        status = "stale"
+    elif not lagging_symbols:
+        status = "fresh"
+    else:
+        publication_cutoff = close_at(latest_available) + timedelta(
+            minutes=MASSIVE_DATA_DELAY_MINUTES + MARKET_DATA_UPDATE_GRACE_MINUTES
+        )
+        status = "updating" if now < publication_cutoff else "stale"
+
+    # While a batch is being assembled, retain the last date common to every
+    # live symbol. After the SLA, advance with SPY and surface degraded data.
+    as_of_date = coherent_date if status == "updating" else spy_date
+
     return PriceSeriesLoad(
         series=series,
         status=status,
-        stale_symbols=stale_symbols,
+        as_of=as_of_date.isoformat() if as_of_date is not None else None,
+        target_as_of=latest_available.isoformat(),
+        stale_symbols=lagging_symbols if status == "stale" else set(),
         unavailable_symbols=unavailable_symbols,
     )
 
@@ -386,14 +413,6 @@ def _current_holding_notes(portfolio: Portfolio, result: ValuationResult) -> Val
     )
 
 
-def _as_of(spy_series: Series, latest_available: date) -> str | None:
-    """Last SPY close Massive should expose after its availability delay."""
-    available = [
-        point["date"] for point in spy_series if date.fromisoformat(point["date"]) <= latest_available
-    ]
-    return max(available, default=None)
-
-
 def load_portfolios(session: Session) -> list[Portfolio]:
     return list(
         session.scalars(
@@ -433,16 +452,23 @@ def compute_valuations(
             )
         return empty
 
-    all_allocations = [a for p in portfolios for a in p.allocations]
+    target = price_cache.latest_available_session(now)
+    all_allocations = [
+        allocation
+        for portfolio in portfolios
+        for allocation in portfolio.allocations
+        if allocation.effective_date <= target
+    ]
     if not all_allocations:
         return no_data()
 
     requirements = pricing_requirements(all_allocations)
-    price_load = load_price_series(session, requirements, now)
+    readiness = managed_readiness_symbols(portfolios, target)
+    price_load = load_price_series(session, requirements, readiness, now)
     series = price_load.series
 
     spy_series = series.get(SPY_SYMBOL) or []
-    as_of = _as_of(spy_series, price_cache.latest_available_session(now))
+    as_of = price_load.as_of
     if as_of is None:
         return no_data(price_load.status)
     calendar = build_calendar(spy_series, as_of)
@@ -509,7 +535,10 @@ def compute_valuations(
             error=computation.error,
         )
         if result is not None:
-            if (result.stale_days or result.frozen_symbols) and valuations.market_data_status == "fresh":
+            if (result.stale_days or result.frozen_symbols) and valuations.market_data_status in (
+                "fresh",
+                "updating",
+            ):
                 valuations.market_data_status = "stale"
         else:
             valuations.by_portfolio_id[portfolio.id] = PortfolioValuation(
@@ -1240,14 +1269,18 @@ def compute_rebuilt_arena(
         common_source_ids = {
             portfolio.id for portfolio in rebuilt if portfolio.prompt.context_scope == "portfolio"
         }
-    signals = [signal for portfolio in rebuilt for signal in portfolio.signals]
+    target = price_cache.latest_available_session(now)
+    signals = [
+        signal for portfolio in rebuilt for signal in portfolio.signals if signal.effective_date <= target
+    ]
     requirements = signal_pricing_requirements(
         signals,
         fallback_start=now.astimezone(NY).date() - timedelta(days=45),
     )
-    price_load = load_price_series(session, requirements, now)
+    readiness = rebuilt_readiness_symbols(rebuilt, target)
+    price_load = load_price_series(session, requirements, readiness, now)
     spy_series = price_load.series.get(SPY_SYMBOL) or []
-    as_of = _as_of(spy_series, price_cache.latest_available_session(now))
+    as_of = price_load.as_of
     calendar = build_calendar(spy_series, as_of) if as_of is not None else []
     cache_key = _rebuilt_cache_key(
         rebuilt,
@@ -1316,7 +1349,7 @@ def compute_rebuilt_arena(
                     frozen_symbols=frozen_symbols,
                 )
                 arena.market_data_status = "unavailable"
-            if stale_data and arena.market_data_status == "fresh":
+            if stale_data and arena.market_data_status in ("fresh", "updating"):
                 arena.market_data_status = "stale"
         common_sources = {
             portfolio_id: analysis

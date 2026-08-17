@@ -168,7 +168,7 @@ class TestMcpTools:
         monkeypatch.setattr(
             massive,
             "download_prices",
-            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("read performed I/O")),
         )
 
         overview = _call_tool(
@@ -184,8 +184,8 @@ class TestMcpTools:
             {"slug_or_id": sample_portfolio["slug"]},
         )
 
-        assert overview["managed"]["market_data_status"] == "stale"
-        assert portfolio["market_data_status"] == "stale"
+        assert overview["managed"]["market_data_status"] == "fresh"
+        assert portfolio["market_data_status"] == "fresh"
         assert overview["managed"]["as_of"] is not None
         assert portfolio["as_of"] is not None
 
@@ -196,16 +196,14 @@ class TestMcpTools:
         sample_portfolio,
         monkeypatch,
     ):
-        from app.services import massive
+        from app.db import session_factory
+        from app.services import price_cache
 
         from .util import backdate_allocation
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        monkeypatch.setattr(
-            massive,
-            "download_prices",
-            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
-        )
+        with session_factory()() as session:
+            price_cache.clear_cache(session)
 
         overview = _call_tool(
             client,

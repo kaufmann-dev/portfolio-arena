@@ -122,6 +122,9 @@ def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str)
             signal.positions.append(SignalPosition(symbol=symbol, weight_pct=100, note="private"))
             session.add(signal)
         session.commit()
+    from app.services.market_refresh import refresh_market_data_once
+
+    refresh_market_data_once()
 
 
 def _trading_days(start: date, count: int) -> list[date]:

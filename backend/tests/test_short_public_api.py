@@ -104,6 +104,9 @@ def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str)
             )
             session.add(signal)
         session.commit()
+    from app.services.market_refresh import refresh_market_data_once
+
+    refresh_market_data_once()
 
 
 def _set_founding(*portfolio_ids: int) -> None:

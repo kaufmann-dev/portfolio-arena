@@ -27,18 +27,21 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
   restarts the worker if it fails, and shuts both down together.
 - **Admin authentication** — confidential OpenID Connect Authorization Code + PKCE, backed by
   opaque server-side sessions. Public leaderboard and detail views remain anonymous.
-- **Prices** — Massive daily stock aggregates, fetched in parallel with httpx and converted to a
-  split-and-dividend total-return basis. Series are cached in Postgres with a ~1h TTL.
+- **Prices** — Massive daily stock aggregates, fetched in parallel by a background refresher and
+  converted to a split-and-dividend total-return basis. Series are cached in Postgres with a ~1h
+  TTL; valuation requests never wait on Massive.
 - **No persistent NAV snapshots.** Managed NAVs derive from allocations; rebuilt NAVs derive from
   immutable daily signals and overlapping cohorts. Exact-input analytics are memoized in a bounded
   in-process cache, and any portfolio or price-content change selects a new result automatically.
   Corporate-action adjustments change retroactively, so deterministic recomputation remains _more_
   correct than database snapshots.
-- **Last-known-data fallback.** An expired cache row remains available until a Massive refresh
-  succeeds. The cache refreshes after its TTL and when a newly closed session should be available
-  after Massive's 15-minute delay. Responses label market data `fresh`, `stale`, or `unavailable`;
-  `as_of` remains the authoritative valued close. Ordinary complete last-known data does not raise
-  a UI warning; warnings are reserved for unavailable data that can make valuations incomplete.
+- **Atomic last-known-data fallback.** The background refresher runs after startup, after cache TTL,
+  and when a newly closed session should be available after Massive's 15-minute delay. A target
+  close becomes visible only when every currently relevant symbol is ready; publication-lag
+  responses stay on the prior complete `as_of` and report `updating`. Short 15/30/60-second retries
+  handle provider lag without delaying page loads. After a 10-minute publication SLA, incomplete
+  data is explicitly `stale`; missing required history is `unavailable`. Updating pages poll a
+  lightweight status endpoint and refresh once the batch is ready.
 - **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
   endpoint exposing the operational arena surface as tools, including evaluator administration.
   API-key management and archived prompt recovery stay browser-only; the worker-only queue and
@@ -229,7 +232,7 @@ price data, and MCP API keys. It removes only the obsolete local-password user t
 with short-lived browser-session records; existing JWT browser sessions stop working immediately.
 
 Migration `0015` clears cached Yahoo-originated price series once so they cannot mix with Massive
-total-return data. The cache refills on the next valuation request.
+total-return data. The background refresher repopulates the cache after startup.
 
 Migration `0016` installs the daily signal arena. It preserves managed allocation history and all
 evaluator audit records, resets only rebuilt v1 allocation history, removes stored benchmark

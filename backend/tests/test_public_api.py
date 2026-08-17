@@ -63,6 +63,18 @@ class TestLeaderboard:
         assert len(row["sparkline"]) > 5
         assert row["prompt"]["slug"] == "weekly-manager-v1"
 
+    def test_lightweight_market_data_snapshot(self, client, sample_portfolio):
+        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
+
+        response = client.get("/api/market-data")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "as_of": response.json()["target_as_of"],
+            "target_as_of": response.json()["target_as_of"],
+            "market_data_status": "fresh",
+        }
+
     def test_synthetic_spy_uses_arena_window_without_database_identity(
         self,
         client,
@@ -92,7 +104,7 @@ class TestLeaderboard:
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row["metrics"]["has_data"] is False
 
-    def test_expired_cache_fallback_reports_stale_on_valuation_routes(
+    def test_expired_cache_reads_remain_fast_and_fresh_on_valuation_routes(
         self,
         client,
         admin_headers,
@@ -115,7 +127,7 @@ class TestLeaderboard:
         monkeypatch.setattr(
             massive,
             "download_prices",
-            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GET performed I/O")),
         )
 
         requests = [
@@ -126,7 +138,7 @@ class TestLeaderboard:
         ]
         for url, headers in requests:
             payload = client.get(url, headers=headers).json()
-            assert payload["market_data_status"] == "stale", url
+            assert payload["market_data_status"] == "fresh", url
             assert payload["as_of"] is not None, url
 
     def test_missing_prices_report_unavailable_on_valuation_routes(
@@ -138,14 +150,12 @@ class TestLeaderboard:
         sample_prompt,
         monkeypatch,
     ):
-        from app.services import massive
+        from app.db import session_factory
+        from app.services import price_cache
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        monkeypatch.setattr(
-            massive,
-            "download_prices",
-            lambda symbols, _start, _end: massive.PriceDownloadResult({symbol: None for symbol in symbols}),
-        )
+        with session_factory()() as session:
+            price_cache.clear_cache(session)
 
         requests = [
             ("/api/arena/managed?direction=long", {}),
@@ -183,7 +193,12 @@ class TestLeaderboard:
         monkeypatch.setattr(
             arena,
             "load_price_series",
-            lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
+            lambda *_args, **_kwargs: arena.PriceSeriesLoad(
+                series=cached,
+                status="fresh",
+                as_of=cached["SPY"][-1]["date"],
+                target_as_of=cached["SPY"][-1]["date"],
+            ),
         )
 
         payload = client.get("/api/arena/managed?direction=long").json()
@@ -215,7 +230,12 @@ class TestLeaderboard:
         monkeypatch.setattr(
             arena,
             "load_price_series",
-            lambda *_args, **_kwargs: arena.PriceSeriesLoad(series=cached, status="fresh"),
+            lambda *_args, **_kwargs: arena.PriceSeriesLoad(
+                series=cached,
+                status="fresh",
+                as_of=cached["SPY"][-1]["date"],
+                target_as_of=cached["SPY"][-1]["date"],
+            ),
         )
 
         payload = client.get("/api/arena/managed?direction=long").json()

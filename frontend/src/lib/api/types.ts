@@ -36,12 +36,18 @@ export type PromptAvailability = PromptMode | "both";
 export type PromptContextScope = "portfolio" | "arena";
 export type Direction = "long" | "short";
 export type DirectionAvailability = Direction | "both";
-export type MarketDataStatus = "fresh" | "stale" | "unavailable";
+export type MarketDataStatus = "fresh" | "updating" | "stale" | "unavailable";
 export type ArenaTrack = PromptMode;
 export type RebuiltView = "common" | "tuned" | "signal";
 export type RebuiltObjective = "canonical" | "max_alpha" | "max_information_ratio" | "max_sharpe";
 export type CostBasis = "net" | "gross";
 export type EvidenceState = "pending" | "inconclusive" | "positive" | "negative";
+
+export interface MarketDataSnapshot {
+  as_of: string | null;
+  target_as_of: string;
+  market_data_status: MarketDataStatus;
+}
 
 export interface AppSettings {
   default_cost_bps: number;

@@ -39,6 +39,7 @@
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import ConfirmDialog from "../components/ui/ConfirmDialog.svelte";
   import { fmtDate, num, pctPoints, pctPointsSignClass } from "../format";
+  import { combineMarketData } from "../marketData";
   import { auth } from "../stores/auth.svelte";
 
   type Tab =
@@ -206,17 +207,9 @@
       ...managedShort.portfolios.filter((row) => row.kind === "managed"),
       ...rebuiltShort.portfolios.filter((row) => row.kind === "rebuilt"),
     ];
-    marketDataStatus = arenaPayloads.some((payload) => payload.market_data_status === "unavailable")
-      ? "unavailable"
-      : arenaPayloads.some((payload) => payload.market_data_status === "stale")
-        ? "stale"
-        : "fresh";
-    marketDataAsOf =
-      arenaPayloads
-        .map((payload) => payload.as_of)
-        .filter((value): value is string => value !== null)
-        .sort()
-        .at(-1) ?? null;
+    const combinedMarketData = combineMarketData(...arenaPayloads);
+    marketDataStatus = combinedMarketData.status;
+    marketDataAsOf = combinedMarketData.asOf;
     prompts = promptsPayload.prompts;
     agents = agentsPayload.agents;
     models = modelsPayload.models;
@@ -1343,7 +1336,9 @@
     </div>
   </div>
 
-  <MarketDataWarning status={displayedMarketDataStatus} asOf={displayedMarketDataAsOf} />
+  {#key `${displayedMarketDataStatus}:${displayedMarketDataAsOf}`}
+    <MarketDataWarning status={displayedMarketDataStatus} asOf={displayedMarketDataAsOf} onReady={loadAll} />
+  {/key}
 
   {#if notice}
     <div class="notice-box" role="status">{notice}</div>

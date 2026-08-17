@@ -53,6 +53,9 @@ def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str 
             signal.positions.append(SignalPosition(symbol=symbol, weight_pct=100, note="private rationale"))
             session.add(signal)
         session.commit()
+    from app.services.market_refresh import refresh_market_data_once
+
+    refresh_market_data_once()
 
 
 def _set_founding(portfolio_id: int) -> None:
@@ -373,7 +376,11 @@ def test_rebuilt_rows_flag_stale_and_frozen_symbol_coverage(
     sample_prompt,
     monkeypatch,
 ):
-    from app.services import massive
+    from sqlalchemy import select
+
+    from app.db import session_factory
+    from app.models import PriceCache
+    from app.services import arena
 
     portfolio = _create_rebuilt(
         client,
@@ -384,15 +391,24 @@ def test_rebuilt_rows_flag_stale_and_frozen_symbol_coverage(
     )
     _insert_signals(portfolio["id"], _weekdays(date(2026, 4, 1), 5), "AAPL")
 
-    original_download = massive.download_prices
-
-    def download_with_frozen_aapl(symbols, start, end=None):
-        result = original_download(symbols, start, end)
-        if result.get("AAPL"):
-            result["AAPL"] = result["AAPL"][:-6]
-        return result
-
-    monkeypatch.setattr(massive, "download_prices", download_with_frozen_aapl)
+    with session_factory()() as session:
+        cached = {
+            row.symbol: row.series
+            for row in session.scalars(select(PriceCache).order_by(PriceCache.symbol)).all()
+        }
+    cached["AAPL"] = cached["AAPL"][:-6]
+    as_of = cached["SPY"][-1]["date"]
+    monkeypatch.setattr(
+        arena,
+        "load_price_series",
+        lambda *_args, **_kwargs: arena.PriceSeriesLoad(
+            series=cached,
+            status="stale",
+            as_of=as_of,
+            target_as_of=as_of,
+            stale_symbols={"AAPL"},
+        ),
+    )
     response = client.get("/api/arena/rebuilt?direction=long&view=signal&horizon=1&cost_basis=gross")
     assert response.status_code == 200, response.text
     payload = response.json()

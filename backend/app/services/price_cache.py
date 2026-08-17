@@ -1,21 +1,16 @@
-"""Resilient PostgreSQL price cache plus an in-process retry cooldown."""
+"""Resilient PostgreSQL price cache for total-return price series."""
 
-import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from threading import Lock
 
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from ..config import MASSIVE_DATA_DELAY_MINUTES, PRICE_FAILURE_COOLDOWN_SECONDS, get_settings
+from ..config import MASSIVE_DATA_DELAY_MINUTES, get_settings
 from ..models import PriceCache
 from .massive import Series, is_valid_series
 from .trading_calendar import NY, close_at, is_trading_day
-
-_failure_cache: dict[str, float] = {}
-_failure_cache_lock = Lock()
 
 
 @dataclass(frozen=True)
@@ -92,11 +87,6 @@ def refresh_due(entry: CacheEntry | None, required_start: date, now: datetime) -
     return not entry.has_session(latest_available_session(now))
 
 
-def expired_fetched_at(now: datetime) -> datetime:
-    """Timestamp a retained partial refresh so it remains due after cooldown."""
-    return now - timedelta(seconds=get_settings().price_cache_ttl_seconds)
-
-
 def cache_entry(series: Series | None, fetched_at: datetime) -> CacheEntry | None:
     bounds = _series_bounds(series)
     if bounds is None:
@@ -164,30 +154,6 @@ def set_cached_series(
     session.commit()
 
 
-def insert_cached_series_if_missing(
-    session: Session,
-    series_by_symbol: dict[str, Series | None],
-    *,
-    fetched_at: datetime | None = None,
-) -> None:
-    """Retain a first lagging response without replacing any concurrent row."""
-    cacheable = _cacheable_series(series_by_symbol)
-    if not cacheable:
-        return
-
-    fetched_at = fetched_at or datetime.now(UTC)
-    for symbol, (data, start_date, end_date) in cacheable.items():
-        stmt = pg_insert(PriceCache).values(
-            symbol=symbol,
-            series=data,
-            start_date=start_date,
-            end_date=end_date,
-            fetched_at=fetched_at,
-        )
-        session.execute(stmt.on_conflict_do_nothing(index_elements=["symbol"]))
-    session.commit()
-
-
 def _cacheable_series(
     series_by_symbol: dict[str, Series | None],
 ) -> dict[str, tuple[Series, date, date]]:
@@ -214,30 +180,4 @@ def _series_bounds(series: Series | None) -> tuple[date, date] | None:
 def clear_cache(session: Session) -> int:
     deleted = session.execute(delete(PriceCache)).rowcount
     session.commit()
-    with _failure_cache_lock:
-        _failure_cache.clear()
     return deleted
-
-
-def recent_failed_symbols(symbols: list[str]) -> list[str]:
-    now = time.monotonic()
-    recent = []
-    with _failure_cache_lock:
-        for symbol in symbols:
-            failed_at = _failure_cache.get(symbol)
-            if failed_at is None:
-                continue
-            if now - failed_at < PRICE_FAILURE_COOLDOWN_SECONDS:
-                recent.append(symbol)
-            else:
-                _failure_cache.pop(symbol, None)
-    return recent
-
-
-def record_refresh_results(successful: set[str], failed: set[str]) -> None:
-    now = time.monotonic()
-    with _failure_cache_lock:
-        for symbol in successful:
-            _failure_cache.pop(symbol, None)
-        for symbol in failed:
-            _failure_cache[symbol] = now

@@ -372,7 +372,13 @@
   <p class="track-description">{activeTrackDescription}</p>
 
   {#if currentData}
-    <MarketDataWarning status={displayedMarketData.status} asOf={displayedMarketData.asOf} />
+    {#key `${displayedMarketData.status}:${displayedMarketData.asOf}`}
+      <MarketDataWarning
+        status={displayedMarketData.status}
+        asOf={displayedMarketData.asOf}
+        onReady={loadArena}
+      />
+    {/key}
   {/if}
 
   {#if error}
