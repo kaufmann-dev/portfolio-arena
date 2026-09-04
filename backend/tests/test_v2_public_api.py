@@ -33,6 +33,18 @@ def _weekdays(start: date, count: int) -> list[date]:
     return result
 
 
+def _trading_days_ending(end: date, count: int) -> list[date]:
+    from app.services.trading_calendar import is_trading_day
+
+    result = []
+    day = end
+    while len(result) < count:
+        if is_trading_day(day):
+            result.append(day)
+        day -= timedelta(days=1)
+    return sorted(result)
+
+
 def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str = "AAPL"):
     from app.db import session_factory
     from app.models import Signal, SignalPosition
@@ -181,7 +193,10 @@ def test_common_detail_exposes_live_h20_book_during_incubation(
         sample_prompt,
         "Incubating Book",
     )
-    _insert_signals(portfolio["id"], [date(2026, 7, 31)])
+    from app.services import price_cache
+
+    target = price_cache.latest_available_session(datetime.now(UTC))
+    _insert_signals(portfolio["id"], [target])
 
     response = client.get(f"/api/portfolios/{portfolio['slug']}")
     assert response.status_code == 200, response.text
@@ -296,9 +311,17 @@ def test_common_incubation_gate_disables_result_and_rank(
         sample_prompt,
         "Common Incubating",
     )
+    from app.services import price_cache
+
+    target = price_cache.latest_available_session(datetime.now(UTC))
+    recent_sessions = _trading_days_ending(target, 6)
     _set_founding(founder["id"])
-    _insert_signals(founder["id"], _weekdays(date(2026, 4, 1), 5), "MSFT")
-    _insert_signals(incubating["id"], _weekdays(date(2026, 7, 20), 5), "AAPL")
+    _insert_signals(
+        founder["id"],
+        _trading_days_ending(target - timedelta(days=60), 5),
+        "MSFT",
+    )
+    _insert_signals(incubating["id"], recent_sessions[:-1], "AAPL")
 
     signal_payload = client.get(
         "/api/arena/rebuilt?direction=long&view=signal&horizon=1&cost_basis=gross"

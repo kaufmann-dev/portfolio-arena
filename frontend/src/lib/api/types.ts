@@ -518,8 +518,23 @@ export interface AgentOut {
   harness: HarnessRef | null;
   execution_model_id: string | null;
   reasoning_effort: string | null;
+  status: "active" | "archived";
+  archived_at: string | null;
   portfolio_count?: number;
   portfolios?: PortfolioRefOut[];
+}
+
+export interface AdminAgent extends AgentOut {
+  portfolio_count: number;
+  active_portfolio_count: number;
+  archived_portfolio_count: number;
+  evaluation_run_count: number;
+  can_archive: boolean;
+  archive_blocker: string | null;
+  can_restore: boolean;
+  restore_blocker: string | null;
+  can_delete: boolean;
+  delete_blocker: string | null;
 }
 
 export interface HarnessRef {

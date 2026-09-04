@@ -1,6 +1,6 @@
 """Daily source barriers and frozen execution packets for Meta portfolios."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from app.services import evaluator
 from app.services.meta_synthesis import _control_for, render_source_packet
@@ -166,9 +166,9 @@ def test_meta_barrier_waits_through_retry_then_uses_failure_fallback(
 ):
     from app.db import session_factory
     from app.models import MetaBatch
-    from tests.util import backdate_allocation
+    from tests.util import set_allocation_effective_date
 
-    backdate_allocation(sample_portfolio["allocation"]["id"], days_back=30)
+    set_allocation_effective_date(sample_portfolio["allocation"]["id"], date(2026, 7, 1))
     _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
     with session_factory()() as session:
@@ -493,9 +493,9 @@ def test_unlinked_active_source_blocks_batch_past_close(
 ):
     from app.db import session_factory
     from app.models import MetaBatch
-    from tests.util import backdate_allocation
+    from tests.util import set_allocation_effective_date
 
-    backdate_allocation(sample_portfolio["allocation"]["id"], days_back=30)
+    set_allocation_effective_date(sample_portfolio["allocation"]["id"], date(2026, 7, 1))
     _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 18, 40, tzinfo=UTC)
     with session_factory()() as session:

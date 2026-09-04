@@ -32,7 +32,10 @@
           <span aria-hidden="true">/</span>
           <span>Agent</span>
         </nav>
-        <h1>{data.agent.name}</h1>
+        <h1>
+          {data.agent.name}
+          {#if data.agent.status === "archived"}<span class="badge warn">archived</span>{/if}
+        </h1>
         {#if data.agent.notes}
           <p class="muted notes">{data.agent.notes}</p>
         {/if}

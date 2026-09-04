@@ -103,6 +103,15 @@ class Agent(Base):
     harness: Mapped[str | None] = mapped_column(Text, nullable=True)
     reasoning_effort: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'archived')",
+            name="agents_status_check",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND archived_at IS NULL) OR "
+            "(status = 'archived' AND archived_at IS NOT NULL)",
+            name="agents_archive_state_check",
+        ),
         ForeignKeyConstraint(
             ["model_id", "harness"],
             ["model_harness_capabilities.model_id", "model_harness_capabilities.harness"],
@@ -114,9 +123,12 @@ class Agent(Base):
             func.coalesce(harness, ""),
             func.coalesce(reasoning_effort, ""),
             unique=True,
+            postgresql_where="status = 'active'",
         ),
     )
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

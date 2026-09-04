@@ -244,6 +244,7 @@ def _profile_exists(
     exclude_agent_id: int | None = None,
 ) -> bool:
     query = select(Agent.id).where(
+        Agent.status == "active",
         Agent.model_id == model_id,
         Agent.harness.is_(None) if harness is None else Agent.harness == harness,
         Agent.reasoning_effort.is_(None)
@@ -253,6 +254,25 @@ def _profile_exists(
     if exclude_agent_id is not None:
         query = query.where(Agent.id != exclude_agent_id)
     return session.scalar(query.limit(1)) is not None
+
+
+def _active_agent_for_assignment(
+    session: Session,
+    agent_id: int,
+    *,
+    inactive_status_code: int = 422,
+    inactive_message: str = "Archived agents cannot be assigned to portfolios",
+) -> Agent:
+    agent = session.scalars(select(Agent).where(Agent.id == agent_id).with_for_update()).first()
+    if agent is None:
+        raise AdminOpError(422, "Agent not found")
+    if agent.status != "active":
+        raise AdminOpError(inactive_status_code, inactive_message)
+    return agent
+
+
+def _lock_agent_profile_namespace(session: Session, model_id: int) -> None:
+    session.scalar(select(ModelDefinition.id).where(ModelDefinition.id == model_id).with_for_update())
 
 
 def create_agent(
@@ -271,6 +291,7 @@ def create_agent(
         reasoning_effort=reasoning_effort,
     )
     clean_harness = harness.strip() if harness else None
+    _lock_agent_profile_namespace(session, model.id)
     if _profile_exists(
         session,
         model_id=model.id,
@@ -303,9 +324,11 @@ def update_agent(
     reasoning_effort: str | None = None,
     notes: str | None = None,
 ) -> dict:
-    agent = load_agent(session, agent_id)
+    agent = load_agent(session, agent_id, lock=True)
     if agent is None:
         raise AdminOpError(404, "Agent not found")
+    if agent.status != "active":
+        raise AdminOpError(409, "Unarchive this agent before editing it")
     target_model_id = model_id if model_id is not None else agent.model_id
     model, _, clean_effort = validate_agent_profile(
         session,
@@ -314,6 +337,7 @@ def update_agent(
         reasoning_effort=reasoning_effort,
     )
     clean_harness = harness.strip() if harness else None
+    _lock_agent_profile_namespace(session, model.id)
     if _profile_exists(
         session,
         model_id=model.id,
@@ -339,8 +363,162 @@ def update_agent(
     return agent_out(agent)
 
 
+def _agent_usage(
+    session: Session,
+) -> tuple[
+    dict[int, dict[str, int]],
+    dict[int, int],
+    dict[tuple[int, str | None, str | None], int],
+]:
+    portfolio_usage: dict[int, dict[str, int]] = {}
+    for agent_id, status, count in session.execute(
+        select(Portfolio.agent_id, Portfolio.status, func.count()).group_by(
+            Portfolio.agent_id,
+            Portfolio.status,
+        )
+    ):
+        portfolio_usage.setdefault(agent_id, {"active": 0, "archived": 0})[status] = int(count)
+    run_usage = {
+        agent_id: int(count)
+        for agent_id, count in session.execute(
+            select(EvaluationRun.agent_id, func.count()).group_by(EvaluationRun.agent_id)
+        )
+    }
+    active_profile_owners = {
+        (model_id, harness, reasoning_effort): agent_id
+        for agent_id, model_id, harness, reasoning_effort in session.execute(
+            select(Agent.id, Agent.model_id, Agent.harness, Agent.reasoning_effort).where(
+                Agent.status == "active"
+            )
+        )
+    }
+    return portfolio_usage, run_usage, active_profile_owners
+
+
+def _admin_agent_out(
+    agent: Agent,
+    portfolio_usage: dict[int, dict[str, int]],
+    run_usage: dict[int, int],
+    active_profile_owners: dict[tuple[int, str | None, str | None], int],
+) -> dict:
+    usage = portfolio_usage.get(agent.id, {"active": 0, "archived": 0})
+    active_count = usage["active"]
+    archived_count = usage["archived"]
+    run_count = run_usage.get(agent.id, 0)
+    total_count = active_count + archived_count
+    active_profile_owner = active_profile_owners.get((agent.model_id, agent.harness, agent.reasoning_effort))
+    delete_references = []
+    if active_count:
+        delete_references.append(f"{active_count} active portfolio(s)")
+    if archived_count:
+        delete_references.append(f"{archived_count} archived portfolio(s)")
+    if run_count:
+        delete_references.append(f"{run_count} evaluation run(s)")
+    return {
+        **agent_out(agent, portfolio_count=total_count),
+        "active_portfolio_count": active_count,
+        "archived_portfolio_count": archived_count,
+        "evaluation_run_count": run_count,
+        "can_archive": agent.status == "active" and active_count == 0,
+        "archive_blocker": (
+            f"{active_count} active portfolio(s) must be archived or reassigned first."
+            if agent.status == "active" and active_count
+            else None
+        ),
+        "can_restore": agent.status == "archived" and active_profile_owner is None,
+        "restore_blocker": (
+            "An active agent already uses this execution profile. Archive it before restoring this agent."
+            if agent.status == "archived" and active_profile_owner is not None
+            else None
+        ),
+        "can_delete": not delete_references,
+        "delete_blocker": (
+            f"Cannot permanently delete: {', '.join(delete_references)} preserve history."
+            if delete_references
+            else None
+        ),
+    }
+
+
+def list_agents(session: Session, *, status: str | None = None) -> dict:
+    if status not in {None, "active", "archived", "all"}:
+        raise AdminOpError(422, "Agent status must be active, archived, or all")
+    query = (
+        select(Agent)
+        .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
+        .order_by(Agent.status, Agent.slug)
+    )
+    if status not in {None, "all"}:
+        query = query.where(Agent.status == status)
+    agents = session.scalars(query).all()
+    portfolio_usage, run_usage, active_profile_owners = _agent_usage(session)
+    return {
+        "agents": [
+            _admin_agent_out(agent, portfolio_usage, run_usage, active_profile_owners) for agent in agents
+        ]
+    }
+
+
+def archive_agent(session: Session, agent_id: int) -> dict:
+    agent = session.scalars(
+        select(Agent)
+        .where(Agent.id == agent_id)
+        .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
+        .with_for_update()
+    ).first()
+    if agent is None:
+        raise AdminOpError(404, "Agent not found")
+    active_count = int(
+        session.scalar(
+            select(func.count())
+            .select_from(Portfolio)
+            .where(
+                Portfolio.agent_id == agent.id,
+                Portfolio.status == "active",
+            )
+        )
+        or 0
+    )
+    if active_count:
+        raise AdminOpError(
+            409,
+            f"{active_count} active portfolio(s) must be archived or reassigned first.",
+        )
+    if agent.status == "active":
+        agent.status = "archived"
+        agent.archived_at = datetime.now(UTC)
+        session.commit()
+    portfolio_usage, run_usage, active_profile_owners = _agent_usage(session)
+    return _admin_agent_out(agent, portfolio_usage, run_usage, active_profile_owners)
+
+
+def unarchive_agent(session: Session, agent_id: int) -> dict:
+    agent = load_agent(session, agent_id, lock=True)
+    if agent is None:
+        raise AdminOpError(404, "Agent not found")
+    if agent.status == "archived":
+        _lock_agent_profile_namespace(session, agent.model_id)
+        if _profile_exists(
+            session,
+            model_id=agent.model_id,
+            harness=agent.harness,
+            reasoning_effort=agent.reasoning_effort,
+            exclude_agent_id=agent.id,
+        ):
+            raise AdminOpError(
+                409,
+                "An active agent with this execution profile already exists. "
+                "Archive it before restoring this agent.",
+            )
+        agent.status = "active"
+        agent.archived_at = None
+        session.commit()
+    portfolio_usage, run_usage, active_profile_owners = _agent_usage(session)
+    return _admin_agent_out(agent, portfolio_usage, run_usage, active_profile_owners)
+
+
 def delete_agent(session: Session, agent_id: int) -> dict:
-    agent = session.get(Agent, agent_id)
+    agent = load_agent(session, agent_id, lock=True)
     if agent is None:
         raise AdminOpError(404, "Agent not found")
     count = session.scalar(select(func.count()).select_from(Portfolio).where(Portfolio.agent_id == agent_id))
@@ -944,9 +1122,7 @@ def create_portfolio(
 ) -> dict:
     _validate_prompt_mode(prompt_mode)
     _validate_direction(direction)
-    agent = session.get(Agent, agent_id)
-    if agent is None:
-        raise AdminOpError(422, "Agent not found")
+    agent = _active_agent_for_assignment(session, agent_id)
     prompt = _active_prompt_for_portfolio(session, prompt_id)
     if prompt.context_scope != "portfolio":
         raise AdminOpError(
@@ -1009,9 +1185,7 @@ def _meta_portfolio_set_out(meta_set: MetaPortfolioSet) -> dict:
 
 
 def _automation_agent(session: Session, agent_id: int) -> Agent:
-    agent = session.get(Agent, agent_id)
-    if agent is None:
-        raise AdminOpError(422, "Agent not found")
+    agent = _active_agent_for_assignment(session, agent_id)
     if not supports_automation(agent.harness):
         raise AdminOpError(422, "The selected agent does not support integrated automation.")
     return agent
@@ -1190,9 +1364,21 @@ def update_portfolio(
             raise AdminOpError(409, "SPY is reserved for the synthetic benchmark reference.")
         portfolio.name = name
     if status is not None:
+        if status == "active":
+            selected_agent_id = agent_id if agent_id is not None else portfolio.agent_id
+            _active_agent_for_assignment(
+                session,
+                selected_agent_id,
+                inactive_status_code=409,
+                inactive_message="Choose an active agent before unarchiving this portfolio",
+            )
         portfolio.status = status
     if agent_id is not None:
-        agent = session.get(Agent, agent_id)
+        agent = (
+            session.get(Agent, agent_id)
+            if agent_id == portfolio.agent_id and status != "active"
+            else _active_agent_for_assignment(session, agent_id)
+        )
         if agent is None:
             raise AdminOpError(422, "Agent not found")
         portfolio.agent_id = agent_id

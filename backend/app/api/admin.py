@@ -119,6 +119,14 @@ def create_agent(body: AgentCreate, session: Session = Depends(get_session)):
     )
 
 
+@router.get("/admin/agents")
+def list_agents(
+    status: str | None = Query(default="all"),
+    session: Session = Depends(get_session),
+):
+    return _run(admin_ops.list_agents, session, status=status)
+
+
 @router.patch("/agents/{agent_id}")
 def patch_agent(agent_id: int, body: AgentPatch, session: Session = Depends(get_session)):
     return _run(
@@ -130,6 +138,16 @@ def patch_agent(agent_id: int, body: AgentPatch, session: Session = Depends(get_
         reasoning_effort=body.reasoning_effort,
         notes=body.notes,
     )
+
+
+@router.post("/admin/agents/{agent_id}/archive")
+def archive_agent(agent_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.archive_agent, session, agent_id)
+
+
+@router.post("/admin/agents/{agent_id}/unarchive")
+def unarchive_agent(agent_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.unarchive_agent, session, agent_id)
 
 
 @router.delete("/agents/{agent_id}")

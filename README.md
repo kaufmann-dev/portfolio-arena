@@ -79,6 +79,10 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
   rather than deleted, and restoring an older snapshot creates another new version.
   Archived prompts and version history are browser-admin-only; public and MCP reads expose only the
   current version of active prompts.
+- **Agent retirement preserves audit history.** An Agent can be archived after its active portfolios
+  are archived or reassigned. Archived Agents disappear from assignment controls and public lists,
+  while archived portfolios and evaluation runs keep their original references. Permanent deletion
+  is available only when no portfolio or evaluation run references the Agent.
 - **Prompt scope is immutable.** Normal `portfolio` prompts and synthesis-only `arena` prompts are
   separate stable identities. Meta portfolios never enter normal leaderboards, comparisons, or the
   rebuilt Common-policy source cohort.
@@ -174,6 +178,8 @@ admin panel.
 - **Execution-profile tools.** `list_harnesses` exposes the code-defined harness registry;
   `list_models`, `create_model`, `update_model`, and `delete_model` manage model capabilities; Agent
   tools combine a model, supported harness, and model-valid reasoning effort into a reusable profile.
+  `list_agents` filters by active, archived, or all profiles; `archive_agent` and `unarchive_agent`
+  retire and restore profiles without discarding portfolio or evaluator history.
 - **Connecting a client.** e.g. `claude mcp add --transport http arena https://<host>/mcp
 --header "Authorization: Bearer <key>"`.
 
@@ -264,6 +270,12 @@ their former text into both directions so every supported cell remains complete.
 Migration `0022` adds immutable prompt context scope, atomic Meta portfolio families, and frozen daily
 Meta batches. Every existing prompt is classified as a normal `portfolio` prompt; no strategy text,
 portfolio history, allocation, signal, or evaluator audit record is rewritten.
+
+Migration `0023` adds optional labels for comparable Meta portfolio variants without changing any
+existing family or member identity.
+
+Migration `0024` adds reversible Agent archive state and limits execution-profile uniqueness to active
+Agents, allowing a clean active replacement while an older profile remains available to history.
 
 ## Development
 
