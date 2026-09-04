@@ -6,7 +6,7 @@
   import type {
     AdminPrompt,
     AdminPromptsResponse,
-    AgentOut,
+    AdminAgent,
     AllocationOut,
     AdminPortfolioDetailResponse,
     ArenaPortfolio,
@@ -91,7 +91,7 @@
   // ── Shared data ──────────────────────────────
   let portfolios = $state.raw<ArenaPortfolio[]>([]);
   let prompts = $state.raw<AdminPrompt[]>([]);
-  let agents = $state.raw<AgentOut[]>([]);
+  let agents = $state.raw<AdminAgent[]>([]);
   let models = $state.raw<ModelDefinition[]>([]);
   let harnesses = $state.raw<HarnessDefinition[]>([]);
   let marketDataStatus = $state<MarketDataStatus>("fresh");
@@ -99,6 +99,7 @@
   let notice = $state("");
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   const activePrompts = $derived(prompts.filter((prompt) => prompt.status === "active"));
+  const activeAgents = $derived(agents.filter((agent) => agent.status === "active"));
   const normalPortfolios = $derived(
     portfolios.filter((portfolio) => portfolio.prompt.context_scope === "portfolio"),
   );
@@ -108,7 +109,7 @@
     ),
   );
   const automationAgents = $derived(
-    agents.filter((agent) =>
+    activeAgents.filter((agent) =>
       harnesses.some((harness) => harness.id === agent.harness?.id && harness.automation_supported),
     ),
   );
@@ -196,7 +197,7 @@
         "/api/arena/rebuilt?direction=short&view=tuned&objective=canonical&cost_basis=net",
       ),
       apiJson<AdminPromptsResponse>("/api/admin/prompts?status=all"),
-      apiJson<{ agents: AgentOut[] }>("/api/agents"),
+      apiJson<{ agents: AdminAgent[] }>("/api/admin/agents?status=all"),
       apiJson<{ models: ModelDefinition[] }>("/api/models"),
       apiJson<HarnessesResponse>("/api/harnesses"),
     ]);
@@ -747,10 +748,38 @@
     }
   }
 
-  function deleteAgent(agent: AgentOut) {
+  type AgentStatusFilter = "active" | "archived" | "all";
+  let agentStatusFilter = $state<AgentStatusFilter>("all");
+  let agentAction = $state("");
+  const filteredAgents = $derived(
+    agentStatusFilter === "all" ? agents : agents.filter((agent) => agent.status === agentStatusFilter),
+  );
+
+  function agentsForPortfolio(currentAgentId: number): AdminAgent[] {
+    return agents.filter((agent) => agent.status === "active" || agent.id === currentAgentId);
+  }
+
+  async function setAgentArchived(agent: AdminAgent, archived: boolean): Promise<void> {
+    const action = archived ? "archive" : "unarchive";
+    agentAction = `${action}-${agent.id}`;
+    try {
+      await postJson(`/api/admin/agents/${agent.id}/${action}`, {});
+      if (archived && editAgent?.id === agent.id) editAgent = null;
+      if (archived && newAgentId === agent.id) newAgentId = null;
+      if (archived && newMetaAgentId === agent.id) newMetaAgentId = null;
+      await loadAll();
+      flash(`Agent ${archived ? "archived" : "restored"}.`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : `${archived ? "Archive" : "Restore"} failed`);
+    } finally {
+      agentAction = "";
+    }
+  }
+
+  function deleteAgent(agent: AdminAgent) {
     requestConfirmation({
       title: "Delete agent?",
-      description: `${agent.name} will be permanently removed. Agents assigned to portfolios cannot be deleted.`,
+      description: `${agent.name} will be permanently removed. This is only available when no portfolios or evaluation runs reference it.`,
       confirmLabel: "Delete agent",
       action: async () => {
         try {
@@ -1662,12 +1691,12 @@
               <label for="np-agent">Agent</label>
               <select id="np-agent" bind:value={newAgentId}>
                 <option value={null} disabled>Select an agent…</option>
-                {#each agents as agent (agent.id)}
+                {#each activeAgents as agent (agent.id)}
                   <option value={agent.id}>{agent.name}</option>
                 {/each}
               </select>
-              {#if agents.length === 0}
-                <p class="muted hint">No agents yet — create one in the Agents tab first.</p>
+              {#if activeAgents.length === 0}
+                <p class="muted hint">No active agents — create or restore one in the Agents tab first.</p>
               {/if}
             </div>
             <div class="grid-2">
@@ -1795,8 +1824,10 @@
                 <div class="field">
                   <label for="epf-agent-{portfolio.id}">Agent</label>
                   <select id="epf-agent-{portfolio.id}" bind:value={editPortfolio.agent_id}>
-                    {#each agents as agent (agent.id)}
-                      <option value={agent.id}>{agent.name}</option>
+                    {#each agentsForPortfolio(editPortfolio.agent_id) as agent (agent.id)}
+                      <option value={agent.id} disabled={agent.status === "archived"}>
+                        {agent.name}{agent.status === "archived" ? " (archived)" : ""}
+                      </option>
                     {/each}
                   </select>
                 </div>
@@ -2116,8 +2147,24 @@
             <button class="btn primary" type="submit" disabled={!newAgentModelId}>Create agent</button>
           </form>
 
-          <h2 class="spaced">Agents</h2>
-          {#each agents as agent (agent.id)}
+          <div class="prompt-list-head spaced">
+            <div>
+              <h2>Agents</h2>
+              <p class="muted">
+                Archive retires an agent from new assignments while preserving portfolio and run history.
+                Permanent deletion is available only when nothing references it.
+              </p>
+            </div>
+            <div class="field prompt-filter">
+              <label for="agent-status-filter">Status</label>
+              <select id="agent-status-filter" bind:value={agentStatusFilter}>
+                <option value="active">Active</option>
+                <option value="archived">Archived</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+          </div>
+          {#each filteredAgents as agent (agent.id)}
             {#if editAgent?.id === agent.id}
               <form class="edit-form" onsubmit={saveAgent}>
                 <div class="field">
@@ -2157,12 +2204,17 @@
                 </div>
               </form>
             {:else}
-              {@const used = agent.portfolios?.length ?? agent.portfolio_count ?? 0}
               <div class="manage-row">
                 <div class="manage-copy">
                   <div class="manage-summary">
                     <strong class="manage-name">{agent.name}</strong>
-                    <span class="manage-meta muted"> · {used} portfolio(s)</span>
+                    <span class={["badge", agent.status === "archived" && "warn"]}>{agent.status}</span>
+                    <span class="manage-meta muted">
+                      · {agent.active_portfolio_count} active · {agent.archived_portfolio_count} archived ·
+                      {agent.evaluation_run_count} run{agent.evaluation_run_count === 1
+                        ? ""
+                        : "s"}{agent.archived_at ? ` · archived ${fmtDate(agent.archived_at)}` : ""}
+                    </span>
                   </div>
                   {#if agent.notes}<p class="truncate muted preview">{agent.notes}</p>{/if}
                 </div>
@@ -2176,13 +2228,34 @@
                         harness: agent.harness?.id ?? "",
                         reasoning_effort: agent.reasoning_effort ?? "",
                         notes: agent.notes,
-                      })}>Edit</button
+                      })}
+                    disabled={agent.status === "archived"}
+                    title={agent.status === "archived" ? "Restore this agent before editing" : ""}
+                    >Edit</button
                   >
+                  <button
+                    class="btn small"
+                    onclick={() => setAgentArchived(agent, agent.status === "active")}
+                    disabled={agentAction.endsWith(`-${agent.id}`) ||
+                      (agent.status === "active" && !agent.can_archive) ||
+                      (agent.status === "archived" && !agent.can_restore)}
+                    title={agent.status === "active" && !agent.can_archive
+                      ? (agent.archive_blocker ?? "")
+                      : agent.status === "archived" && !agent.can_restore
+                        ? (agent.restore_blocker ?? "")
+                        : ""}
+                  >
+                    {agentAction.endsWith(`-${agent.id}`)
+                      ? "Saving…"
+                      : agent.status === "active"
+                        ? "Archive"
+                        : "Restore"}
+                  </button>
                   <button
                     class="btn small danger"
                     onclick={() => deleteAgent(agent)}
-                    disabled={used > 0}
-                    title={used > 0 ? `${used} portfolio(s) still use this agent` : ""}
+                    disabled={!agent.can_delete}
+                    title={agent.delete_blocker ?? "Permanently delete this unreferenced agent"}
                   >
                     Delete
                   </button>
@@ -2190,7 +2263,9 @@
               </div>
             {/if}
           {:else}
-            <div class="empty-state compact"><p>No agents yet — create one above.</p></div>
+            <div class="empty-state compact">
+              <p>No {agentStatusFilter === "all" ? "" : `${agentStatusFilter} `}agents found.</p>
+            </div>
           {/each}
         </section>
       {/if}

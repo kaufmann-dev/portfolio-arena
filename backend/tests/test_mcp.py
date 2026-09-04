@@ -87,6 +87,8 @@ class TestMcpTools:
             "create_model",
             "update_model",
             "delete_model",
+            "archive_agent",
+            "unarchive_agent",
             "create_allocation",
             "create_meta_portfolio_set",
             "update_meta_portfolio_set",
@@ -108,6 +110,34 @@ class TestMcpTools:
         assert "unarchive_prompt" not in names
         # Key management is never exposed as a tool.
         assert not any("key" in name.lower() for name in names)
+
+    def test_agent_archive_roundtrip(self, client, mcp_headers, sample_agent):
+        archived = _call_tool(
+            client,
+            mcp_headers,
+            "archive_agent",
+            {"agent_id": sample_agent["id"]},
+        )
+        assert archived["status"] == "archived"
+        assert archived["can_delete"] is True
+
+        active_listing = _call_tool(client, mcp_headers, "list_agents")
+        assert all(agent["id"] != sample_agent["id"] for agent in active_listing["agents"])
+        archived_listing = _call_tool(
+            client,
+            mcp_headers,
+            "list_agents",
+            {"status": "archived"},
+        )
+        assert [agent["id"] for agent in archived_listing["agents"]] == [sample_agent["id"]]
+
+        restored = _call_tool(
+            client,
+            mcp_headers,
+            "unarchive_agent",
+            {"agent_id": sample_agent["id"]},
+        )
+        assert restored["status"] == "active"
 
     def test_evaluator_dashboard(self, client, mcp_headers):
         data = _call_tool(client, mcp_headers, "get_evaluator_dashboard")

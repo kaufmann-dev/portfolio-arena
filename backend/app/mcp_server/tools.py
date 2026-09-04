@@ -13,10 +13,10 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from ..db import session_factory
-from ..models import Agent, ModelDefinition, Portfolio, Prompt
+from ..models import Portfolio, Prompt
 from ..schemas import AllocationPolicyIn, PositionIn
 from ..services import admin_ops, evaluator
 from ..services.admin_ops import AdminOpError
@@ -166,6 +166,10 @@ def get_arena_overview(direction: str) -> dict:
             summary.pop("sparkline", None)
             managed_rows.append(summary)
         rank_rows(managed_rows)
+        managed_benchmark_start = min(
+            (row["inception"] for row in managed_rows if row["inception"] is not None),
+            default=None,
+        )
 
         rebuilt = compute_rebuilt_arena(
             session,
@@ -191,6 +195,7 @@ def get_arena_overview(direction: str) -> dict:
                 "portfolios": [
                     synthetic_spy_row(
                         valuations.spy_series,
+                        start=managed_benchmark_start,
                         direction=selected_direction,
                     ),
                     *managed_rows,
@@ -348,16 +353,10 @@ def _portfolio_prompt_out(
 
 
 @mcp.tool()
-def list_agents() -> dict:
-    """List generated model + harness + reasoning agent profiles."""
+def list_agents(status: str = "active") -> dict:
+    """List agent profiles by lifecycle status: active, archived, or all."""
     with _session() as session:
-        counts = _portfolio_counts(session, Portfolio.agent_id)
-        agents = session.scalars(
-            select(Agent)
-            .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
-            .order_by(Agent.slug)
-        ).all()
-        return {"agents": [agent_out(agent, portfolio_count=counts.get(agent.id, 0)) for agent in agents]}
+        return _guard(admin_ops.list_agents, session, status=status)
 
 
 @mcp.tool()
@@ -543,9 +542,23 @@ def update_agent(
 
 @mcp.tool()
 def delete_agent(agent_id: int) -> dict:
-    """Delete an agent. Fails if any portfolio still uses it (reassign first)."""
+    """Permanently delete an unreferenced agent. Archive preserves referenced history."""
     with _session() as session:
         return _guard(admin_ops.delete_agent, session, agent_id)
+
+
+@mcp.tool()
+def archive_agent(agent_id: int) -> dict:
+    """Archive an agent with no active portfolios while preserving archived portfolios and run history."""
+    with _session() as session:
+        return _guard(admin_ops.archive_agent, session, agent_id)
+
+
+@mcp.tool()
+def unarchive_agent(agent_id: int) -> dict:
+    """Restore an archived agent when no active agent has the same execution profile."""
+    with _session() as session:
+        return _guard(admin_ops.unarchive_agent, session, agent_id)
 
 
 # --- Writes: prompts --------------------------------------------------------

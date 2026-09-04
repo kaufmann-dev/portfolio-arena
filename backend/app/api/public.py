@@ -114,6 +114,10 @@ def managed_arena(
         if portfolio.id in valuations.by_portfolio_id
     ]
     rank_rows(rows)
+    benchmark_start = min(
+        (row["inception"] for row in rows if row["inception"] is not None),
+        default=None,
+    )
     return {
         "track": "managed",
         "direction": direction,
@@ -125,7 +129,7 @@ def managed_arena(
             "hac_bandwidth": "automatic",
         },
         "portfolios": [
-            synthetic_spy_row(valuations.spy_series, direction=direction),
+            synthetic_spy_row(valuations.spy_series, start=benchmark_start, direction=direction),
             *rows,
         ],
     }
@@ -226,6 +230,10 @@ def managed_meta_arena(
         if portfolio.id in valuations.by_portfolio_id
     ]
     rank_rows(rows)
+    benchmark_start = min(
+        (row["inception"] for row in rows if row["inception"] is not None),
+        default=None,
+    )
     control = serialize_managed_control(
         valuations.by_portfolio_id.get(control_portfolio.id) if control_portfolio else None,
         valuations,
@@ -244,7 +252,7 @@ def managed_meta_arena(
             "hac_bandwidth": "automatic",
         },
         "portfolios": [
-            synthetic_spy_row(valuations.spy_series, direction=direction),
+            synthetic_spy_row(valuations.spy_series, start=benchmark_start, direction=direction),
             *([control] if control else []),
             *rows,
         ],
@@ -876,6 +884,7 @@ def prompt_detail(slug: str, request: Request, session: Session = Depends(get_se
 def list_agents(request: Request, session: Session = Depends(get_session)):
     agents = session.scalars(
         select(Agent)
+        .where(Agent.status == "active")
         .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
         .order_by(Agent.slug)
     ).all()

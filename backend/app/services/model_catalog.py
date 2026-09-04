@@ -80,6 +80,8 @@ def agent_out(agent: Agent, *, portfolio_count: int | None = None) -> dict:
         ),
         "execution_model_id": capability.execution_model_id if capability else None,
         "reasoning_effort": agent.reasoning_effort,
+        "status": agent.status,
+        "archived_at": agent.archived_at.isoformat() if agent.archived_at is not None else None,
     }
     if portfolio_count is not None:
         result["portfolio_count"] = portfolio_count
@@ -110,12 +112,15 @@ def agent_snapshot_out(
     }
 
 
-def load_agent(session: Session, agent_id: int) -> Agent | None:
-    return session.scalars(
+def load_agent(session: Session, agent_id: int, *, lock: bool = False) -> Agent | None:
+    query = (
         select(Agent)
         .where(Agent.id == agent_id)
         .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
-    ).first()
+    )
+    if lock:
+        query = query.with_for_update()
+    return session.scalars(query).first()
 
 
 def validate_capabilities(capabilities: list[dict]) -> list[dict]:
