@@ -22,7 +22,9 @@ def model_ref(model: ModelDefinition) -> dict:
     return {"id": model.id, "slug": model.slug, "name": model.name}
 
 
-def model_out(model: ModelDefinition, *, agent_count: int | None = None) -> dict:
+def model_out(
+    model: ModelDefinition, *, agent_count: int | None = None, evaluation_run_count: int = 0
+) -> dict:
     result = {
         **model_ref(model),
         "notes": model.notes,
@@ -32,6 +34,13 @@ def model_out(model: ModelDefinition, *, agent_count: int | None = None) -> dict
     }
     if agent_count is not None:
         result["agent_count"] = agent_count
+        result["evaluation_run_count"] = evaluation_run_count
+        result["can_delete"] = not (agent_count or evaluation_run_count)
+        result["delete_blocker"] = (
+            f"{agent_count} agent(s) and {evaluation_run_count} evaluation run(s) still reference this model."
+            if agent_count or evaluation_run_count
+            else None
+        )
     return result
 
 

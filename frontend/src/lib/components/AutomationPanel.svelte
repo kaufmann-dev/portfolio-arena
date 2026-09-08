@@ -244,13 +244,14 @@
   }
 
   function cancelRun(run: EvaluationRun) {
+    error = "";
     cancelTarget = run;
     cancelDialogOpen = true;
   }
 
   async function confirmCancelRun() {
     const run = cancelTarget;
-    if (!run) return;
+    if (!run || busyAction === `cancel-${run.id}`) return;
     busyAction = `cancel-${run.id}`;
     error = "";
     try {
@@ -716,6 +717,7 @@
     description={`Run #${cancelTarget.id} for ${cancelTarget.portfolio.name} will receive a cancellation request. A running worker may need a moment to stop.`}
     confirmLabel="Cancel evaluation"
     busy={busyAction === `cancel-${cancelTarget.id}`}
+    {error}
     onConfirm={confirmCancelRun}
   />
 {/if}

@@ -301,7 +301,7 @@ def test_meta_set_requires_automation_capable_agent(client, admin_headers):
     assert "integrated automation" in response.json()["detail"]
 
 
-def test_meta_set_member_cannot_be_deleted_individually(
+def test_meta_set_members_can_be_deleted_and_empty_family_is_removed(
     client,
     admin_headers,
     sample_agent,
@@ -322,7 +322,12 @@ def test_meta_set_member_cannot_be_deleted_individually(
         headers=admin_headers,
     )
 
-    assert response.status_code == 409
-    assert "cannot be deleted individually" in response.json()["detail"]
+    assert response.status_code == 200, response.text
     with session_factory()() as session:
-        assert session.scalar(select(func.count()).select_from(Portfolio)) == 4
+        assert session.scalar(select(func.count()).select_from(Portfolio)) == 3
+        assert session.get(MetaPortfolioSet, created["id"]) is not None
+    for member in created["portfolios"][1:]:
+        assert client.delete(f"/api/portfolios/{member['id']}", headers=admin_headers).status_code == 200
+    with session_factory()() as session:
+        assert session.get(MetaPortfolioSet, created["id"]) is None
+        assert session.scalar(select(func.count()).select_from(Portfolio)) == 0

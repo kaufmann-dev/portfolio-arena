@@ -7,6 +7,7 @@
     description: string;
     confirmLabel?: string;
     busy?: boolean;
+    error?: string;
     onConfirm: () => void | Promise<void>;
   }
 
@@ -16,6 +17,7 @@
     description,
     confirmLabel = "Confirm",
     busy = false,
+    error = "",
     onConfirm,
   }: Props = $props();
 </script>
@@ -32,6 +34,9 @@
     >
       <AlertDialog.Title class="dialog-title">{title}</AlertDialog.Title>
       <AlertDialog.Description class="dialog-description">{description}</AlertDialog.Description>
+      {#if error}
+        <div class="error-box" role="alert">{error}</div>
+      {/if}
       <div class="dialog-actions">
         <AlertDialog.Cancel class="btn" disabled={busy}>Cancel</AlertDialog.Cancel>
         <AlertDialog.Action class="btn danger solid" disabled={busy} onclick={onConfirm}>

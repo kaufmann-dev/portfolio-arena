@@ -117,6 +117,29 @@ export interface PortfolioResetResult {
   cancellation_requested_runs: number;
 }
 
+export interface AdminPortfolio extends Ref {
+  status: "active" | "archived";
+  prompt_mode: PromptMode;
+  direction: Direction;
+  cost_bps: number;
+  agent: AgentRef;
+  prompt: Ref & { context_scope: PromptContextScope; status: "active" | "archived" };
+  meta_set_id: number | null;
+  allocation_count: number;
+  signal_count: number;
+  evaluation_run_count: number;
+  active_run_count: number;
+  structure_editable: boolean;
+  structure_blocker: string | null;
+  prompt_editable: boolean;
+  restore_blocker: string | null;
+}
+
+export interface AdminPortfoliosResponse {
+  portfolios: AdminPortfolio[];
+  meta_sets: MetaPortfolioSetCreated[];
+}
+
 export interface SignalOut {
   id: number;
   portfolio_id: number;
@@ -567,6 +590,9 @@ export interface ModelDefinition extends Ref {
   notes: string;
   capabilities: ModelHarnessCapability[];
   agent_count: number;
+  evaluation_run_count: number;
+  can_delete: boolean;
+  delete_blocker: string | null;
   created_at: string;
   updated_at: string;
 }
