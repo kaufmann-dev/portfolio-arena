@@ -65,6 +65,16 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
   allocation history or rebuilt signal history, cancels in-flight evaluator work, and preserves its
   identity, configuration, schedule, and evaluator audit records. A portfolio cannot switch mode or
   direction until its history has been reset and in-flight cancellation has completed.
+- **Admin portfolio management includes every portfolio.** The Portfolios tab uses a dedicated
+  inventory independent of prices and rankings, including active and archived normal and Meta
+  portfolios, with name search and status filters. Meta family agents can be reassigned together;
+  each member's track, direction, and prompt remain tied to its family.
+- **Archive pauses; delete removes.** Archiving a portfolio disables its schedule, cancels queued
+  evaluations, and requests cancellation of running evaluations. Restoring requires an active agent
+  and prompt; automation must be explicitly enabled again. Deleting a portfolio permanently removes
+  its allocations, signals, schedule, and evaluation runs in every state, and stops its worker.
+  Meta members can be deleted individually; siblings remain, and deleting the last member removes
+  the empty family. Frozen synthesis packets for other portfolios remain historical evidence.
 - **Mode- and direction-aware strategy prompts.** Every prompt independently supports Managed,
   Rebuilt, or Both and Long, Short, or Both. It stores a complete strategy text for each supported
   mode-and-direction combination. Managed evaluations receive holdings, allocation history, notes,
@@ -83,6 +93,8 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
   are archived or reassigned. Archived Agents disappear from assignment controls and public lists,
   while archived portfolios and evaluation runs keep their original references. Permanent deletion
   is available only when no portfolio or evaluation run references the Agent.
+  Models likewise cannot be deleted while agents or historical runs reference them; the admin panel
+  displays those dependencies. A portfolio's deletion removes its run references as well.
 - **Prompt scope is immutable.** Normal `portfolio` prompts and synthesis-only `arena` prompts are
   separate stable identities. Meta portfolios never enter normal leaderboards, comparisons, or the
   rebuilt Common-policy source cohort.
@@ -164,10 +176,11 @@ admin panel.
   immutable Portfolio/Arena scope, Managed/Rebuilt/Both and Long/Short/Both support, and current
   mode-and-direction-specific texts. `create_meta_portfolio_set` atomically creates and enables all
   four cells of one arena-scoped family, with an optional comparison-variant label appended to member
-  names. `update_meta_portfolio_set` atomically reassigns all four cells to one automation-capable
+  names. `update_meta_portfolio_set` atomically reassigns every remaining member to one automation-capable
   Agent for future runs. Normal portfolios can be reassigned with `update_portfolio`, and
   `reset_portfolio` clears a portfolio's mode-specific decisions while preserving its identity,
-  evaluator configuration, and evaluator audit. Prompt tools can archive a prompt after every
+  evaluator configuration, and evaluator audit. `delete_portfolio` removes normal or Meta portfolios
+  together with their decisions and evaluation runs. Prompt tools can archive a prompt after every
   referencing portfolio is archived. MCP cannot expose archived prompt content, immutable history,
   unarchive, or restore operations; those recovery controls remain in the browser admin.
 - **Settings tools.** MCP can read and atomically update the default cost, both mode-level allocation

@@ -281,3 +281,44 @@ def test_worker_state_payload_is_stable():
         "last_error": None,
         "poll_seconds": 30,
     }
+
+
+def test_deleted_run_stops_worker_cancellation_poll(tmp_path, monkeypatch):
+    import httpx
+
+    from app.evaluator.worker import _wait_for_cancellation
+
+    async def missing_run(*args, **kwargs):
+        response = httpx.Response(404, request=httpx.Request("GET", "http://test/runs/17/control"))
+        response.raise_for_status()
+
+    monkeypatch.setattr("app.evaluator.worker.internal_request", missing_run)
+    # Keep a yielding poll so the timeout can expose a worker that ignores deletion.
+    original_sleep = asyncio.sleep
+
+    async def fast_sleep(_seconds):
+        await original_sleep(0)
+
+    monkeypatch.setattr("app.evaluator.worker.asyncio.sleep", fast_sleep)
+
+    async def check():
+        return await asyncio.wait_for(_wait_for_cancellation(_settings(tmp_path), _run()), timeout=0.05)
+
+    assert "deleted" in asyncio.run(check()).lower()
+
+
+def test_deleted_run_cancellation_needs_no_failure_record(tmp_path, monkeypatch):
+    import httpx
+
+    from app.evaluator.worker import RunCancelled
+
+    async def cancelled(*args):
+        raise RunCancelled("Portfolio was deleted")
+
+    async def missing_run(*args, **kwargs):
+        response = httpx.Response(404, request=httpx.Request("POST", "http://test/runs/17/fail"))
+        response.raise_for_status()
+
+    monkeypatch.setattr("app.evaluator.worker.run_codex", cancelled)
+    monkeypatch.setattr("app.evaluator.worker.internal_request", missing_run)
+    asyncio.run(evaluate_run(_settings(tmp_path), _run()))

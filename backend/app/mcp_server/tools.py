@@ -701,7 +701,7 @@ def create_meta_portfolio_set(
 
 @mcp.tool()
 def update_meta_portfolio_set(meta_set_id: int, agent_id: int) -> dict:
-    """Atomically reassign all four members of a Meta family to one
+    """Atomically reassign all remaining members of a Meta family to one
     automation-capable agent. Existing decisions and queued run snapshots are
     preserved; the new profile applies to future runs."""
     with _session() as session:
@@ -744,7 +744,7 @@ def update_portfolio(
 
 @mcp.tool()
 def delete_portfolio(portfolio_id: int) -> dict:
-    """Delete a portfolio and all of its mode-specific history. Irreversible."""
+    """Delete a normal or Meta portfolio, its decisions, and all evaluation runs. Irreversible."""
     with _session() as session:
         return _guard(admin_ops.delete_portfolio, session, portfolio_id)
 

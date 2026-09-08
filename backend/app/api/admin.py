@@ -266,6 +266,11 @@ def effective_date_preview():
 # --- Portfolios & allocations -------------------------------------------------
 
 
+@router.get("/admin/portfolios")
+def list_portfolios(session: Session = Depends(get_session)):
+    return admin_ops.list_portfolios(session)
+
+
 @router.post("/portfolios", status_code=201)
 def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_session)):
     return _run(

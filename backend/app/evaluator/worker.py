@@ -195,6 +195,11 @@ async def _wait_for_cancellation(
         await asyncio.sleep(2)
         try:
             control = await internal_request(settings, "GET", f"/runs/{run.id}/control")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return "Portfolio or evaluation run was deleted."
+            logger.exception("evaluation_control_poll_failed run_id=%s", run.id)
+            continue
         except Exception:
             logger.exception("evaluation_control_poll_failed run_id=%s", run.id)
             continue
@@ -304,12 +309,16 @@ async def evaluate_run(
         logger.info("evaluation_succeeded portfolio=%s run_id=%s", run.portfolio.slug, run.id)
     except RunCancelled as exc:
         logger.info("evaluation_cancelled portfolio=%s run_id=%s", run.portfolio.slug, run.id)
-        await internal_request(
-            settings,
-            "POST",
-            f"/runs/{run.id}/fail",
-            {"error": str(exc), "cancelled": True},
-        )
+        try:
+            await internal_request(
+                settings,
+                "POST",
+                f"/runs/{run.id}/fail",
+                {"error": str(exc), "cancelled": True},
+            )
+        except httpx.HTTPStatusError as failure:
+            if failure.response.status_code != 404:
+                raise
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
         logger.error(
