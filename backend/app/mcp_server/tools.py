@@ -79,6 +79,16 @@ def _resolve_portfolio(session: Session, slug_or_id: str) -> Portfolio:
 
 
 @mcp.tool()
+def list_portfolios() -> dict:
+    """Complete admin inventory of active and archived normal and Meta portfolios,
+    independent of market data and automation eligibility. Includes assignments,
+    lifecycle blockers, each portfolio's meta_set_id, and meta_sets with member
+    IDs. Use this to discover portfolios and Meta families before editing them."""
+    with _session() as session:
+        return admin_ops.list_portfolios(session)
+
+
+@mcp.tool()
 def get_portfolio(slug_or_id: str) -> dict:
     """Everything needed to evaluate ONE portfolio. Managed mode includes
     drifted holdings, notes, allocation history, performance, and costs. Rebuilt
@@ -702,7 +712,8 @@ def create_meta_portfolio_set(
 @mcp.tool()
 def update_meta_portfolio_set(meta_set_id: int, agent_id: int) -> dict:
     """Atomically reassign all remaining members of a Meta family to one
-    automation-capable agent. Existing decisions and queued run snapshots are
+    automation-capable agent. Discover meta_set_id through list_portfolios.
+    Existing decisions and queued run snapshots are
     preserved; the new profile applies to future runs."""
     with _session() as session:
         return _guard(
@@ -726,7 +737,9 @@ def update_portfolio(
 ) -> dict:
     """Edit a portfolio: rename, archive/unarchive (`status` = "active" |
     "archived"), reassign agent/prompt, select `managed` or `rebuilt` prompt
-    mode, direction, or cost_bps. Omitted fields are left unchanged."""
+    mode, direction, or cost_bps. Omitted fields are left unchanged. Meta members'
+    prompt, mode, and direction belong to their family; reassign their agent with
+    update_meta_portfolio_set using the meta_set_id from list_portfolios."""
     with _session() as session:
         return _guard(
             admin_ops.update_portfolio,

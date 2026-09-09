@@ -163,6 +163,10 @@ admin panel.
 - **Auth.** Every request needs an API key (`Authorization: Bearer <key>`, or `X-API-Key`);
   there is no anonymous access. Create and revoke keys in the admin panel's **API Keys** tab.
   The plaintext key is shown once at creation; only a SHA-256 hash is stored.
+- **Admin inventory.** `list_portfolios()` returns active and archived normal and Meta portfolios,
+  assignments, lifecycle blockers, and Meta families with their member IDs, independently of prices
+  and automation eligibility. Use its `meta_set_id` with `update_meta_portfolio_set` to reassign a
+  family's agent. This inventory is unavailable to internal evaluator tokens.
 - **Flagship read tools.** `get_portfolio(slug_or_id)` always returns only the strategy text selected
   for that portfolio's mode and direction, its structured policy, prompt mode, and next effective
   date. Managed
