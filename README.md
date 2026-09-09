@@ -49,9 +49,9 @@ after the daily runs finish. It is an _arena_: honest, deterministic measurement
   API-key management and archived prompt recovery stay browser-only; the worker-only queue and
   submission protocol is private to the deployment.
 - **Meta synthesis** — arena-scoped prompts create atomic Managed/Rebuilt × Long/Short portfolio
-  families. One frozen daily batch records the active normal cohort, waits for due source runs to
-  become terminal, and supplies each Meta evaluator only the frozen sources matching its execution
-  Agent ID, Managed/Rebuilt mode, and Long/Short direction, with an equal-source control computed from
+  families. Each Agent has its own daily batch, which records its active normal cohort and waits
+  only for that Agent's due source runs to become terminal. Each Meta evaluator receives sources
+  matching its execution Agent ID, Managed/Rebuilt mode, and Long/Short direction, with an equal-source control computed from
   those same sources. Different reasoning-effort profiles are different Agents even on the same model.
 
 ## Experiment-integrity rules (enforced in code)
@@ -101,7 +101,7 @@ after the daily runs finish. It is an _arena_: honest, deterministic measurement
   separate stable identities. Meta portfolios never enter normal leaderboards, comparisons, or the
   rebuilt Common-policy source cohort.
 - **Meta evidence is frozen, not performance-selected.** Each worker receives only matching-agent,
-  matching-mode, matching-direction source decisions and notes from the frozen daily batch, including
+  matching-mode, matching-direction source decisions and notes from its Agent's frozen daily batch, including
   explicit prior-decision fallbacks for failed sources. Counts and the worker's equal-source control
   use the same subset. A run with no usable matching decisions is skipped; manual runs and retries
   without matching evidence are rejected. Performance, ranks, evaluator reports, and older history
@@ -240,12 +240,17 @@ execution prompt rendered from the portfolio's selected mode-and-direction-speci
 and the editable wrapper for its mode. A liquidated managed short cannot be enabled, queued, claimed,
 retried, or submitted again until its portfolio history is reset.
 
-Arena-scoped scheduled runs are dependent work. The scheduler freezes the active normal cohort when
-the daily window opens, queues normal work first, and waits through automatic retries until every due
-source is terminal. Successful same-session decisions are used directly; failures use clearly marked
-prior-decision fallbacks. Only then are the frozen Meta targets queued for that same scheduled
-session, even if execution finishes after close. Before server-side prompt injection, each packet is
-filtered to the run's snapshotted Agent ID and the target's mode and direction. Later portfolio
+Arena-scoped scheduled runs are dependent work. The scheduler freezes a separate active normal cohort
+for each Agent when its daily batch opens. It waits through automatic retries until every due source
+for that Agent, across all modes and directions, is terminal, then freezes the evidence and queues
+that Agent's Meta targets. Other Agents' unfinished evaluations do not delay this step. Successful
+same-session decisions are used directly; failures use clearly marked prior-decision fallbacks.
+Meta runs target the same scheduled session, even if execution finishes after close. An Agent added
+while the daily window is open gets its own batch without changing another Agent's frozen cohort.
+The Meta Arena displays each Agent's batch status separately; its public endpoints return a `batches`
+array for the latest session. Manual Meta runs use the latest ready batch for their own Agent.
+Before server-side prompt injection, each packet is filtered to the run's snapshotted Agent ID and
+the target's mode and direction. Later portfolio
 reassignments do not change the agent used by an already queued run. Normal workers retain the same
 read-only tools and never receive an arena-wide data tool.
 
@@ -315,6 +320,11 @@ existing family or member identity.
 
 Migration `0024` adds reversible Agent archive state and limits execution-profile uniqueness to active
 Agents, allowing a clean active replacement while an older profile remains available to history.
+
+Migration `0025` replaces the shared daily Meta batch with one batch per session and Agent. Existing
+batches are split by recorded execution and source identities, preserving run history, frozen
+snapshot contents, and snapshot hashes. New snapshots contain only that Agent's sources. This data
+migration cannot be downgraded by merging independently frozen evidence.
 
 ## Development
 

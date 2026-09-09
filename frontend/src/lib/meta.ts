@@ -10,5 +10,5 @@ export function metaBatchStatusCopy(status: MetaBatchStatus): string {
   if (status === "failed") {
     return "The source packet could not be constructed, so meta evaluations were not queued.";
   }
-  return "Meta evaluations begin after every due normal-portfolio run reaches a terminal state.";
+  return "Meta evaluations begin after every due normal-portfolio run for the same agent reaches a terminal state.";
 }

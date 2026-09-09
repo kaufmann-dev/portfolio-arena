@@ -90,6 +90,100 @@ def _claim(session, now: datetime, limit: int = 5) -> dict:
     )
 
 
+def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running(
+    client, admin_headers, sample_agent, sample_model, sample_prompt
+):
+    from app.db import session_factory
+    from app.models import EvaluationRun, MetaBatch, Portfolio
+    from app.services import admin_ops
+
+    first_family = _create_meta_set(client, admin_headers, sample_agent)
+    now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
+    with session_factory()() as session:
+        other_agent = admin_ops.create_agent(
+            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
+        )
+        other_family = admin_ops.create_meta_portfolio_set(
+            session,
+            family_name="Other Confluence",
+            agent_id=other_agent["id"],
+            prompt_id=first_family["prompt_id"],
+        )
+        source_ids = []
+        for index, (agent_id, mode) in enumerate(
+            [(sample_agent["id"], "managed"), (sample_agent["id"], "rebuilt"), (other_agent["id"], "managed")]
+        ):
+            source = Portfolio(
+                name=f"Source {index}",
+                slug=f"source-{index}",
+                agent_id=agent_id,
+                prompt_id=sample_prompt["id"],
+                prompt_mode=mode,
+                direction="long",
+                cost_bps=10,
+            )
+            session.add(source)
+            session.commit()
+            source_ids.append(source.id)
+            evaluator.update_portfolio_config(
+                session, portfolio_id=source.id, enabled=True, weekdays=[0, 1, 2, 3, 4]
+            )
+
+        runs = {run["portfolio"]["id"]: run for run in _claim(session, now)["runs"]}
+        assert set(runs) == set(source_ids)
+
+        def finish_source(source_id, minute):
+            evaluator.submit_run(
+                session,
+                run_id=runs[source_id]["id"],
+                positions=[{"symbol": "AAPL", "weight_pct": 100, "note": "source"}],
+                note=f"source-{source_id}",
+                report="source",
+                now=now + timedelta(minutes=minute),
+            )
+
+        finish_source(source_ids[0], 1)
+        # All cells of this agent must finish, including its rebuilt source.
+        assert _claim(session, now + timedelta(minutes=2))["runs"] == []
+        finish_source(source_ids[1], 3)
+        own_meta = _claim(session, now + timedelta(minutes=4))["runs"]
+        expected_ids = {p["id"] for p in first_family["portfolios"] if p["direction"] == "long"}
+        assert {run["portfolio"]["id"] for run in own_meta} == expected_ids
+        assert session.get(EvaluationRun, runs[source_ids[2]]["id"]).status == "running"
+        own_batch = session.get(MetaBatch, own_meta[0]["meta_batch_id"])
+        frozen = deepcopy(own_batch.snapshot)
+        assert own_batch.source_portfolio_ids == source_ids[:2]
+        assert {source["agent"]["id"] for source in frozen["sources"]} == {sample_agent["id"]}
+
+        response = client.get("/api/meta/managed?direction=long")
+        assert response.status_code == 200, response.text
+        assert {batch["agent_id"]: batch["status"] for batch in response.json()["batches"]} == {
+            sample_agent["id"]: "ready",
+            other_agent["id"]: "waiting",
+        }
+
+        finish_source(source_ids[2], 5)
+        other_meta = _claim(session, now + timedelta(minutes=6))["runs"]
+        assert [run["portfolio"]["id"] for run in other_meta] == [other_family["portfolios"][0]["id"]]
+        assert other_meta[0]["meta_batch_id"] != own_batch.id
+        session.refresh(own_batch)
+        assert own_batch.snapshot == frozen
+        assert _claim(session, now + timedelta(minutes=7))["runs"] == []
+
+        # A manual rerun must select this agent's snapshot, even when another
+        # agent has a newer ready batch for the same session.
+        core = next(run for run in own_meta if run["portfolio"]["id"] == first_family["portfolios"][0]["id"])
+        evaluator.cancel_run(session, run_id=core["id"], now=now + timedelta(minutes=8))
+        evaluator.fail_run(
+            session, run_id=core["id"], error="cancelled", cancelled=True, now=now + timedelta(minutes=8)
+        )
+        manual = evaluator.enqueue_manual_runs(
+            session, portfolio_ids=[core["portfolio"]["id"]], now=now + timedelta(minutes=9)
+        )
+        assert manual["items"][0]["action"] == "queued"
+        assert manual["items"][0]["run"]["meta_batch_id"] == own_batch.id
+
+
 def test_meta_packets_match_agent_and_cell_and_keep_queued_identity(
     client, admin_headers, sample_agent, sample_model, sample_prompt
 ):
@@ -143,8 +237,9 @@ def test_meta_packets_match_agent_and_cell_and_keep_queued_identity(
 
         # Freeze and queue without claiming, then change the family's live agent.
         assert _claim(session, now, limit=0)["runs"] == []
-        batch = session.query(MetaBatch).one()
-        frozen = deepcopy(batch.snapshot)
+        batches = session.query(MetaBatch).order_by(MetaBatch.agent_id).all()
+        assert len(batches) == 2
+        frozen = {batch.id: deepcopy(batch.snapshot) for batch in batches}
         admin_ops.update_meta_portfolio_set(session, first_family["id"], agent_id=second_agent["id"])
         # Later edits to a source cannot alter its frozen agent or reasoning either.
         source.agent_id = sample_agent["id"]
@@ -166,8 +261,102 @@ def test_meta_packets_match_agent_and_cell_and_keep_queued_identity(
             assert packet["controls"][f"{mode}_{direction}"]["contributor_count"] == 1
             assert "edited-after-freeze" not in rendered
             assert all(other == marker or other not in rendered for *_, other in expected.values())
-        session.refresh(batch)
-        assert batch.snapshot == frozen
+        for batch in batches:
+            session.refresh(batch)
+            assert batch.snapshot == frozen[batch.id]
+
+
+def test_agent_added_after_daily_window_gets_its_own_batch(
+    client, admin_headers, sample_agent, sample_model, sample_prompt, sample_portfolio
+):
+    from app.db import session_factory
+    from app.models import MetaBatch, Portfolio
+    from app.services import admin_ops
+
+    first_family = _create_meta_set(client, admin_headers, sample_agent)
+    now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
+    with session_factory()() as session:
+        evaluator.update_portfolio_config(
+            session, portfolio_id=sample_portfolio["id"], enabled=True, weekdays=[0, 1, 2, 3, 4]
+        )
+        first_source = _claim(session, now)["runs"][0]
+        first_batch = session.get(MetaBatch, first_source["meta_batch_id"])
+        other_agent = admin_ops.create_agent(
+            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
+        )
+        source = Portfolio(
+            name="Late source",
+            slug="late-source",
+            agent_id=other_agent["id"],
+            prompt_id=sample_prompt["id"],
+            prompt_mode="managed",
+            direction="long",
+            cost_bps=10,
+        )
+        session.add(source)
+        session.commit()
+        evaluator.update_portfolio_config(
+            session, portfolio_id=source.id, enabled=True, weekdays=[0, 1, 2, 3, 4]
+        )
+        other_family = admin_ops.create_meta_portfolio_set(
+            session,
+            family_name="Late Confluence",
+            agent_id=other_agent["id"],
+            prompt_id=first_family["prompt_id"],
+        )
+        late_run = _claim(session, now + timedelta(minutes=1))["runs"][0]
+        assert late_run["portfolio"]["id"] == source.id
+        other_batch = session.get(MetaBatch, late_run["meta_batch_id"])
+        assert other_batch.id != first_batch.id
+        assert other_batch.source_portfolio_ids == [source.id]
+        assert other_batch.target_portfolio_ids == [p["id"] for p in other_family["portfolios"]]
+        session.refresh(first_batch)
+        assert first_batch.source_portfolio_ids == [sample_portfolio["id"]]
+        evaluator.submit_run(
+            session,
+            run_id=late_run["id"],
+            positions=[{"symbol": "AAPL", "weight_pct": 100, "note": "late source"}],
+            note="late source",
+            report="late source",
+            now=now + timedelta(minutes=2),
+        )
+        meta = _claim(session, now + timedelta(minutes=3))["runs"]
+        assert [run["portfolio"]["id"] for run in meta] == [other_family["portfolios"][0]["id"]]
+        assert first_batch.status == "waiting"
+
+
+def test_source_reassignment_does_not_change_the_agent_of_running_evidence(
+    client, admin_headers, sample_agent, sample_model, sample_portfolio
+):
+    from app.db import session_factory
+    from app.models import MetaBatch, Portfolio
+    from app.services import admin_ops
+
+    family = _create_meta_set(client, admin_headers, sample_agent)
+    now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
+    with session_factory()() as session:
+        evaluator.update_portfolio_config(
+            session, portfolio_id=sample_portfolio["id"], enabled=True, weekdays=[0, 1, 2, 3, 4]
+        )
+        source_run = _claim(session, now)["runs"][0]
+        other_agent = admin_ops.create_agent(
+            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
+        )
+        session.get(Portfolio, sample_portfolio["id"]).agent_id = other_agent["id"]
+        session.commit()
+        evaluator.submit_run(
+            session,
+            run_id=source_run["id"],
+            positions=[{"symbol": "AAPL", "weight_pct": 100, "note": "original agent evidence"}],
+            note="original agent evidence",
+            report="source",
+            now=now + timedelta(minutes=1),
+        )
+        meta = _claim(session, now + timedelta(minutes=2))["runs"]
+        assert [run["portfolio"]["id"] for run in meta] == [family["portfolios"][0]["id"]]
+        snapshot = session.get(MetaBatch, meta[0]["meta_batch_id"]).snapshot
+        assert snapshot["sources"][0]["agent"]["id"] == sample_agent["id"]
+        assert snapshot["sources"][0]["note"] == "original agent evidence"
 
 
 @pytest.mark.parametrize("agent_id", [1, 2])

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import MetaBatch, Portfolio
+from ..models import Agent, MetaBatch, Portfolio
 from .arena import RebuiltArena, RebuiltPortfolioAnalysis
+from .meta_synthesis import source_counts
+from .model_catalog import agent_name
 from .rebuilt import PolicyResult
 
 
@@ -18,16 +20,34 @@ def is_meta_portfolio(portfolio: Portfolio) -> bool:
     return portfolio.prompt.context_scope == "arena"
 
 
-def latest_batch(session: Session) -> MetaBatch | None:
-    return session.scalar(select(MetaBatch).order_by(MetaBatch.session_date.desc(), MetaBatch.id.desc()))
+def public_batches(session: Session) -> list[dict]:
+    """Report each agent's progress independently for the latest scheduled session."""
+    latest_date = select(func.max(MetaBatch.session_date)).scalar_subquery()
+    batches = session.scalars(
+        select(MetaBatch).where(MetaBatch.session_date == latest_date).order_by(MetaBatch.agent_id)
+    ).all()
+    result = []
+    for batch in batches:
+        agent = session.get(Agent, batch.agent_id)
+        result.append(
+            {
+                **_public_batch(batch),
+                "agent_id": batch.agent_id,
+                "agent_name": agent_name(agent) if agent is not None else "Deleted agent",
+            }
+        )
+    return result
 
 
-def public_batch(batch: MetaBatch | None) -> dict | None:
+def _public_batch(batch: MetaBatch) -> dict:
     """Expose operational counts without exposing source identities or reasoning."""
-    if batch is None:
-        return None
     snapshot = batch.snapshot if isinstance(batch.snapshot, dict) else {}
-    counts = snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {}
+    source_ids = set(batch.source_portfolio_ids)
+    counts = (
+        source_counts([source for source in snapshot["sources"] if source["portfolio"]["id"] in source_ids])
+        if snapshot
+        else {}
+    )
     return {
         "id": batch.id,
         "session_date": batch.session_date.isoformat(),
