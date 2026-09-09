@@ -64,6 +64,14 @@ class TestMcpAuth:
         )
         assert hidden_history.status_code == 403
 
+        inventory = _rpc(
+            client,
+            headers,
+            "tools/call",
+            {"name": "list_portfolios", "arguments": {}},
+        )
+        assert inventory.status_code == 403
+
 
 class TestMcpTools:
     def test_endpoint_works_without_trailing_slash(self, client, mcp_headers):
@@ -80,6 +88,7 @@ class TestMcpTools:
         names = {tool["name"] for tool in response.json()["result"]["tools"]}
         assert {
             "get_portfolio",
+            "list_portfolios",
             "get_arena_overview",
             "get_rebuilt_analysis",
             "list_harnesses",
@@ -421,13 +430,15 @@ class TestMcpTools:
         detail = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers).json()
         assert detail["portfolio"]["allocations"] == []
 
-    def test_create_and_update_meta_portfolio_set(
+    def test_create_discover_and_update_meta_portfolio_set(
         self,
         client,
         admin_headers,
         mcp_headers,
         sample_agent,
         sample_model,
+        sample_portfolio,
+        monkeypatch,
     ):
         prompt = _call_tool(
             client,
@@ -470,13 +481,54 @@ class TestMcpTools:
         )
         assert replacement_response.status_code == 201, replacement_response.text
         replacement = replacement_response.json()
+
+        # A later caller must discover an existing family without its creation response.
+        archived = client.patch(
+            f"/api/portfolios/{sample_portfolio['id']}",
+            json={"status": "archived"},
+            headers=admin_headers,
+        )
+        assert archived.status_code == 200
+
+        def no_valuation(*args, **kwargs):
+            raise AssertionError("Admin inventory must not calculate performance")
+
+        monkeypatch.setattr("app.services.admin_ops.compute_valuations", no_valuation)
+        monkeypatch.setattr("app.services.admin_ops.compute_rebuilt_arena", no_valuation)
+        inventory = _call_tool(client, mcp_headers, "list_portfolios")
+        family = next(item for item in inventory["meta_sets"] if item["family_name"] == "MCP Confluence")
+        members = [item for item in inventory["portfolios"] if item["meta_set_id"] == family["id"]]
+        assert len(members) == 4
+        assert {item["id"] for item in members} == {item["id"] for item in family["portfolios"]}
+        assert any(
+            item["id"] == sample_portfolio["id"] and item["status"] == "archived"
+            for item in inventory["portfolios"]
+        )
+
+        rejected = _rpc(
+            client,
+            mcp_headers,
+            "tools/call",
+            {
+                "name": "update_portfolio",
+                "arguments": {"portfolio_id": members[0]["id"], "agent_id": replacement["id"]},
+            },
+        ).json()["result"]
+        assert rejected["isError"] is True
+        assert f"update_meta_portfolio_set(meta_set_id={family['id']}" in rejected["content"][0]["text"]
         updated = _call_tool(
             client,
             mcp_headers,
             "update_meta_portfolio_set",
-            {"meta_set_id": created["id"], "agent_id": replacement["id"]},
+            {"meta_set_id": family["id"], "agent_id": replacement["id"]},
         )
         assert updated["agent_id"] == replacement["id"]
+        reassigned = _call_tool(client, mcp_headers, "list_portfolios")
+        assert all(
+            item["agent"]["id"] == replacement["id"]
+            for item in reassigned["portfolios"]
+            if item["meta_set_id"] == family["id"]
+        )
 
         variant = _call_tool(
             client,

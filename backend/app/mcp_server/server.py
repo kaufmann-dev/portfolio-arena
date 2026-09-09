@@ -34,6 +34,11 @@ independent daily rebuilt signals against a direction-matched synthetic SPY
 reference. Results are recomputed from inputs and cached prices; NAVs are never
 snapshotted.
 
+For administration, start with `list_portfolios()` for the complete inventory,
+including archived portfolios and Meta families. Reassign a Meta family's agent
+with `update_meta_portfolio_set(meta_set_id, agent_id)` using its discovered ID.
+
+For portfolio evaluation:
 1. `get_portfolio(slug_or_id)` — read its canonical prompt, prompt mode, and
 allowed evaluation context. Managed portfolios include holdings, notes, history,
 and performance. Rebuilt portfolios intentionally expose none of their prior

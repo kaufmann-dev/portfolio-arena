@@ -1463,7 +1463,9 @@ def update_portfolio(
         ):
             raise AdminOpError(
                 409,
-                "A meta portfolio's prompt, mode, direction, and agent are managed by its set.",
+                "A meta portfolio's prompt, mode, direction, and agent are managed by its set. "
+                f"Use update_meta_portfolio_set(meta_set_id={meta_set.id}, agent_id=...) "
+                "to reassign the family's agent.",
             )
     _ensure_prompt_supports_portfolio_mode(final_prompt, final_prompt_mode)
     _ensure_prompt_supports_portfolio_direction(final_prompt, final_direction)
