@@ -338,6 +338,10 @@ an in-memory HTTP transport, so nothing hits the network.
   needed.
 - Deploy. The tracked `nixpacks.toml` builds the SPA and starts one supervisor that runs migrations,
   FastAPI, the scheduler, and the evaluator worker automatically.
+- Each deployment or container restart runs `npm run update:codex` to install the latest stable Codex
+  CLI before launching the supervisor, including when the image build was cached. Startup requires npm
+  registry access and stops if the update fails. Redeploy or restart to pick up subsequent releases.
+  The image includes `bubblewrap` for Codex's Linux sandbox.
 - When replacing the former two-application setup, stop the old standalone evaluator before
   deploying this version so both schedulers cannot create work during the cutover.
 

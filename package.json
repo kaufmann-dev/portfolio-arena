@@ -2,7 +2,10 @@
   "name": "portfolio-arena-runtime",
   "private": true,
   "version": "2.0.0",
+  "scripts": {
+    "update:codex": "npm install --no-save --package-lock=false --prefer-online @openai/codex@latest && codex --version"
+  },
   "dependencies": {
-    "@openai/codex": "0.144.5"
+    "@openai/codex": "latest"
   }
 }
