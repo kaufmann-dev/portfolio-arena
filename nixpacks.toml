@@ -7,11 +7,13 @@ providers = ["python", "node"]
 # Keep the Python toolchain on the same Nixpkgs revision selected by the Node
 # 24 provider. Mixed revisions can expose incompatible libstdc++/ICU versions.
 nixpkgsArchive = "23f9169c4ccce521379e602cc82ed873a1f1b52b"
+aptPkgs = ["bubblewrap"]
 
 [phases.build]
 cmds = ["cd frontend && npm ci && npm run build"]
 
 # Launch one supervisor that starts the web API and integrated evaluator worker.
 # FastAPI's lifespan runs pending Alembic migrations before becoming healthy.
+# Refresh Codex even when the image build was cached, then hand signals to Python.
 [start]
-cmd = "cd backend && python -m app.production"
+cmd = "npm run update:codex && cd backend && exec python -m app.production"
