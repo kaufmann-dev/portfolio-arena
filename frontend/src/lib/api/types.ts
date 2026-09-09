@@ -298,8 +298,8 @@ export type MetaBatchStatus = "waiting" | "ready" | "insufficient" | "failed";
 
 export interface MetaBatchSummary {
   id: number;
-  agent_id: number;
-  agent_name: string;
+  harness: string;
+  harness_name: string;
   session_date: string;
   status: MetaBatchStatus;
   snapshot_sha256: string | null;

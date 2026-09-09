@@ -534,11 +534,11 @@ class SignalPosition(Base):
 
 
 class MetaBatch(Base):
-    """Frozen normal inputs shared by one agent's meta runs for one session."""
+    """Frozen normal inputs shared by one harness's meta runs for one session."""
 
     __tablename__ = "meta_batches"
     __table_args__ = (
-        UniqueConstraint("session_date", "agent_id", name="meta_batches_session_agent_key"),
+        UniqueConstraint("session_date", "harness", name="meta_batches_session_harness_key"),
         CheckConstraint(
             "status IN ('waiting', 'ready', 'insufficient', 'failed')",
             name="meta_batches_status_check",
@@ -548,7 +548,7 @@ class MetaBatch(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_date: Mapped[date] = mapped_column(Date, nullable=False)
     # Like the frozen portfolio IDs, this identity survives deletion of its source.
-    agent_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    harness: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="waiting")
     source_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
     due_source_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")

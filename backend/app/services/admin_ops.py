@@ -1415,9 +1415,9 @@ def update_meta_portfolio_set(
     if meta_set is None:
         raise AdminOpError(404, "Meta portfolio set not found")
     agent = _automation_agent(session, agent_id)
-    meta_set.agent_id = agent.id
+    meta_set.agent = agent
     for portfolio in meta_set.portfolios:
-        portfolio.agent_id = agent.id
+        portfolio.agent = agent
     session.commit()
     return _meta_portfolio_set_out(meta_set)
 

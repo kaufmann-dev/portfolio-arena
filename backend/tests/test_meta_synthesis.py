@@ -79,18 +79,35 @@ def _create_meta_set(client, admin_headers, sample_agent) -> dict:
     return response.json()
 
 
-def _claim(session, now: datetime, limit: int = 5) -> dict:
+def _muse_agent(session):
+    from app.services import admin_ops
+
+    model = admin_ops.create_model(
+        session,
+        name="Muse test model",
+        capabilities=[
+            {
+                "harness": "muse",
+                "execution_model_id": "muse-test",
+                "reasoning_efforts": ["medium", "high"],
+            }
+        ],
+    )
+    return admin_ops.create_agent(session, model_id=model["id"], harness="muse", reasoning_effort="high")
+
+
+def _claim(session, now: datetime, limit: int = 5, *, harness: str = "codex") -> dict:
     return evaluator.claim_runs(
         session,
-        worker_id="worker-meta-test",
-        harness="codex",
+        worker_id=f"worker-meta-test-{harness}",
+        harness=harness,
         harness_version="codex-cli test",
         limit=limit,
         now=now,
     )
 
 
-def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running(
+def test_meta_starts_after_its_harness_finishes_while_another_harness_is_running(
     client, admin_headers, sample_agent, sample_model, sample_prompt
 ):
     from app.db import session_factory
@@ -100,8 +117,20 @@ def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running
     first_family = _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
     with session_factory()() as session:
-        other_agent = admin_ops.create_agent(
-            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
+        other_agent = _muse_agent(session)
+        peer_model = admin_ops.create_model(
+            session,
+            name="Different Codex model",
+            capabilities=[
+                {
+                    "harness": "codex",
+                    "execution_model_id": "codex-peer",
+                    "reasoning_efforts": ["high"],
+                }
+            ],
+        )
+        peer_agent = admin_ops.create_agent(
+            session, model_id=peer_model["id"], harness="codex", reasoning_effort="high"
         )
         other_family = admin_ops.create_meta_portfolio_set(
             session,
@@ -111,7 +140,7 @@ def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running
         )
         source_ids = []
         for index, (agent_id, mode) in enumerate(
-            [(sample_agent["id"], "managed"), (sample_agent["id"], "rebuilt"), (other_agent["id"], "managed")]
+            [(sample_agent["id"], "managed"), (peer_agent["id"], "rebuilt"), (other_agent["id"], "managed")]
         ):
             source = Portfolio(
                 name=f"Source {index}",
@@ -129,7 +158,11 @@ def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running
                 session, portfolio_id=source.id, enabled=True, weekdays=[0, 1, 2, 3, 4]
             )
 
-        runs = {run["portfolio"]["id"]: run for run in _claim(session, now)["runs"]}
+        runs = {
+            run["portfolio"]["id"]: run
+            for harness in ("codex", "muse")
+            for run in _claim(session, now, harness=harness)["runs"]
+        }
         assert set(runs) == set(source_ids)
 
         def finish_source(source_id, minute):
@@ -143,7 +176,7 @@ def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running
             )
 
         finish_source(source_ids[0], 1)
-        # All cells of this agent must finish, including its rebuilt source.
+        # All cells of this harness must finish, including its rebuilt source.
         assert _claim(session, now + timedelta(minutes=2))["runs"] == []
         finish_source(source_ids[1], 3)
         own_meta = _claim(session, now + timedelta(minutes=4))["runs"]
@@ -153,25 +186,28 @@ def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running
         own_batch = session.get(MetaBatch, own_meta[0]["meta_batch_id"])
         frozen = deepcopy(own_batch.snapshot)
         assert own_batch.source_portfolio_ids == source_ids[:2]
-        assert {source["agent"]["id"] for source in frozen["sources"]} == {sample_agent["id"]}
+        assert {source["agent"]["id"] for source in frozen["sources"]} == {
+            sample_agent["id"],
+            peer_agent["id"],
+        }
 
         response = client.get("/api/meta/managed?direction=long")
         assert response.status_code == 200, response.text
-        assert {batch["agent_id"]: batch["status"] for batch in response.json()["batches"]} == {
-            sample_agent["id"]: "ready",
-            other_agent["id"]: "waiting",
+        assert {batch["harness"]: batch["status"] for batch in response.json()["batches"]} == {
+            "codex": "ready",
+            "muse": "waiting",
         }
 
         finish_source(source_ids[2], 5)
-        other_meta = _claim(session, now + timedelta(minutes=6))["runs"]
+        other_meta = _claim(session, now + timedelta(minutes=6), harness="muse")["runs"]
         assert [run["portfolio"]["id"] for run in other_meta] == [other_family["portfolios"][0]["id"]]
         assert other_meta[0]["meta_batch_id"] != own_batch.id
         session.refresh(own_batch)
         assert own_batch.snapshot == frozen
         assert _claim(session, now + timedelta(minutes=7))["runs"] == []
 
-        # A manual rerun must select this agent's snapshot, even when another
-        # agent has a newer ready batch for the same session.
+        # A manual rerun must select this harness's snapshot, even when another
+        # harness has a newer ready batch for the same session.
         core = next(run for run in own_meta if run["portfolio"]["id"] == first_family["portfolios"][0]["id"])
         evaluator.cancel_run(session, run_id=core["id"], now=now + timedelta(minutes=8))
         evaluator.fail_run(
@@ -184,7 +220,7 @@ def test_meta_starts_after_its_own_agent_finishes_while_another_agent_is_running
         assert manual["items"][0]["run"]["meta_batch_id"] == own_batch.id
 
 
-def test_meta_packets_match_agent_and_cell_and_keep_queued_identity(
+def test_meta_packets_combine_agents_in_the_same_harness_and_keep_queued_identity(
     client, admin_headers, sample_agent, sample_model, sample_prompt
 ):
     from app.db import session_factory
@@ -237,8 +273,8 @@ def test_meta_packets_match_agent_and_cell_and_keep_queued_identity(
 
         # Freeze and queue without claiming, then change the family's live agent.
         assert _claim(session, now, limit=0)["runs"] == []
-        batches = session.query(MetaBatch).order_by(MetaBatch.agent_id).all()
-        assert len(batches) == 2
+        batches = session.query(MetaBatch).order_by(MetaBatch.harness).all()
+        assert len(batches) == 1
         frozen = {batch.id: deepcopy(batch.snapshot) for batch in batches}
         admin_ops.update_meta_portfolio_set(session, first_family["id"], agent_id=second_agent["id"])
         # Later edits to a source cannot alter its frozen agent or reasoning either.
@@ -253,20 +289,21 @@ def test_meta_packets_match_agent_and_cell_and_keep_queued_identity(
             assert run["agent"]["id"] == agent_id
             rendered = run["execution_prompt"].split("FROZEN ARENA SYNTHESIS SOURCE PACKET\n", 1)[1]
             packet = json.loads(rendered[rendered.index("{") :])
-            assert packet["scope"] == {"agent_id": agent_id, "mode": mode, "direction": direction}
-            assert [item["note"] for item in packet["sources"]] == [marker]
-            assert packet["counts"]["source_total"] == 1
-            assert packet["counts"]["fallback_total"] == 1
+            assert packet["scope"] == {"harness": "codex", "mode": mode, "direction": direction}
+            markers = {item[3] for item in expected.values() if item[1:3] == (mode, direction)}
+            assert {item["note"] for item in packet["sources"]} == markers
+            assert packet["counts"]["source_total"] == 2
+            assert packet["counts"]["fallback_total"] == 2
             assert list(packet["controls"]) == [f"{mode}_{direction}"]
-            assert packet["controls"][f"{mode}_{direction}"]["contributor_count"] == 1
+            assert packet["controls"][f"{mode}_{direction}"]["contributor_count"] == 2
             assert "edited-after-freeze" not in rendered
-            assert all(other == marker or other not in rendered for *_, other in expected.values())
+            assert all(other in markers or other not in rendered for *_, other in expected.values())
         for batch in batches:
             session.refresh(batch)
             assert batch.snapshot == frozen[batch.id]
 
 
-def test_agent_added_after_daily_window_gets_its_own_batch(
+def test_harness_added_during_daily_window_gets_its_own_batch(
     client, admin_headers, sample_agent, sample_model, sample_prompt, sample_portfolio
 ):
     from app.db import session_factory
@@ -281,9 +318,7 @@ def test_agent_added_after_daily_window_gets_its_own_batch(
         )
         first_source = _claim(session, now)["runs"][0]
         first_batch = session.get(MetaBatch, first_source["meta_batch_id"])
-        other_agent = admin_ops.create_agent(
-            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
-        )
+        other_agent = _muse_agent(session)
         source = Portfolio(
             name="Late source",
             slug="late-source",
@@ -304,7 +339,7 @@ def test_agent_added_after_daily_window_gets_its_own_batch(
             agent_id=other_agent["id"],
             prompt_id=first_family["prompt_id"],
         )
-        late_run = _claim(session, now + timedelta(minutes=1))["runs"][0]
+        late_run = _claim(session, now + timedelta(minutes=1), harness="muse")["runs"][0]
         assert late_run["portfolio"]["id"] == source.id
         other_batch = session.get(MetaBatch, late_run["meta_batch_id"])
         assert other_batch.id != first_batch.id
@@ -320,17 +355,16 @@ def test_agent_added_after_daily_window_gets_its_own_batch(
             report="late source",
             now=now + timedelta(minutes=2),
         )
-        meta = _claim(session, now + timedelta(minutes=3))["runs"]
+        meta = _claim(session, now + timedelta(minutes=3), harness="muse")["runs"]
         assert [run["portfolio"]["id"] for run in meta] == [other_family["portfolios"][0]["id"]]
         assert first_batch.status == "waiting"
 
 
-def test_source_reassignment_does_not_change_the_agent_of_running_evidence(
+def test_source_reassignment_does_not_change_the_harness_of_running_evidence(
     client, admin_headers, sample_agent, sample_model, sample_portfolio
 ):
     from app.db import session_factory
     from app.models import MetaBatch, Portfolio
-    from app.services import admin_ops
 
     family = _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
@@ -339,11 +373,10 @@ def test_source_reassignment_does_not_change_the_agent_of_running_evidence(
             session, portfolio_id=sample_portfolio["id"], enabled=True, weekdays=[0, 1, 2, 3, 4]
         )
         source_run = _claim(session, now)["runs"][0]
-        other_agent = admin_ops.create_agent(
-            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
-        )
+        other_agent = _muse_agent(session)
         session.get(Portfolio, sample_portfolio["id"]).agent_id = other_agent["id"]
         session.commit()
+        session.expire_all()
         evaluator.submit_run(
             session,
             run_id=source_run["id"],
@@ -356,29 +389,33 @@ def test_source_reassignment_does_not_change_the_agent_of_running_evidence(
         assert [run["portfolio"]["id"] for run in meta] == [family["portfolios"][0]["id"]]
         snapshot = session.get(MetaBatch, meta[0]["meta_batch_id"]).snapshot
         assert snapshot["sources"][0]["agent"]["id"] == sample_agent["id"]
+        assert snapshot["sources"][0]["harness"] == "codex"
         assert snapshot["sources"][0]["note"] == "original agent evidence"
 
 
-@pytest.mark.parametrize("agent_id", [1, 2])
+@pytest.mark.parametrize("harness", ["codex", "muse"])
 @pytest.mark.parametrize("mode", ["managed", "rebuilt"])
 @pytest.mark.parametrize("direction", ["long", "short"])
-def test_filtered_control_and_counts_exclude_other_agents_and_cells(agent_id, mode, direction):
+def test_filtered_control_and_counts_combine_agents_but_exclude_other_harnesses_and_cells(
+    harness, mode, direction
+):
     sources = [
         {
             "portfolio": {"id": index, "mode": source_mode, "direction": source_direction},
-            "agent": {"id": source_agent},
+            "agent": {"id": index + 1},
+            "harness": source_harness,
             "due": True,
             "run_status": "succeeded",
             "decision_status": "same_session",
             "positions": [{"symbol": symbol, "weight_pct": 100}],
         }
-        for index, (source_agent, source_mode, source_direction, symbol) in enumerate(
+        for index, (source_harness, source_mode, source_direction, symbol) in enumerate(
             [
-                (agent_id, mode, direction, "AAPL"),
-                (agent_id, mode, direction, "MSFT"),
-                (3 - agent_id, mode, direction, "SPY"),
-                (agent_id, "rebuilt" if mode == "managed" else "managed", direction, "SPY"),
-                (agent_id, mode, "short" if direction == "long" else "long", "SPY"),
+                (harness, mode, direction, "AAPL"),
+                (harness, mode, direction, "MSFT"),
+                ("muse" if harness == "codex" else "codex", mode, direction, "SPY"),
+                (harness, "rebuilt" if mode == "managed" else "managed", direction, "SPY"),
+                (harness, mode, "short" if direction == "long" else "long", "SPY"),
             ]
         )
     ]
@@ -388,7 +425,7 @@ def test_filtered_control_and_counts_exclude_other_agents_and_cells(agent_id, mo
         "sources": sources,
         "controls": {"unfiltered": {"positions": [{"symbol": "SPY", "weight_pct": 100}]}},
     }
-    packet = source_packet_for(snapshot, agent_id=agent_id, mode=mode, direction=direction)
+    packet = source_packet_for(snapshot, harness=harness, mode=mode, direction=direction)
     assert [source["portfolio"]["id"] for source in packet["sources"]] == [0, 1]
     assert packet["counts"] == {
         "source_total": 2,
@@ -471,9 +508,7 @@ def test_meta_runs_wait_for_normal_success_and_skip_cells_without_sources(
         }
         assert "controls" not in batch.snapshot
         assert "formula_version" not in batch.snapshot
-        packet = source_packet_for(
-            batch.snapshot, agent_id=sample_agent["id"], mode="managed", direction="long"
-        )
+        packet = source_packet_for(batch.snapshot, harness="codex", mode="managed", direction="long")
         assert packet["controls"]["managed_long"] == {
             "mode": "managed",
             "direction": "long",
@@ -808,10 +843,13 @@ def test_failed_scheduled_meta_retry_keeps_batch_session_after_close(
             session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
         )
         admin_ops.update_meta_portfolio_set(session, family["id"], agent_id=replacement["id"])
+        muse = _muse_agent(session)
+        admin_ops.update_meta_portfolio_set(session, family["id"], agent_id=muse["id"])
         with pytest.raises(admin_ops.AdminOpError, match="No usable frozen source decisions"):
             evaluator.retry_run(session, run_id=original["id"], now=after_close)
-        admin_ops.update_meta_portfolio_set(session, family["id"], agent_id=sample_agent["id"])
+        admin_ops.update_meta_portfolio_set(session, family["id"], agent_id=replacement["id"])
         retry = evaluator.retry_run(session, run_id=original["id"], now=after_close)
+        assert retry["run"]["agent"]["id"] == replacement["id"]
         assert retry["run"]["scheduled_for"] == "2026-08-04"
         assert retry["run"]["meta_batch_id"] == original["meta_batch_id"]
         claimed = _claim(session, after_close + timedelta(minutes=1), limit=1)["runs"][0]
@@ -969,3 +1007,45 @@ def test_unrenderable_packet_fails_batch_before_meta_runs_are_queued(
             .count()
         )
         assert target_run_count == 0
+
+
+def test_queued_meta_waits_for_consolidated_harness_sources_without_blocking_them(
+    client, admin_headers, sample_agent, sample_portfolio
+):
+    from app.db import session_factory
+    from app.models import EvaluationRun, MetaBatch, PortfolioEvaluatorConfig
+
+    family = _create_meta_set(client, admin_headers, sample_agent)
+    now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
+    with session_factory()() as session:
+        evaluator.update_portfolio_config(
+            session, portfolio_id=sample_portfolio["id"], enabled=True, weekdays=[0, 1, 2, 3, 4]
+        )
+        _claim(session, now, limit=0)
+        batch = session.query(MetaBatch).one()
+        assert batch.status == "waiting"
+        # A queued Meta run from a previously ready Agent batch can precede
+        # newly combined source work after the harness migration.
+        meta = evaluator._new_run(
+            session.get(PortfolioEvaluatorConfig, family["portfolios"][0]["id"]),
+            evaluator.get_settings(session),
+            trigger_kind="scheduled",
+            scheduled_for=now.date(),
+            meta_batch_id=batch.id,
+        )
+        meta.created_at = now - timedelta(days=1)
+        session.add(meta)
+        session.commit()
+        source = _claim(session, now + timedelta(minutes=1), limit=1)["runs"][0]
+        assert source["portfolio"]["id"] == sample_portfolio["id"]
+        assert session.get(EvaluationRun, meta.id).status == "queued"
+        evaluator.submit_run(
+            session,
+            run_id=source["id"],
+            positions=[{"symbol": "AAPL", "weight_pct": 100}],
+            note="source",
+            report="source",
+            now=now + timedelta(minutes=2),
+        )
+        claimed = _claim(session, now + timedelta(minutes=3), limit=1)["runs"]
+        assert [run["id"] for run in claimed] == [meta.id]

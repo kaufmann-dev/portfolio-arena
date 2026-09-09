@@ -5,10 +5,10 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Agent, MetaBatch, Portfolio
+from ..models import MetaBatch, Portfolio
 from .arena import RebuiltArena, RebuiltPortfolioAnalysis
+from .harnesses import get_harness
 from .meta_synthesis import source_counts
-from .model_catalog import agent_name
 from .rebuilt import PolicyResult
 
 
@@ -21,19 +21,19 @@ def is_meta_portfolio(portfolio: Portfolio) -> bool:
 
 
 def public_batches(session: Session) -> list[dict]:
-    """Report each agent's progress independently for the latest scheduled session."""
+    """Report each harness's progress independently for the latest scheduled session."""
     latest_date = select(func.max(MetaBatch.session_date)).scalar_subquery()
     batches = session.scalars(
-        select(MetaBatch).where(MetaBatch.session_date == latest_date).order_by(MetaBatch.agent_id)
+        select(MetaBatch).where(MetaBatch.session_date == latest_date).order_by(MetaBatch.harness)
     ).all()
     result = []
     for batch in batches:
-        agent = session.get(Agent, batch.agent_id)
+        harness = get_harness(batch.harness)
         result.append(
             {
                 **_public_batch(batch),
-                "agent_id": batch.agent_id,
-                "agent_name": agent_name(agent) if agent is not None else "Deleted agent",
+                "harness": batch.harness,
+                "harness_name": harness.name if harness is not None else batch.harness,
             }
         )
     return result
