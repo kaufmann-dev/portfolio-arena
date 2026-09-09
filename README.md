@@ -3,8 +3,8 @@
 A self-hosted web app that runs a long-term experiment: **can LLM stock-selection strategies
 produce repeatable alpha in all-long or all-short portfolios?**
 
-Portfolio Arena includes a website-controlled Codex evaluator. One Nixpacks deployment starts the
-web app, scheduler, and evaluator worker together. The admin panel defines models and their
+Portfolio Arena includes website-controlled Codex and Muse Code evaluators. One Nixpacks deployment
+starts the web app, scheduler, and evaluator workers together. The admin panel defines models and their
 harness-specific capabilities, combines them into reusable Agents, and controls weekdays,
 concurrency, immediate runs, cancellation, retries, and history. Manual submissions and authenticated
 MCP workflows remain available.
@@ -21,7 +21,7 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
 - **Backend** — FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (`backend/`). Serves the built SPA
   with fallback routing.
 - **Frontend** — Svelte 5 + Vite + TypeScript SPA (`frontend/`), built to `frontend/dist/`.
-- **Evaluator** — an integrated Codex worker (`backend/app/evaluator/`) whose configuration, queue,
+- **Evaluator** — integrated Codex and Muse Code workers (`backend/app/evaluator/`) whose configuration, queue,
   leases, and history live in PostgreSQL. It uses Massive and live web search for current research.
 - **Production supervisor** — one Nixpacks start command launches FastAPI and the evaluator worker,
   restarts the worker if it fails, and shuts both down together.
@@ -212,7 +212,7 @@ admin-only access; provider policy defines who is admitted.
 
 The evaluator is part of Portfolio Arena. Models declare their execution ID and available reasoning
 efforts per supported harness. Agents select one of those valid profiles; their display names are
-generated from it. A portfolio whose Agent uses Codex automatically appears in the admin
+generated from it. A portfolio whose Agent uses Codex or Muse Code automatically appears in the admin
 **Automation** tab, initially disabled. Rebuilt automation runs every Monday through Friday; managed
 automation can run on any selected weekdays or remain manual-only. If a selected day is an NYSE
 holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected days
@@ -225,7 +225,7 @@ Scheduled runs enter the queue at the configured offset before close; polling an
 delay their actual start. Runs queued before close remain eligible afterward, and successful
 scheduled submissions use the scheduled session even if they finish after its close. Pausing stops
 new claims while active work finishes. Queued work can be cancelled immediately; running work
-receives a cancellation request and its Codex process is terminated. Failed runs can be retried
+receives a cancellation request and its harness process and MCP children are terminated. Failed runs can be retried
 manually. All paths use the same server-side proposal and symbol validation and atomically create
 either a managed allocation or rebuilt signal. At claim time, the worker receives a complete
 execution prompt rendered from the portfolio's selected mode-and-direction-specific strategy text
@@ -240,9 +240,23 @@ session, even if execution finishes after close. The worker receives the packet 
 injection; normal workers retain the same read-only tools and never receive an arena-wide data tool.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
-the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Runtime credentials are
-deployment-only: `MASSIVE_API_KEY` is passed to both the web process for valuations and the worker
-for research, while the internal worker bearer token is generated in memory at startup.
+the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Muse Code runs via `muse exec`
+with web tools enabled and shell/file writes disabled. It uses the same read-only Arena MCP token
+and Massive MCP server. Muse returns JSON in its root terminal event; the worker validates the
+proposal and rejects malformed, blocked, failed, or incomplete results before submission.
+
+Muse uses its persisted Meta account login and subscription. `META_API_KEY` is an optional alternative
+and takes precedence when set, matching the Muse CLI. After authentication, each Muse worker process
+imports the visible models and explicit reasoning variants from Meta's authenticated Muse Code
+catalog once through the CLI, which handles account-token exchange and renewal. Model discovery
+does not start an agent turn. Existing model capabilities and admin edits are preserved. No models or
+reasoning tiers are guessed when the catalog is unavailable. Restart the worker to discover newly
+available models. Authentication and runtime health are shown separately per harness; both workers
+share the same global concurrency limit. An unconfigured Muse login does not stop Codex evaluations.
+
+Runtime credentials are deployment-only: `MASSIVE_API_KEY` is passed to both the web process for
+valuations and the worker for research, while the internal worker bearer token is generated in
+memory at startup.
 
 When upgrading an existing Arena database, migration `0006` intentionally aborts if historical cash
 positions exist. Back up the database and resolve those rows before deploying; the migration will
@@ -334,14 +348,18 @@ an in-memory HTTP transport, so nothing hits the network.
 - Add persistent storage at `/var/lib/codex`. After the first deployment, open the application's
   terminal and run `CODEX_HOME=/var/lib/codex codex login --device-auth`; the login survives
   redeployments in that volume.
+- Add persistent storage at `/var/lib/muse`. Run `XDG_CONFIG_HOME=/var/lib/muse muse login` in the
+  application terminal, or set `META_API_KEY` for the worker. Muse models and their available
+  reasoning efforts appear automatically after authentication and successful catalog import.
 - Set the required variables below. Coolify injects `PORT`; no custom start command or Dockerfile is
   needed.
 - Deploy. The tracked `nixpacks.toml` builds the SPA and starts one supervisor that runs migrations,
   FastAPI, the scheduler, and the evaluator worker automatically.
-- Each deployment or container restart runs `npm run update:codex` to install the latest stable Codex
-  CLI before launching the supervisor, including when the image build was cached. Startup requires npm
-  registry access and stops if the update fails. Redeploy or restart to pick up subsequent releases.
-  The image includes `bubblewrap` for Codex's Linux sandbox.
+- Each deployment or container restart runs `npm run update:harnesses` to install the latest stable
+  Codex and Muse Code CLIs before launching the supervisor, including when the image build was cached.
+  Startup requires npm registry and Meta download access and stops if either update fails. Redeploy
+  or restart to pick up subsequent releases.
+  The image includes `bubblewrap` for Linux sandboxing and `curl` for the Muse installer.
 - When replacing the former two-application setup, stop the old standalone evaluator before
   deploying this version so both schedulers cannot create work during the cutover.
 
@@ -365,14 +383,16 @@ Web app:
 
 Web app:
 
-| Variable                        | Default          | Purpose                                       |
-| ------------------------------- | ---------------- | --------------------------------------------- |
-| `ARENA_DEFAULT_COST_BPS`        | `10`             | Default cost bps for new portfolios           |
-| `ARENA_DB_CONNECT_RETRIES`      | `30`             | Retries before failing startup                |
-| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`            | Seconds between retries                       |
-| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`           | Seconds before a price refresh is due         |
-| `CODEX_HOME`                    | `/var/lib/codex` | Codex authentication and generated config dir |
-| `PORT`                          | `8000`           | Listen port; normally injected by Coolify     |
+| Variable                        | Default          | Purpose                                                            |
+| ------------------------------- | ---------------- | ------------------------------------------------------------------ |
+| `ARENA_DEFAULT_COST_BPS`        | `10`             | Default cost bps for new portfolios                                |
+| `ARENA_DB_CONNECT_RETRIES`      | `30`             | Retries before failing startup                                     |
+| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`            | Seconds between retries                                            |
+| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`           | Seconds before a price refresh is due                              |
+| `CODEX_HOME`                    | `/var/lib/codex` | Codex authentication and generated config dir                      |
+| `MUSE_CONFIG_HOME`              | `/var/lib/muse`  | Muse XDG config root; login and generated config are under `muse/` |
+| `META_API_KEY`                  | unset            | Optional Muse credential instead of a persisted Meta login         |
+| `PORT`                          | `8000`           | Listen port; normally injected by Coolify                          |
 
 ## Non-goals
 

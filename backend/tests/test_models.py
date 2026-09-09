@@ -7,7 +7,7 @@ from app.services import evaluator
 from .util import backdate_allocation
 
 
-def test_harness_registry_exposes_codex_reasoning_vocabulary(client, admin_headers):
+def test_harness_registry_exposes_harness_reasoning_vocabularies(client, admin_headers):
     response = client.get("/api/harnesses", headers=admin_headers)
 
     assert response.status_code == 200
@@ -25,7 +25,22 @@ def test_harness_registry_exposes_codex_reasoning_vocabulary(client, admin_heade
                     {"id": "ultra", "name": "Ultra"},
                     {"id": "max", "name": "Max"},
                 ],
-            }
+            },
+            {
+                "id": "muse",
+                "name": "Muse Code",
+                "automation_supported": True,
+                "reasoning_efforts": [
+                    {"id": "none", "name": "None"},
+                    {"id": "minimal", "name": "Minimal"},
+                    {"id": "low", "name": "Low"},
+                    {"id": "medium", "name": "Medium"},
+                    {"id": "high", "name": "High"},
+                    {"id": "xhigh", "name": "Extra high"},
+                    {"id": "max", "name": "Max"},
+                    {"id": "ultra", "name": "Ultra"},
+                ],
+            },
         ]
     }
 

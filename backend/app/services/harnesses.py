@@ -36,7 +36,23 @@ CODEX = HarnessDefinition(
     ),
 )
 
-HARNESS_DEFINITIONS = {CODEX.id: CODEX}
+MUSE = HarnessDefinition(
+    id="muse",
+    name="Muse Code",
+    automation_supported=True,
+    reasoning_efforts=(
+        ReasoningEffort("none", "None"),
+        ReasoningEffort("minimal", "Minimal"),
+        ReasoningEffort("low", "Low"),
+        ReasoningEffort("medium", "Medium"),
+        ReasoningEffort("high", "High"),
+        ReasoningEffort("xhigh", "Extra high"),
+        ReasoningEffort("max", "Max"),
+        ReasoningEffort("ultra", "Ultra"),
+    ),
+)
+
+HARNESS_DEFINITIONS = {CODEX.id: CODEX, MUSE.id: MUSE}
 
 
 def get_harness(harness_id: str) -> HarnessDefinition | None:

@@ -707,16 +707,26 @@ export interface PortfolioEvaluatorConfig {
   updated_at: string | null;
 }
 
-export interface EvaluatorRuntime {
+export interface EvaluatorHarnessRuntime {
   online: boolean;
   status: string;
   authenticated: boolean;
   harness: string;
+  harness_name: string;
   harness_version: string | null;
   active_run_count: number;
   last_heartbeat_at: string | null;
   last_error: string | null;
   instance_count: number;
+}
+
+export interface EvaluatorRuntime {
+  online: boolean;
+  status: string;
+  active_run_count: number;
+  last_heartbeat_at: string | null;
+  instance_count: number;
+  harnesses: EvaluatorHarnessRuntime[];
 }
 
 export interface EvaluatorDashboard {

@@ -12,6 +12,7 @@ class EvaluatorRuntimeSettings:
     internal_token: str
     massive_api_key: str
     codex_home: Path
+    muse_config_home: Path
 
 
 def load_settings() -> EvaluatorRuntimeSettings:
@@ -23,4 +24,5 @@ def load_settings() -> EvaluatorRuntimeSettings:
         internal_token=os.environ.get("ARENA_INTERNAL_MCP_API_KEY", "").strip(),
         massive_api_key=os.environ.get("MASSIVE_API_KEY", "").strip(),
         codex_home=Path(os.environ.get("CODEX_HOME", "/var/lib/codex")),
+        muse_config_home=Path(os.environ.get("MUSE_CONFIG_HOME", "/var/lib/muse")),
     )

@@ -23,7 +23,7 @@ from ..models import (
 from . import admin_ops
 from .admin_ops import AdminOpError
 from .arena import compute_valuations
-from .harnesses import automation_harness_ids, supports_automation
+from .harnesses import automation_harness_ids, get_harness, supports_automation
 from .meta_synthesis import (
     build_snapshot,
     render_source_packet,
@@ -315,37 +315,56 @@ def update_portfolio_config(
 
 def _runtime_out(session: Session, settings: EvaluatorSettings, now: datetime) -> dict:
     fresh_after = now - timedelta(seconds=INSTANCE_STALE_SECONDS)
+    harness_ids = automation_harness_ids()
     instances = session.scalars(
         select(EvaluatorInstance)
-        .where(EvaluatorInstance.last_heartbeat_at >= fresh_after)
+        .where(EvaluatorInstance.harness.in_(harness_ids))
         .order_by(EvaluatorInstance.last_heartbeat_at.desc())
     ).all()
-    if not instances:
-        latest = session.scalars(
-            select(EvaluatorInstance).order_by(EvaluatorInstance.last_heartbeat_at.desc()).limit(1)
-        ).first()
-        return {
-            "online": False,
-            "status": "offline",
-            "authenticated": False,
-            "harness": latest.harness if latest else "codex",
-            "harness_version": latest.harness_version if latest else None,
-            "active_run_count": 0,
-            "last_heartbeat_at": _iso(latest.last_heartbeat_at) if latest else None,
-            "last_error": latest.last_error if latest else None,
-            "instance_count": 0,
-        }
-    primary = instances[0]
+    harnesses = []
+    for harness_id in harness_ids:
+        harness = get_harness(harness_id)
+        assert harness is not None
+        matching = [instance for instance in instances if instance.harness == harness_id]
+        fresh = [instance for instance in matching if instance.last_heartbeat_at >= fresh_after]
+        latest = matching[0] if matching else None
+        last_error = latest.last_error if latest else None
+        if fresh:
+            last_error = next((instance.last_error for instance in fresh if instance.last_error), None)
+        harnesses.append(
+            {
+                "harness": harness_id,
+                "harness_name": harness.name,
+                "online": bool(fresh),
+                "status": ("paused" if not settings.enabled else fresh[0].status) if fresh else "offline",
+                "authenticated": bool(fresh) and all(instance.authenticated for instance in fresh),
+                "harness_version": latest.harness_version if latest else None,
+                "active_run_count": sum(instance.active_run_count for instance in fresh),
+                "last_heartbeat_at": _iso(latest.last_heartbeat_at) if latest else None,
+                "last_error": last_error,
+                "instance_count": len(fresh),
+            }
+        )
+
+    fresh = [instance for instance in instances if instance.last_heartbeat_at >= fresh_after]
+    active_run_count = sum(instance.active_run_count for instance in fresh)
+    if not fresh:
+        status = "offline"
+    elif not settings.enabled:
+        status = "paused"
+    elif active_run_count:
+        status = "running"
+    elif any(instance.authenticated and instance.status == "idle" for instance in fresh):
+        status = "idle"
+    else:
+        status = fresh[0].status
     return {
-        "online": True,
-        "status": "paused" if not settings.enabled else primary.status,
-        "authenticated": all(instance.authenticated for instance in instances),
-        "harness": primary.harness,
-        "harness_version": primary.harness_version,
-        "active_run_count": sum(instance.active_run_count for instance in instances),
-        "last_heartbeat_at": primary.last_heartbeat_at.isoformat(),
-        "last_error": next((instance.last_error for instance in instances if instance.last_error), None),
-        "instance_count": len(instances),
+        "online": bool(fresh),
+        "status": status,
+        "active_run_count": active_run_count,
+        "last_heartbeat_at": _iso(instances[0].last_heartbeat_at) if instances else None,
+        "instance_count": len(fresh),
+        "harnesses": harnesses,
     }
 
 
