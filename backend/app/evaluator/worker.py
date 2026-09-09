@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import shutil
 import signal
 import tempfile
@@ -459,7 +460,8 @@ async def scheduler(
                             f"Run `XDG_CONFIG_HOME={settings.muse_config_home} muse login` "
                             "in the application terminal or configure META_API_KEY."
                             if harness == "muse"
-                            else "Run `codex login --device-auth` in the application terminal."
+                            else f"Run `CODEX_HOME={shlex.quote(str(settings.codex_home))} "
+                            "codex login --device-auth` in the application terminal."
                         )
                     else:
                         if harness == "muse" and not catalog_imported:
