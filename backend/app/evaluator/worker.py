@@ -1,30 +1,43 @@
-"""Website-controlled, ChatGPT-authenticated Codex evaluation worker."""
+"""Website-controlled evaluation workers for the registered CLI harnesses."""
 
 import asyncio
 import json
 import logging
 import os
 import shutil
+import signal
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import EvaluatorRuntimeSettings
+from .muse import (
+    fetch_muse_catalog,
+    muse_command,
+    muse_credential,
+    muse_environment,
+    muse_result,
+    write_muse_config,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ProposalPosition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     symbol: str = Field(min_length=1, max_length=32)
     weight_pct: float = Field(gt=0, le=100)
     note: str = Field(max_length=2000)
 
 
 class Proposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: Literal["proposal", "blocked"]
     positions: list[ProposalPosition]
     note: str = Field(max_length=4000)
@@ -56,7 +69,7 @@ class ClaimedRun(BaseModel):
     id: int
     portfolio: PortfolioRef
     trigger_kind: Literal["scheduled", "manual", "retry"]
-    harness: Literal["codex"]
+    harness: Literal["codex", "muse"]
     execution_model_id: str
     reasoning_effort: str | None
     timeout_seconds: int
@@ -78,7 +91,7 @@ class RunCancelled(RuntimeError):
 
 
 class EvaluationBlocked(RuntimeError):
-    """Codex could not produce a valid portfolio proposal."""
+    """The harness could not produce a valid portfolio proposal."""
 
 
 @dataclass
@@ -128,6 +141,7 @@ def codex_environment(settings: EvaluatorRuntimeSettings) -> dict[str, str]:
     environment["MASSIVE_API_KEY"] = settings.massive_api_key
     environment.pop("OPENAI_API_KEY", None)
     environment.pop("CODEX_API_KEY", None)
+    environment.pop("META_API_KEY", None)
     return environment
 
 
@@ -169,7 +183,31 @@ async def codex_version() -> str:
     return stdout.decode().strip()
 
 
-async def codex_is_authenticated() -> bool:
+async def muse_version(settings: EvaluatorRuntimeSettings) -> str:
+    executable = shutil.which("muse")
+    if executable is None:
+        raise RuntimeError("muse executable is not installed")
+    process = await asyncio.create_subprocess_exec(
+        executable,
+        "--version",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=muse_environment(settings),
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    except TimeoutError:
+        raise RuntimeError("Muse version check timed out") from None
+    finally:
+        await _stop_process(process)
+    if process.returncode != 0:
+        raise RuntimeError(stderr.decode(errors="replace")[-4000:] or "Muse version check failed")
+    return stdout.decode().strip()
+
+
+async def codex_is_authenticated(settings: EvaluatorRuntimeSettings) -> bool:
     executable = shutil.which("codex")
     if executable is None:
         return False
@@ -179,6 +217,7 @@ async def codex_is_authenticated() -> bool:
         "status",
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
+        env=codex_environment(settings),
     )
     return await process.wait() == 0
 
@@ -208,14 +247,49 @@ async def _wait_for_cancellation(
 
 
 async def _stop_process(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
+    # Each evaluation owns a process group, including its MCP children.
+    # Clean the group even if the harness parent has already exited.
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
         return
-    process.terminate()
     try:
         await asyncio.wait_for(process.wait(), timeout=5)
     except TimeoutError:
-        process.kill()
+        pass
+    finally:
+        # The parent can exit while an MCP child ignores SIGTERM or holds the
+        # output pipes open. Always finish cleanup of the entire group.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await process.wait()
+
+
+async def _communicate_run(
+    settings: EvaluatorRuntimeSettings,
+    run: ClaimedRun,
+    process: asyncio.subprocess.Process,
+    prompt: bytes | None,
+) -> tuple[bytes, bytes]:
+    communicate_task = asyncio.create_task(process.communicate(prompt))
+    cancellation_task = asyncio.create_task(_wait_for_cancellation(settings, run))
+    try:
+        done, _ = await asyncio.wait(
+            {communicate_task, cancellation_task},
+            timeout=run.timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if cancellation_task in done:
+            raise RunCancelled(cancellation_task.result())
+        if communicate_task not in done:
+            raise RuntimeError(f"{run.harness} attempt exceeded {run.timeout_seconds} seconds")
+        return communicate_task.result()
+    finally:
+        cancellation_task.cancel()
+        await _stop_process(process)
+        await asyncio.gather(communicate_task, cancellation_task, return_exceptions=True)
 
 
 async def run_codex(
@@ -258,28 +332,9 @@ async def run_codex(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=codex_environment(settings),
+            start_new_session=True,
         )
-        communicate_task = asyncio.create_task(process.communicate(evaluator_prompt(run).encode()))
-        cancellation_task = asyncio.create_task(_wait_for_cancellation(settings, run))
-        try:
-            done, _ = await asyncio.wait(
-                {communicate_task, cancellation_task},
-                timeout=run.timeout_seconds,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if cancellation_task in done:
-                reason = cancellation_task.result()
-                await _stop_process(process)
-                await communicate_task
-                raise RunCancelled(reason)
-            if communicate_task not in done:
-                await _stop_process(process)
-                await communicate_task
-                raise RuntimeError(f"Codex attempt exceeded {run.timeout_seconds} seconds")
-            stdout, stderr = communicate_task.result()
-        finally:
-            cancellation_task.cancel()
-            await asyncio.gather(cancellation_task, return_exceptions=True)
+        stdout, stderr = await _communicate_run(settings, run, process, evaluator_prompt(run).encode())
         if process.returncode != 0:
             detail = (stderr or stdout).decode(errors="replace").strip()
             raise RuntimeError(detail[-4000:] or f"Codex exited with {process.returncode}")
@@ -288,12 +343,46 @@ async def run_codex(
         return Proposal.model_validate_json(output_path.read_text())
 
 
+async def run_muse(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Proposal:
+    schema = Path(__file__).with_name("proposal.schema.json").read_text()
+    prompt = (
+        f"{evaluator_prompt(run)}\n\n"
+        "Return the final result as one JSON object, without commentary or Markdown fences. "
+        "The worker validates this JSON against the following schema before submitting it.\n"
+        f"{schema}"
+    )
+    with tempfile.TemporaryDirectory(prefix="arena-muse-evaluation-") as temp_dir:
+        workspace = Path(temp_dir)
+        prompt_path = workspace / "prompt.txt"
+        prompt_path.write_text(prompt)
+        process = await asyncio.create_subprocess_exec(
+            *muse_command(run.execution_model_id, run.reasoning_effort, workspace, prompt_path),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=workspace,
+            env=muse_environment(settings),
+            start_new_session=True,
+        )
+        stdout, stderr = await _communicate_run(settings, run, process, None)
+        if process.returncode != 0:
+            # Prefer the structured terminal reason when Muse produced one.
+            try:
+                muse_result(stdout)
+            except ValueError as exc:
+                detail = f"{exc}\n{stderr.decode(errors='replace')}".strip()
+                raise RuntimeError(detail[-4000:]) from exc
+            detail = stderr.decode(errors="replace")[-4000:] or f"Muse exited with {process.returncode}"
+            raise RuntimeError(detail)
+        return Proposal.model_validate_json(muse_result(stdout))
+
+
 async def evaluate_run(
     settings: EvaluatorRuntimeSettings,
     run: ClaimedRun,
 ) -> None:
     try:
-        proposal = await run_codex(settings, run)
+        proposal = await (run_muse(settings, run) if run.harness == "muse" else run_codex(settings, run))
         if proposal.status == "blocked":
             raise EvaluationBlocked(proposal.error)
         await internal_request(
@@ -342,23 +431,41 @@ async def scheduler(
     settings: EvaluatorRuntimeSettings,
     instance_id: str,
     state: WorkerState,
+    harness: Literal["codex", "muse"],
 ) -> None:
-    write_codex_config(settings)
     active_tasks: set[asyncio.Task[None]] = set()
+    catalog_imported = False
     try:
         while True:
             try:
+                if harness == "muse":
+                    write_muse_config(settings)
+                else:
+                    write_codex_config(settings)
                 if not settings.massive_api_key:
                     state.status = "configuration_error"
                     state.authenticated = False
                     state.last_error = "MASSIVE_API_KEY is required."
                 else:
-                    state.harness_version = await codex_version()
-                    state.authenticated = await codex_is_authenticated()
+                    if harness == "muse":
+                        state.harness_version = await muse_version(settings)
+                        state.authenticated = bool(muse_credential(settings))
+                    else:
+                        state.harness_version = await codex_version()
+                        state.authenticated = await codex_is_authenticated(settings)
                     if not state.authenticated:
                         state.status = "authentication_required"
-                        state.last_error = "Run `codex login --device-auth` in the application terminal."
+                        state.last_error = (
+                            f"Run `XDG_CONFIG_HOME={settings.muse_config_home} muse login` "
+                            "in the application terminal or configure META_API_KEY."
+                            if harness == "muse"
+                            else "Run `codex login --device-auth` in the application terminal."
+                        )
                     else:
+                        if harness == "muse" and not catalog_imported:
+                            catalog = await fetch_muse_catalog(settings)
+                            await internal_request(settings, "POST", "/models/import-muse", catalog)
+                            catalog_imported = True
                         response = ClaimResponse.model_validate(
                             await internal_request(
                                 settings,
@@ -366,7 +473,7 @@ async def scheduler(
                                 "/claim",
                                 {
                                     "worker_id": instance_id,
-                                    "harness": "codex",
+                                    "harness": harness,
                                     "harness_version": state.harness_version,
                                     "limit": 20,
                                 },
@@ -386,6 +493,10 @@ async def scheduler(
                             state.status = "idle"
             except asyncio.CancelledError:
                 raise
+            except httpx.HTTPStatusError as exc:
+                state.status = "error"
+                state.last_error = f"HTTP {exc.response.status_code}: evaluator request failed."
+                logger.exception("evaluator_request_failed harness=%s", harness)
             except Exception as exc:
                 state.status = "error"
                 state.last_error = f"{type(exc).__name__}: {exc}"[-4000:]
@@ -413,6 +524,7 @@ async def heartbeat_loop(
     settings: EvaluatorRuntimeSettings,
     instance_id: str,
     state: WorkerState,
+    harness: Literal["codex", "muse"],
 ) -> None:
     while True:
         try:
@@ -422,7 +534,7 @@ async def heartbeat_loop(
                 "/heartbeat",
                 {
                     "instance_id": instance_id,
-                    "harness": "codex",
+                    "harness": harness,
                     "status": state.status,
                     "harness_version": state.harness_version,
                     "authenticated": state.authenticated,

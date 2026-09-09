@@ -3,7 +3,9 @@
   "private": true,
   "version": "2.0.0",
   "scripts": {
-    "update:codex": "npm install --no-save --package-lock=false --prefer-online @openai/codex@latest && codex --version"
+    "update:codex": "npm install --no-save --package-lock=false --prefer-online @openai/codex@latest && codex --version",
+    "update:muse": "bash scripts/install-muse.sh",
+    "update:harnesses": "npm run update:codex && npm run update:muse"
   },
   "dependencies": {
     "@openai/codex": "latest"

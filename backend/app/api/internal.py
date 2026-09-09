@@ -11,10 +11,12 @@ from ..schemas import (
     EvaluatorHeartbeatIn,
     EvaluatorRunFailIn,
     EvaluatorRunSubmitIn,
+    MuseCatalogImportIn,
 )
 from ..security import require_internal_worker
 from ..services import evaluator
 from ..services.admin_ops import AdminOpError
+from ..services.muse_catalog import import_muse_models
 
 router = APIRouter(
     prefix="/api/internal/evaluator",
@@ -48,6 +50,11 @@ def heartbeat(body: EvaluatorHeartbeatIn, session: Session = Depends(get_session
 @router.post("/claim")
 def claim(body: EvaluatorClaimIn, session: Session = Depends(get_session)):
     return evaluator.claim_runs(session, **body.model_dump())
+
+
+@router.post("/models/import-muse")
+def import_muse_catalog(body: MuseCatalogImportIn, session: Session = Depends(get_session)):
+    return _run(import_muse_models, session, data=body.data)
 
 
 @router.get("/runs/{run_id}/control")

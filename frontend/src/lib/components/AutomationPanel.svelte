@@ -314,41 +314,46 @@
     <div class="section-head panel-head">
       <div>
         <h2>Evaluator runtime</h2>
-        <p class="muted">The website, scheduler, and Codex worker are deployed as one application.</p>
+        <p class="muted">The website, scheduler, and harness workers are deployed as one application.</p>
       </div>
       <button class="btn small" type="button" onclick={refresh} disabled={loading}>Refresh</button>
     </div>
 
     {#if dashboard}
-      <div class="runtime-grid">
-        <div>
-          <span class="runtime-label">Worker</span>
-          <span class={`badge ${dashboard.runtime.online ? "success" : "neg"}`}>
-            {dashboard.runtime.online ? dashboard.runtime.status : "offline"}
-          </span>
-        </div>
-        <div>
-          <span class="runtime-label">Codex login</span>
-          <span class={`badge ${dashboard.runtime.authenticated ? "success" : "warn"}`}>
-            {dashboard.runtime.authenticated ? "ready" : "required"}
-          </span>
-        </div>
-        <div>
-          <span class="runtime-label">Version</span>
-          <span class="num">{dashboard.runtime.harness_version ?? "—"}</span>
-        </div>
-        <div>
-          <span class="runtime-label">Active</span>
-          <span class="num">{dashboard.runtime.active_run_count}</span>
-        </div>
-        <div>
-          <span class="runtime-label">Heartbeat</span>
-          <span class="num">{fmtDateTime(dashboard.runtime.last_heartbeat_at)}</span>
-        </div>
-      </div>
-      {#if dashboard.runtime.last_error}
-        <div class="error-box runtime-error" role="alert">{dashboard.runtime.last_error}</div>
-      {/if}
+      {#each dashboard.runtime.harnesses as runtime (runtime.harness)}
+        <section aria-labelledby={`runtime-${runtime.harness}`}>
+          <h3 id={`runtime-${runtime.harness}`} class="runtime-heading">{runtime.harness_name}</h3>
+          <div class="runtime-grid">
+            <div>
+              <span class="runtime-label">Worker</span>
+              <span class={["badge", runtime.online ? "success" : "neg"]}>
+                {runtime.online ? runtime.status : "offline"}
+              </span>
+            </div>
+            <div>
+              <span class="runtime-label">Login</span>
+              <span class={["badge", runtime.authenticated ? "success" : "warn"]}>
+                {runtime.authenticated ? "ready" : "required"}
+              </span>
+            </div>
+            <div>
+              <span class="runtime-label">Version</span>
+              <span class="num">{runtime.harness_version ?? "—"}</span>
+            </div>
+            <div>
+              <span class="runtime-label">Active</span>
+              <span class="num">{runtime.active_run_count}</span>
+            </div>
+            <div>
+              <span class="runtime-label">Heartbeat</span>
+              <span class="num">{fmtDateTime(runtime.last_heartbeat_at)}</span>
+            </div>
+          </div>
+          {#if runtime.last_error}
+            <div class="error-box runtime-error" role="alert">{runtime.last_error}</div>
+          {/if}
+        </section>
+      {/each}
       <div class="runtime-actions">
         <ToggleSwitch
           label="Evaluator enabled"
@@ -752,6 +757,11 @@
     gap: 1px;
     margin-bottom: 18px;
     background: var(--border-subtle);
+  }
+
+  .runtime-heading {
+    margin: 0 0 10px;
+    font-size: 15px;
   }
 
   .runtime-grid > div {

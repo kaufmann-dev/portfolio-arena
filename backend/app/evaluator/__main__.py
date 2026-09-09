@@ -11,12 +11,16 @@ from .worker import WorkerState, heartbeat_loop, scheduler
 
 async def _run() -> None:
     settings = load_settings()
-    instance_id = uuid.uuid4().hex
-    state = WorkerState()
-    tasks = [
-        asyncio.create_task(scheduler(settings, instance_id, state)),
-        asyncio.create_task(heartbeat_loop(settings, instance_id, state)),
-    ]
+    tasks = []
+    for harness in ("codex", "muse"):
+        instance_id = uuid.uuid4().hex
+        state = WorkerState()
+        tasks.extend(
+            [
+                asyncio.create_task(scheduler(settings, instance_id, state, harness)),
+                asyncio.create_task(heartbeat_loop(settings, instance_id, state, harness)),
+            ]
+        )
 
     def cancel_tasks() -> None:
         for task in tasks:

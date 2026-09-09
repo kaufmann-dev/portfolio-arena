@@ -25,6 +25,7 @@ def _settings(tmp_path: Path) -> EvaluatorRuntimeSettings:
         internal_token="internal-secret",
         massive_api_key="massive-secret",
         codex_home=tmp_path,
+        muse_config_home=tmp_path / "muse-config",
     )
 
 
@@ -76,6 +77,7 @@ def test_run_codex_applies_snapshot_reasoning_without_service_tier(tmp_path, mon
 
     class FakeProcess:
         returncode = 0
+        pid = 99999999
 
         async def communicate(self, _prompt):
             output_path = Path(captured[captured.index("--output-last-message") + 1])
@@ -119,6 +121,7 @@ def test_run_codex_omits_reasoning_when_model_has_none(tmp_path, monkeypatch):
 
     class FakeProcess:
         returncode = 0
+        pid = 99999999
 
         async def communicate(self, _prompt):
             output_path = Path(captured[captured.index("--output-last-message") + 1])
@@ -213,7 +216,7 @@ def test_scheduler_refills_completed_slots_while_other_runs_continue(tmp_path, m
     async def fake_codex_version():
         return "codex-cli test"
 
-    async def fake_codex_is_authenticated():
+    async def fake_codex_is_authenticated(_settings):
         return True
 
     async def fake_internal_request(_settings, method, path, payload=None):
@@ -244,7 +247,7 @@ def test_scheduler_refills_completed_slots_while_other_runs_continue(tmp_path, m
     monkeypatch.setattr("app.evaluator.worker.evaluate_run", fake_evaluate_run)
 
     async def scenario():
-        scheduler_task = asyncio.create_task(scheduler(settings, "worker-1", state))
+        scheduler_task = asyncio.create_task(scheduler(settings, "worker-1", state, "codex"))
         try:
             while len(started) < 5:
                 await asyncio.sleep(0)
