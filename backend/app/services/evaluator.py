@@ -967,8 +967,8 @@ def claim_runs(
     )
     liquidated_ids = _liquidated_managed_ids(session, short_managed)
     # Serialize claims and every queue-creation path on the singleton settings
-    # row. This keeps max_concurrency global across worker instances and
-    # prevents manual/scheduled enqueue races.
+    # row. This enforces each harness's concurrency limit across its worker
+    # instances and prevents manual/scheduled enqueue races.
     settings = get_settings(session, lock=True)
     _recover_stale_runs(session, current_time)
     _cancel_archived_queued_runs(session, current_time)
@@ -982,7 +982,10 @@ def claim_runs(
         active_count = session.scalar(
             select(func.count())
             .select_from(EvaluationRun)
-            .where(EvaluationRun.status.in_({"running", "cancel_requested"}))
+            .where(
+                EvaluationRun.harness == harness,
+                EvaluationRun.status.in_({"running", "cancel_requested"}),
+            )
         )
         capacity = max(0, settings.max_concurrency - int(active_count or 0))
         claim_limit = min(max(0, limit), capacity)

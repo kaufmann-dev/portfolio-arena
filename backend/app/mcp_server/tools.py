@@ -860,7 +860,7 @@ def update_evaluator_settings(
     max_attempts: int,
     queue_before_close_minutes: int,
 ) -> dict:
-    """Update global evaluator scheduling and execution settings."""
+    """Update evaluator settings; max_concurrency applies separately to each harness."""
     with _session() as session:
         return _guard(
             evaluator.update_settings,

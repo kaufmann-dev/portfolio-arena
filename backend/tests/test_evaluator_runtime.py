@@ -165,7 +165,8 @@ def test_global_pause_applies_to_online_harnesses_and_preserves_missing_workers(
     assert harnesses["muse"]["status"] == "offline"
 
 
-def test_claims_match_harness_and_share_global_concurrency(sample_agent, sample_prompt):
+@pytest.mark.parametrize("first_harness", ["codex", "muse"])
+def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, sample_prompt, first_harness):
     now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
         muse_model = admin_ops.create_model(
@@ -185,21 +186,21 @@ def test_claims_match_harness_and_share_global_concurrency(sample_agent, sample_
             harness="muse",
             reasoning_effort="high",
         )
-        portfolios = [
-            admin_ops.create_portfolio(
-                session,
-                name=name,
-                agent_id=agent_id,
-                prompt_id=sample_prompt["id"],
-                prompt_mode="managed",
-                direction="long",
-            )
-            for name, agent_id in [
-                ("Muse first in queue", muse_agent["id"]),
-                ("Codex first", sample_agent["id"]),
-                ("Codex second", sample_agent["id"]),
+        portfolios_by_harness = {
+            harness: [
+                admin_ops.create_portfolio(
+                    session,
+                    name=f"{harness} portfolio {index}",
+                    agent_id=agent_id,
+                    prompt_id=sample_prompt["id"],
+                    prompt_mode="managed",
+                    direction="long",
+                )
+                for index in range(3)
             ]
-        ]
+            for harness, agent_id in [("muse", muse_agent["id"]), ("codex", sample_agent["id"])]
+        }
+        portfolios = [portfolio for group in portfolios_by_harness.values() for portfolio in group]
         for portfolio in portfolios:
             evaluator.update_portfolio_config(
                 session,
@@ -213,28 +214,44 @@ def test_claims_match_harness_and_share_global_concurrency(sample_agent, sample_
             portfolio_ids=[portfolio["id"] for portfolio in portfolios],
             now=now,
         )
-        assert [item["action"] for item in queued["items"]] == ["queued"] * 3
+        assert [item["action"] for item in queued["items"]] == ["queued"] * 6
 
-        def claim(harness, limit):
+        def claim(harness, limit=20, worker="first"):
             return evaluator.claim_runs(
                 session,
-                worker_id=f"{harness}-worker",
+                worker_id=f"{harness}-{worker}-worker",
                 harness=harness,
                 harness_version=f"{harness}-test-version",
                 limit=limit,
                 now=now,
             )["runs"]
 
-        first_codex = claim("codex", 1)
-        assert [run["portfolio"]["id"] for run in first_codex] == [portfolios[1]["id"]]
-        muse = claim("muse", 20)
-        assert [run["portfolio"]["id"] for run in muse] == [portfolios[0]["id"]]
-        assert muse[0]["harness"] == "muse"
-        assert muse[0]["execution_model_id"] == "muse-test-model"
-        assert muse[0]["reasoning_effort"] == "high"
-        assert muse[0]["harness_version"] == "muse-test-version"
-        assert claim("codex", 20) == []
+        other_harness = "muse" if first_harness == "codex" else "codex"
+        first_run = claim(first_harness, limit=1)
+        assert [run["portfolio"]["id"] for run in first_run] == [
+            portfolios_by_harness[first_harness][0]["id"]
+        ]
+        other_runs = claim(other_harness)
+        assert [run["portfolio"]["id"] for run in other_runs] == [
+            portfolio["id"] for portfolio in portfolios_by_harness[other_harness][:2]
+        ]
+        next_run = claim(first_harness, worker="second")
+        assert [run["portfolio"]["id"] for run in next_run] == [portfolios_by_harness[first_harness][1]["id"]]
+        for expected_harness, runs in [(first_harness, first_run + next_run), (other_harness, other_runs)]:
+            for run in runs:
+                assert run["harness"] == expected_harness
+                assert run["harness_version"] == f"{expected_harness}-test-version"
+                if run["harness"] == "muse":
+                    assert run["execution_model_id"] == "muse-test-model"
+                    assert run["reasoning_effort"] == "high"
+        assert claim(first_harness, worker="third") == []
+        assert claim(other_harness, worker="second") == []
 
-        evaluator.fail_run(session, run_id=muse[0]["id"], error="Cancelled.", cancelled=True, now=now)
-        second_codex = claim("codex", 20)
-        assert [run["portfolio"]["id"] for run in second_codex] == [portfolios[2]["id"]]
+        run_id = first_run[0]["id"]
+        evaluator.cancel_run(session, run_id=run_id, now=now)
+        assert claim(first_harness, worker="third") == []
+        evaluator.fail_run(session, run_id=run_id, error="Cancelled.", cancelled=True, now=now)
+        released = claim(first_harness, worker="third")
+        assert [run["portfolio"]["id"] for run in released] == [portfolios_by_harness[first_harness][2]["id"]]
+        assert claim(first_harness) == []
+        assert claim(other_harness, worker="second") == []

@@ -198,7 +198,9 @@ class SettingsUpdate(BaseModel):
 
 class EvaluatorSettingsUpdate(BaseModel):
     enabled: bool
-    max_concurrency: int = Field(ge=1, le=20)
+    max_concurrency: int = Field(
+        ge=1, le=20, description="Maximum active runs per harness across its workers"
+    )
     poll_seconds: int = Field(ge=10, le=300)
     attempt_timeout_seconds: int = Field(ge=60, le=7200)
     max_attempts: int = Field(ge=1, le=5)

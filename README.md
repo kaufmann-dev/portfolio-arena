@@ -255,8 +255,10 @@ imports the visible models and explicit reasoning variants from Meta's authentic
 catalog once through the CLI, which handles account-token exchange and renewal. Model discovery
 does not start an agent turn. Existing model capabilities and admin edits are preserved. No models or
 reasoning tiers are guessed when the catalog is unavailable. Restart the worker to discover newly
-available models. Authentication and runtime health are shown separately per harness; both workers
-share the same global concurrency limit. An unconfigured Muse login does not stop Codex evaluations.
+available models. Authentication and runtime health are shown separately per harness. The concurrency
+setting applies separately to each harness across all of its workers: a limit of 8 permits up to 8
+Codex and 8 Muse Code evaluations at once. Runs awaiting cancellation count against their harness's
+limit until they stop. An unconfigured Muse login does not stop Codex evaluations.
 
 Runtime credentials are deployment-only: `MASSIVE_API_KEY` is passed to both the web process for
 valuations and the worker for research, while the internal worker bearer token is generated in
