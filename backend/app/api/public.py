@@ -15,14 +15,11 @@ from ..services import admin_ops
 from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
 from ..services.market_refresh import market_snapshot
 from ..services.meta import (
-    control_history,
     is_meta_portfolio,
     is_normal_portfolio,
     latest_batch,
     public_batch,
     rebuilt_display,
-    serialize_managed_control,
-    serialize_rebuilt_control,
 )
 from ..services.model_catalog import agent_out
 from ..services.prompt_policy import allocation_policies_out, allocation_policy_out
@@ -216,9 +213,7 @@ def managed_meta_arena(
         and portfolio.prompt_mode == "managed"
         and portfolio.direction == direction
     ]
-    control_portfolio, control_session = control_history(session, "managed", direction)
-    valuation_inputs = [*selected, *([control_portfolio] if control_portfolio else [])]
-    valuations = compute_valuations(session, valuation_inputs)
+    valuations = compute_valuations(session, selected)
     allocation_policy = allocation_policy_out(admin_ops.get_app_settings(session), "managed")
     rows = [
         serialize_summary(
@@ -234,18 +229,12 @@ def managed_meta_arena(
         (row["inception"] for row in rows if row["inception"] is not None),
         default=None,
     )
-    control = serialize_managed_control(
-        valuations.by_portfolio_id.get(control_portfolio.id) if control_portfolio else None,
-        valuations,
-        control_session,
-    )
     return {
         "track": "managed",
         "direction": direction,
         "as_of": valuations.as_of,
         "market_data_status": valuations.market_data_status,
         "batch": public_batch(latest_batch(session)),
-        "control": control,
         "ranking": {
             "metric": "search_adjusted_lower_95_ci",
             "alpha": "daily_excess_vs_spy",
@@ -253,7 +242,6 @@ def managed_meta_arena(
         },
         "portfolios": [
             synthetic_spy_row(valuations.spy_series, start=benchmark_start, direction=direction),
-            *([control] if control else []),
             *rows,
         ],
     }
@@ -286,11 +274,9 @@ def rebuilt_meta_arena(
         and portfolio.prompt_mode == "rebuilt"
         and portfolio.direction == direction
     ]
-    control_portfolio, control_session = control_history(session, "rebuilt", direction)
     analysis_inputs = [
         *sources,
         *selected,
-        *([control_portfolio] if control_portfolio else []),
     ]
     arena = compute_rebuilt_arena(
         session,
@@ -314,13 +300,6 @@ def rebuilt_meta_arena(
         if portfolio.id in arena.by_portfolio_id
     ]
     rank_rows(rows)
-    control = serialize_rebuilt_control(
-        arena.by_portfolio_id.get(control_portfolio.id) if control_portfolio else None,
-        arena,
-        control_session,
-        view=view,
-        horizon=horizon,
-    )
     common = arena.common_for(direction)
     if view == "common" and common.spy_series:
         spy_row = synthetic_spy_row(common.spy_series, precomputed_nav=True, direction=direction)
@@ -332,7 +311,6 @@ def rebuilt_meta_arena(
         "as_of": arena.as_of,
         "market_data_status": arena.market_data_status,
         "batch": public_batch(latest_batch(session)),
-        "control": control,
         "context": _context(view, objective, cost_basis, horizon),
         "common_policy": common.policy,
         "ranking": {
@@ -340,7 +318,7 @@ def rebuilt_meta_arena(
             "alpha": "daily_excess_vs_spy",
             "hac_lag": "holding_period_minus_one",
         },
-        "portfolios": [spy_row, *([control] if control else []), *rows],
+        "portfolios": [spy_row, *rows],
     }
 
 
@@ -660,11 +638,8 @@ def compare_meta(
         for portfolio in meta_portfolios
         if portfolio.prompt_mode == track and portfolio.direction == direction
     ]
-    control_portfolio, control_session = control_history(session, track, direction)
 
     output: list[tuple[Portfolio, list[dict]]] = []
-    control = None
-    control_raw: list[dict] = []
     spy_raw = []
     as_of = None
     status = "fresh"
@@ -673,8 +648,7 @@ def compare_meta(
     if track == "managed":
         if view != "common" or objective != "canonical" or cost_basis != "net" or horizon is not None:
             raise HTTPException(422, "Rebuilt analysis context is not valid for managed comparisons.")
-        inputs = [*meta_universe, *([control_portfolio] if control_portfolio else [])]
-        valuations = compute_valuations(session, inputs)
+        valuations = compute_valuations(session, meta_universe)
         as_of = valuations.as_of
         status = valuations.market_data_status
         spy_raw = valuations.spy_series
@@ -682,12 +656,6 @@ def compare_meta(
             result = valuations.by_portfolio_id[portfolio.id].result
             if result and result.series:
                 output.append((portfolio, result.series))
-        control_valuation = (
-            valuations.by_portfolio_id.get(control_portfolio.id) if control_portfolio else None
-        )
-        control = serialize_managed_control(control_valuation, valuations, control_session)
-        if control_valuation and control_valuation.result:
-            control_raw = control_valuation.result.series
     else:
         _validate_rebuilt_context(view, objective, cost_basis, horizon)
         context = _context(view, objective, cost_basis, horizon)
@@ -698,7 +666,7 @@ def compare_meta(
             and portfolio.prompt_mode == "rebuilt"
             and portfolio.direction == direction
         ]
-        inputs = [*sources, *meta_universe, *([control_portfolio] if control_portfolio else [])]
+        inputs = [*sources, *meta_universe]
         arena = compute_rebuilt_arena(
             session,
             inputs,
@@ -721,21 +689,6 @@ def compare_meta(
             _, _, series, _ = rebuilt_display(analysis, arena, view=view, horizon=horizon)
             if series:
                 output.append((portfolio, series))
-        control_analysis = arena.by_portfolio_id.get(control_portfolio.id) if control_portfolio else None
-        control = serialize_rebuilt_control(
-            control_analysis,
-            arena,
-            control_session,
-            view=view,
-            horizon=horizon,
-        )
-        if control_analysis:
-            _, _, control_raw, _ = rebuilt_display(
-                control_analysis,
-                arena,
-                view=view,
-                horizon=horizon,
-            )
 
     empty = {
         "track": track,
@@ -746,7 +699,6 @@ def compare_meta(
         "context": context,
         "start": None,
         "series": [],
-        "control_series": None,
         "spy_series": [],
     }
     if not output:
@@ -767,19 +719,6 @@ def compare_meta(
                 "series": [{"date": point["date"], "nav": point["nav"] / base * 100.0} for point in window],
             }
         )
-    control_line = None
-    control_window = [point for point in control_raw if point["date"] >= common_start]
-    if control and control_window and control_window[0]["nav"] > 0:
-        control_base = control_window[0]["nav"]
-        control_line = {
-            "slug": control["slug"],
-            "name": control["name"],
-            "kind": "control",
-            "series": [
-                {"date": point["date"], "nav": point["nav"] / control_base * 100.0}
-                for point in control_window
-            ],
-        }
     spy_output = (
         [
             {"date": point["date"], "nav": point["nav"]}
@@ -793,7 +732,6 @@ def compare_meta(
         **empty,
         "start": common_start,
         "series": lines,
-        "control_series": control_line,
         "spy_series": spy_output,
     }
 

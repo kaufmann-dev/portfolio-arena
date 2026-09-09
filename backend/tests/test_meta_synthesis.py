@@ -280,7 +280,12 @@ def test_meta_runs_wait_for_normal_success_and_skip_cells_without_sources(
             "fallback_total": 0,
             "missing_total": 0,
         }
-        assert batch.snapshot["controls"]["managed_long"] == {
+        assert "controls" not in batch.snapshot
+        assert "formula_version" not in batch.snapshot
+        packet = source_packet_for(
+            batch.snapshot, agent_id=sample_agent["id"], mode="managed", direction="long"
+        )
+        assert packet["controls"]["managed_long"] == {
             "mode": "managed",
             "direction": "long",
             "effective_date": "2026-08-04",

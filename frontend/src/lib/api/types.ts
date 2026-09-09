@@ -314,55 +314,12 @@ export interface MetaBatchSummary {
   error: string | null;
 }
 
-interface MetaControlBase {
-  kind: "control";
-  id: null;
-  slug: string;
-  name: string;
-  direction: Direction;
-  status: "reference";
-  rank: null;
-  evidence: EvidenceState;
-  rank_score: null;
-  cost_bps: number;
-  formula_version: "same_cell_equal_source_v1";
-  batch_session_date: string | null;
-  contributor_count: number;
-  is_liquidated: boolean;
-  liquidated_at: string | null;
-  sparkline: number[];
-  stale_data: boolean;
-  frozen_symbols: string[];
-  error: string | null;
-}
-
-export interface ManagedMetaControl extends MetaControlBase {
-  prompt_mode: "managed";
-  inception: string | null;
-  age_days: number | null;
-  allocation_count: number;
-  metrics: Metrics & AlphaMetrics;
-}
-
-export interface RebuiltMetaControl extends MetaControlBase {
-  prompt_mode: "rebuilt";
-  selected_policy: RebuiltPolicy | null;
-  metrics: AlphaMetrics;
-  completion: RebuiltCompletion;
-  signal_horizons: SignalHorizon[];
-  common_admitted: boolean;
-}
-
-export interface ManagedMetaResponse extends Omit<ManagedArenaResponse, "portfolios"> {
+export interface ManagedMetaResponse extends ManagedArenaResponse {
   batch: MetaBatchSummary | null;
-  control: ManagedMetaControl | null;
-  portfolios: (ManagedArenaPortfolio | ManagedMetaControl | BenchmarkArenaPortfolio)[];
 }
 
-export interface RebuiltMetaResponse extends Omit<RebuiltArenaResponse, "portfolios"> {
+export interface RebuiltMetaResponse extends RebuiltArenaResponse {
   batch: MetaBatchSummary | null;
-  control: RebuiltMetaControl | null;
-  portfolios: (RebuiltArenaPortfolio | RebuiltMetaControl | BenchmarkArenaPortfolio)[];
 }
 
 export interface RebuiltArenaResponse {
@@ -604,16 +561,8 @@ export interface CompareEntry {
   series: SeriesPoint[];
 }
 
-export interface MetaControlSeries {
-  slug: string;
-  name: string;
-  kind: "control";
-  series: SeriesPoint[];
-}
-
 export interface MetaCompareResponse extends CompareResponse {
   batch: MetaBatchSummary | null;
-  control_series: MetaControlSeries | null;
 }
 
 export interface MetaPortfolioSetMember {

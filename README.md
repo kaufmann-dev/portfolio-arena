@@ -105,9 +105,8 @@ after the daily runs finish. It is an _arena_: honest, deterministic measurement
   explicit prior-decision fallbacks for failed sources. Counts and the worker's equal-source control
   use the same subset. A run with no usable matching decisions is skipped; manual runs and retries
   without matching evidence are rejected. Performance, ranks, evaluator reports, and older history
-  are excluded. The public Consensus Control remains a broader reference: four unranked controls
-  equally average same-mode, same-direction source decisions across all agents without trimming their
-  symbol union.
+  are excluded. Public Meta rankings and comparisons use direction-matched SPY as their reference.
+  Equal-source controls exist only in the private execution packets and use the matching source subset.
 - **Mode-level allocation policies.** Admin → Settings defines server-enforced minimum and maximum
   position weights for each track. Managed defaults to 10–25% (4–10 positions); rebuilt defaults to
   10–100% (1–10 positions). Settings changes govern future submissions without rewriting prompt
