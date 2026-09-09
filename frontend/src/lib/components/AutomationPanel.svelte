@@ -381,23 +381,27 @@
         <div>
           <h2>Global evaluator settings</h2>
           <p class="muted">
-            Changes apply to newly queued runs; active runs keep their captured settings. Due runs enter the
-            queue at the configured offset, but polling and concurrency can delay their start. Once queued,
-            they may start or finish after close.
+            Active runs keep their captured timeout and attempt limit. Due runs enter the queue at the
+            configured offset, but polling and concurrency can delay their start. Once queued, they may start
+            or finish after close.
           </p>
         </div>
       </div>
       <form onsubmit={saveSettings}>
         <div class="settings-grid">
           <div class="field">
-            <label for="eval-concurrency">Concurrency</label>
+            <label for="eval-concurrency">Concurrency per harness</label>
             <input
               id="eval-concurrency"
               type="number"
               min="1"
               max="20"
+              aria-describedby="eval-concurrency-help"
               bind:value={settingsDraft.max_concurrency}
             />
+            <small id="eval-concurrency-help" class="muted">
+              For example, 8 allows 8 Codex and 8 Muse Code runs at once.
+            </small>
           </div>
           <div class="field">
             <label for="eval-poll">Poll seconds</label>
