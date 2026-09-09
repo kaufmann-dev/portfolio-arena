@@ -46,7 +46,7 @@ def _member(meta_set: dict, mode: str, direction: str) -> dict:
 
 def _ready_batch(effective_date: date) -> None:
     from app.db import session_factory
-    from app.models import MetaBatch, MetaPortfolioSet
+    from app.models import MetaBatch
 
     cells = {}
     for mode, direction, symbol in (
@@ -66,7 +66,7 @@ def _ready_batch(effective_date: date) -> None:
         session.add(
             MetaBatch(
                 session_date=effective_date,
-                agent_id=session.query(MetaPortfolioSet).one().agent_id,
+                harness="codex",
                 status="ready",
                 source_portfolio_ids=[1, 2, 3],
                 due_source_portfolio_ids=[1, 2],
@@ -177,8 +177,8 @@ def test_meta_managed_is_isolated_redacted_and_compares_only_with_spy(
             key: payload["batches"][0][key]
             for key in (
                 "id",
-                "agent_id",
-                "agent_name",
+                "harness",
+                "harness_name",
                 "session_date",
                 "sources_finished_at",
                 "created_at",

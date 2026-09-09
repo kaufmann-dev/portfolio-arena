@@ -41,7 +41,9 @@ FINISHED_STATUSES = {"cancelled", "succeeded", "failed", "skipped"}
 RUN_ERROR_MAX_LENGTH = 4000
 RUN_REPORT_MAX_LENGTH = 20_000
 INSTANCE_STALE_SECONDS = 180
-NO_META_SOURCES = "No usable frozen source decisions match this Meta portfolio's agent, mode, and direction."
+NO_META_SOURCES = (
+    "No usable frozen source decisions match this Meta portfolio's harness, mode, and direction."
+)
 
 
 def _managed_liquidations(
@@ -201,7 +203,7 @@ def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
             raise RuntimeError("Arena-synthesis run has no ready frozen source batch")
         packet = source_packet_for(
             batch.snapshot,
-            agent_id=run.agent_id,
+            harness=run.harness,
             mode=run.portfolio.prompt_mode,
             direction=run.portfolio.direction,
         )
@@ -504,11 +506,11 @@ def _pending_result(
     ).first()
 
 
-def _latest_ready_meta_batch(session: Session, agent_id: int) -> MetaBatch | None:
+def _latest_ready_meta_batch(session: Session, harness: str) -> MetaBatch | None:
     return session.scalars(
         select(MetaBatch)
         .where(
-            MetaBatch.agent_id == agent_id,
+            MetaBatch.harness == harness,
             MetaBatch.status == "ready",
             MetaBatch.snapshot.is_not(None),
         )
@@ -573,7 +575,7 @@ def enqueue_manual_runs(
             )
             continue
         if portfolio.prompt.context_scope == "arena":
-            latest_meta_batch = _latest_ready_meta_batch(session, portfolio.agent_id)
+            latest_meta_batch = _latest_ready_meta_batch(session, portfolio.agent.harness)
             if latest_meta_batch is None:
                 items.append(
                     {
@@ -586,7 +588,7 @@ def enqueue_manual_runs(
                 continue
             packet = source_packet_for(
                 latest_meta_batch.snapshot,
-                agent_id=portfolio.agent_id,
+                harness=portfolio.agent.harness,
                 mode=portfolio.prompt_mode,
                 direction=portfolio.direction,
             )
@@ -669,7 +671,7 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
         if not has_usable_sources(
             source_packet_for(
                 batch.snapshot,
-                agent_id=source.portfolio.agent_id,
+                harness=source.portfolio.agent.harness,
                 mode=source.portfolio.prompt_mode,
                 direction=source.portfolio.direction,
             )
@@ -747,15 +749,16 @@ def _enqueue_scheduled(
     batches = session.scalars(
         select(MetaBatch).where(MetaBatch.session_date == local_date).with_for_update()
     ).all()
-    by_agent = {batch.agent_id: batch for batch in batches}
-    for agent_id in sorted({config.portfolio.agent_id for config in meta_configs} - by_agent.keys()):
+    by_harness = {batch.harness: batch for batch in batches}
+    for harness in sorted({config.portfolio.agent.harness for config in meta_configs} - by_harness.keys()):
         source_ids = list(
             session.scalars(
                 select(Portfolio.id)
                 .join(Portfolio.prompt)
+                .join(Portfolio.agent)
                 .where(
                     Portfolio.status == "active",
-                    Portfolio.agent_id == agent_id,
+                    Agent.harness == harness,
                     Prompt.context_scope == "portfolio",
                 )
                 .order_by(Portfolio.id)
@@ -763,23 +766,23 @@ def _enqueue_scheduled(
         )
         batch = MetaBatch(
             session_date=local_date,
-            agent_id=agent_id,
+            harness=harness,
             status="waiting",
             source_portfolio_ids=source_ids,
             due_source_portfolio_ids=sorted(
-                config.portfolio_id for config in normal_configs if config.portfolio.agent_id == agent_id
+                config.portfolio_id for config in normal_configs if config.portfolio.agent.harness == harness
             ),
             target_portfolio_ids=sorted(
-                config.portfolio_id for config in meta_configs if config.portfolio.agent_id == agent_id
+                config.portfolio_id for config in meta_configs if config.portfolio.agent.harness == harness
             ),
         )
         session.add(batch)
         session.flush()
-        by_agent[agent_id] = batch
+        by_harness[harness] = batch
 
     frozen_sources = {
         int(portfolio_id): batch
-        for batch in by_agent.values()
+        for batch in by_harness.values()
         for portfolio_id in batch.due_source_portfolio_ids
     }
     due_normal_ids = {config.portfolio_id for config in normal_configs}
@@ -787,7 +790,7 @@ def _enqueue_scheduled(
         config
         for config in configs
         if config.portfolio_id in frozen_sources
-        or (config.portfolio_id in due_normal_ids and config.portfolio.agent_id not in by_agent)
+        or (config.portfolio_id in due_normal_ids and config.portfolio.agent.harness not in by_harness)
     ]
 
     for config in normal_configs:
@@ -800,13 +803,13 @@ def _enqueue_scheduled(
             )
         ).first()
         if existing is not None:
-            if batch is not None and existing.meta_batch_id is None:
+            if batch is not None and existing.meta_batch_id is None and existing.harness == batch.harness:
                 existing.meta_batch_id = batch.id
             continue
         if (
             not config.enabled
             or config.portfolio.status != "active"
-            or (batch is not None and config.portfolio.agent_id != batch.agent_id)
+            or (batch is not None and config.portfolio.agent.harness != batch.harness)
             or not supports_automation(config.portfolio.agent.harness)
             or _active_run(session, config.portfolio_id) is not None
         ):
@@ -853,7 +856,7 @@ def _queue_meta_targets(
             or not config.enabled
             or config.portfolio.status != "active"
             or config.portfolio.prompt.context_scope != "arena"
-            or config.portfolio.agent_id != batch.agent_id
+            or config.portfolio.agent.harness != batch.harness
             or not supports_automation(config.portfolio.agent.harness)
         ):
             continue
@@ -865,7 +868,7 @@ def _queue_meta_targets(
             )
         ).first()
         if existing is not None:
-            if existing.meta_batch_id is None:
+            if existing.meta_batch_id is None and existing.harness == batch.harness:
                 existing.meta_batch_id = batch.id
             continue
         if _active_run(session, portfolio_id) is not None:
@@ -933,7 +936,7 @@ def _advance_meta_batches(
                 for portfolio in targets:
                     packet = source_packet_for(
                         snapshot,
-                        agent_id=portfolio.agent_id,
+                        harness=portfolio.agent.harness,
                         mode=portfolio.prompt_mode,
                         direction=portfolio.direction,
                     )
@@ -1064,6 +1067,12 @@ def claim_runs(
                 .join(EvaluationRun.portfolio)
                 .where(EvaluationRun.status == "queued", EvaluationRun.harness == harness)
                 .where(Portfolio.status == "active")
+                .where(
+                    ~(
+                        Portfolio.prompt.has(Prompt.context_scope == "arena")
+                        & EvaluationRun.meta_batch.has(MetaBatch.status == "waiting")
+                    )
+                )
                 .order_by(EvaluationRun.created_at, EvaluationRun.id)
                 .limit(claim_limit)
                 .with_for_update(skip_locked=True)
@@ -1086,7 +1095,7 @@ def claim_runs(
                         continue
                     packet = source_packet_for(
                         batch.snapshot,
-                        agent_id=run.agent_id,
+                        harness=run.harness,
                         mode=run.portfolio.prompt_mode,
                         direction=run.portfolio.direction,
                     )

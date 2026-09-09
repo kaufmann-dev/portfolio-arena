@@ -337,7 +337,7 @@
     <div>
       <h1 id="meta-title">Meta Arena</h1>
       <p class="lede">
-        Each Meta portfolio combines normal portfolios using the same agent, managed/rebuilt mode, and
+        Each Meta portfolio combines normal portfolios using the same harness, managed/rebuilt mode, and
         long/short direction.
       </p>
     </div>
@@ -403,7 +403,7 @@
       >
         <header>
           <div>
-            <h2 id={`batch-title-${batch.id}`}>{batch.agent_name} source batch</h2>
+            <h2 id={`batch-title-${batch.id}`}>{batch.harness_name} source batch</h2>
             <p>{metaBatchStatusCopy(batch.status)}</p>
             {#if batch.status === "failed"}
               <p class="batch-error" role="alert">
@@ -466,7 +466,7 @@
             <h2 id="batch-title">Source batches</h2>
             <p>
               No synthesis batch has opened yet. The first scheduled normal-Arena session will create one for
-              each agent.
+              each harness.
             </p>
           </div>
           <span class="badge">not started</span>
