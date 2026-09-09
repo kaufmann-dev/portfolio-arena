@@ -298,6 +298,8 @@ export type MetaBatchStatus = "waiting" | "ready" | "insufficient" | "failed";
 
 export interface MetaBatchSummary {
   id: number;
+  agent_id: number;
+  agent_name: string;
   session_date: string;
   status: MetaBatchStatus;
   snapshot_sha256: string | null;
@@ -315,11 +317,11 @@ export interface MetaBatchSummary {
 }
 
 export interface ManagedMetaResponse extends ManagedArenaResponse {
-  batch: MetaBatchSummary | null;
+  batches: MetaBatchSummary[];
 }
 
 export interface RebuiltMetaResponse extends RebuiltArenaResponse {
-  batch: MetaBatchSummary | null;
+  batches: MetaBatchSummary[];
 }
 
 export interface RebuiltArenaResponse {
@@ -562,7 +564,7 @@ export interface CompareEntry {
 }
 
 export interface MetaCompareResponse extends CompareResponse {
-  batch: MetaBatchSummary | null;
+  batches: MetaBatchSummary[];
 }
 
 export interface MetaPortfolioSetMember {

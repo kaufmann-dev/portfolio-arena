@@ -46,7 +46,7 @@ def _member(meta_set: dict, mode: str, direction: str) -> dict:
 
 def _ready_batch(effective_date: date) -> None:
     from app.db import session_factory
-    from app.models import MetaBatch
+    from app.models import MetaBatch, MetaPortfolioSet
 
     cells = {}
     for mode, direction, symbol in (
@@ -66,6 +66,7 @@ def _ready_batch(effective_date: date) -> None:
         session.add(
             MetaBatch(
                 session_date=effective_date,
+                agent_id=session.query(MetaPortfolioSet).one().agent_id,
                 status="ready",
                 source_portfolio_ids=[1, 2, 3],
                 due_source_portfolio_ids=[1, 2],
@@ -85,9 +86,18 @@ def _ready_batch(effective_date: date) -> None:
                     },
                     "sources": [
                         {
+                            "portfolio": {"id": index},
+                            "due": index < 3,
+                            "run_status": "succeeded"
+                            if index == 1
+                            else "failed"
+                            if index == 2
+                            else "not_due",
+                            "decision_status": "fallback" if index == 2 else "same_session",
                             "portfolio_note": "never expose this source thesis",
                             "positions": [{"symbol": "AAPL", "note": "private position note"}],
                         }
+                        for index in range(1, 4)
                     ],
                     "controls": cells,
                 },
@@ -162,11 +172,13 @@ def test_meta_managed_is_isolated_redacted_and_compares_only_with_spy(
     response = client.get("/api/meta/managed?direction=long")
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["batch"] == {
+    assert payload["batches"][0] == {
         **{
-            key: payload["batch"][key]
+            key: payload["batches"][0][key]
             for key in (
                 "id",
+                "agent_id",
+                "agent_name",
                 "session_date",
                 "sources_finished_at",
                 "created_at",

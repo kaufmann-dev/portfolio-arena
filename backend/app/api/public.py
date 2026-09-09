@@ -17,8 +17,7 @@ from ..services.market_refresh import market_snapshot
 from ..services.meta import (
     is_meta_portfolio,
     is_normal_portfolio,
-    latest_batch,
-    public_batch,
+    public_batches,
     rebuilt_display,
 )
 from ..services.model_catalog import agent_out
@@ -234,7 +233,7 @@ def managed_meta_arena(
         "direction": direction,
         "as_of": valuations.as_of,
         "market_data_status": valuations.market_data_status,
-        "batch": public_batch(latest_batch(session)),
+        "batches": public_batches(session),
         "ranking": {
             "metric": "search_adjusted_lower_95_ci",
             "alpha": "daily_excess_vs_spy",
@@ -310,7 +309,7 @@ def rebuilt_meta_arena(
         "direction": direction,
         "as_of": arena.as_of,
         "market_data_status": arena.market_data_status,
-        "batch": public_batch(latest_batch(session)),
+        "batches": public_batches(session),
         "context": _context(view, objective, cost_basis, horizon),
         "common_policy": common.policy,
         "ranking": {
@@ -695,7 +694,7 @@ def compare_meta(
         "direction": direction,
         "as_of": as_of,
         "market_data_status": status,
-        "batch": public_batch(latest_batch(session)),
+        "batches": public_batches(session),
         "context": context,
         "start": None,
         "series": [],

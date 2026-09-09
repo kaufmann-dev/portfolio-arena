@@ -65,6 +65,7 @@ def _scheduled_source_runs(session: Session, batch: MetaBatch) -> dict[int, Eval
     runs = session.scalars(
         select(EvaluationRun).where(
             EvaluationRun.meta_batch_id == batch.id,
+            EvaluationRun.agent_id == batch.agent_id,
             EvaluationRun.portfolio_id.in_(due_ids),
             EvaluationRun.trigger_kind == "scheduled",
             EvaluationRun.scheduled_for == batch.session_date,
@@ -74,7 +75,7 @@ def _scheduled_source_runs(session: Session, batch: MetaBatch) -> dict[int, Eval
 
 
 def sources_are_terminal(session: Session, batch: MetaBatch, now: datetime) -> bool:
-    """Return true once every frozen due source has finished or missed its close."""
+    """Wait only for this agent's frozen due sources, across all modes and directions."""
     from .trading_calendar import close_at
 
     runs = _scheduled_source_runs(session, batch)
@@ -86,6 +87,7 @@ def sources_are_terminal(session: Session, batch: MetaBatch, now: datetime) -> b
                 select(EvaluationRun.id)
                 .where(
                     EvaluationRun.portfolio_id == portfolio_id,
+                    EvaluationRun.agent_id == batch.agent_id,
                     EvaluationRun.status.in_({"queued", "running", "cancel_requested"}),
                 )
                 .limit(1)
@@ -105,6 +107,7 @@ def _source_entry(
     batch: MetaBatch,
     run: EvaluationRun | None,
 ) -> dict:
+    agent = run.agent if run is not None else portfolio.agent
     due = portfolio.id in {int(value) for value in batch.due_source_portfolio_ids}
     run_status = run.status if run is not None else ("not_scheduled" if due else "not_due")
     allow_same_session = not due or run is None or run_status in {"succeeded", "skipped"}
@@ -148,9 +151,9 @@ def _source_entry(
             "question_or_notes": portfolio.prompt.notes,
         },
         "agent": {
-            "id": portfolio.agent.id,
-            "slug": portfolio.agent.slug,
-            "name": agent_name(portfolio.agent),
+            "id": agent.id,
+            "slug": agent.slug,
+            "name": agent_name(agent),
         },
         "due": due,
         "run_status": run_status,
@@ -200,7 +203,7 @@ def _control_for(sources: list[dict], mode: str, direction: str, session_date: d
 
 
 def build_snapshot(session: Session, batch: MetaBatch, now: datetime | None = None) -> dict:
-    """Build the one immutable source snapshot shared by a session's meta runs."""
+    """Freeze one agent's evidence as soon as its own due evaluations finish."""
     current_time = now or datetime.now(UTC)
     source_ids = [int(value) for value in batch.source_portfolio_ids]
     portfolios = session.scalars(
@@ -211,20 +214,21 @@ def build_snapshot(session: Session, batch: MetaBatch, now: datetime | None = No
     sources: list[dict] = []
     for portfolio_id in source_ids:
         portfolio = by_id.get(portfolio_id)
-        if portfolio is None:
+        run = runs.get(portfolio_id)
+        if portfolio is None or (run is None and portfolio.agent_id != batch.agent_id):
             sources.append(
                 {
                     "portfolio": {
                         "id": portfolio_id,
                         "slug": None,
-                        "name": "Deleted source",
+                        "name": "Unavailable source",
                         "mode": None,
                         "direction": None,
                     },
                     "strategy": None,
                     "agent": None,
                     "due": portfolio_id in {int(value) for value in batch.due_source_portfolio_ids},
-                    "run_status": "source_deleted",
+                    "run_status": "source_deleted" if portfolio is None else "source_reassigned",
                     "decision_status": "missing",
                     "decision_effective_date": None,
                     "staleness_days": None,
@@ -233,23 +237,13 @@ def build_snapshot(session: Session, batch: MetaBatch, now: datetime | None = No
                 }
             )
             continue
-        sources.append(_source_entry(portfolio, batch, runs.get(portfolio_id)))
+        sources.append(_source_entry(portfolio, batch, run))
 
-    due_ids = {int(value) for value in batch.due_source_portfolio_ids}
-    due_runs = [runs.get(portfolio_id) for portfolio_id in due_ids]
-    counts = {
-        "source_total": len(source_ids),
-        "due_total": len(due_ids),
-        "terminal_total": sum(1 for run in due_runs if run is None or run.status in TERMINAL_RUN_STATUSES),
-        "succeeded_total": sum(1 for run in due_runs if run is not None and run.status == "succeeded"),
-        "fallback_total": sum(1 for source in sources if source["decision_status"] == "fallback"),
-        "missing_total": sum(1 for source in sources if source["decision_status"] == "missing"),
-    }
     return {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "session_date": batch.session_date.isoformat(),
         "created_at": current_time.isoformat(),
-        "counts": counts,
+        "counts": source_counts(sources),
         "sources": sources,
     }
 
@@ -257,6 +251,22 @@ def build_snapshot(session: Session, batch: MetaBatch, now: datetime | None = No
 def snapshot_hash(snapshot: dict) -> str:
     canonical = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def source_counts(sources: list[dict]) -> dict:
+    due = [source for source in sources if source["due"]]
+    return {
+        "source_total": len(sources),
+        "due_total": len(due),
+        "terminal_total": sum(
+            source["run_status"]
+            in TERMINAL_RUN_STATUSES | {"not_scheduled", "source_deleted", "source_reassigned"}
+            for source in due
+        ),
+        "succeeded_total": sum(source["run_status"] == "succeeded" for source in due),
+        "fallback_total": sum(source["decision_status"] == "fallback" for source in sources),
+        "missing_total": sum(source["decision_status"] == "missing" for source in sources),
+    }
 
 
 def source_packet_for(snapshot: dict, *, agent_id: int, mode: str, direction: str) -> dict:
@@ -269,7 +279,6 @@ def source_packet_for(snapshot: dict, *, agent_id: int, mode: str, direction: st
         and source["portfolio"]["mode"] == mode
         and source["portfolio"]["direction"] == direction
     ]
-    due = [source for source in sources if source["due"]]
     control = _control_for(sources, mode, direction, date.fromisoformat(snapshot["session_date"]))
     return {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -277,17 +286,7 @@ def source_packet_for(snapshot: dict, *, agent_id: int, mode: str, direction: st
         "session_date": snapshot["session_date"],
         "created_at": snapshot["created_at"],
         "scope": {"agent_id": agent_id, "mode": mode, "direction": direction},
-        "counts": {
-            "source_total": len(sources),
-            "due_total": len(due),
-            "terminal_total": sum(
-                source["run_status"] in TERMINAL_RUN_STATUSES | {"not_scheduled", "source_deleted"}
-                for source in due
-            ),
-            "succeeded_total": sum(source["run_status"] == "succeeded" for source in due),
-            "fallback_total": sum(source["decision_status"] == "fallback" for source in sources),
-            "missing_total": sum(source["decision_status"] == "missing" for source in sources),
-        },
+        "counts": source_counts(sources),
         "sources": sources,
         "controls": {f"{mode}_{direction}": control},
     }

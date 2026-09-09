@@ -95,7 +95,7 @@
   let compareSequence = 0;
 
   const currentData = $derived(track === "rebuilt" ? rebuiltData : managedData);
-  const batch = $derived(currentData?.batch ?? null);
+  const batches = $derived(currentData?.batches ?? []);
   const allMetaRows = $derived.by((): MetaPortfolio[] => {
     if (!currentData) return [];
     return currentData.portfolios.filter(
@@ -396,38 +396,32 @@
   {/if}
 
   {#if currentData}
-    <section
-      class={["batch-panel", (batch?.status === "insufficient" || batch?.status === "failed") && "failed"]}
-      aria-labelledby="batch-title"
-    >
-      <header>
-        <div>
-          <h2 id="batch-title">Source batch</h2>
-          {#if batch}
+    {#each batches as batch (batch.id)}
+      <section
+        class={["batch-panel", (batch.status === "insufficient" || batch.status === "failed") && "failed"]}
+        aria-labelledby={`batch-title-${batch.id}`}
+      >
+        <header>
+          <div>
+            <h2 id={`batch-title-${batch.id}`}>{batch.agent_name} source batch</h2>
             <p>{metaBatchStatusCopy(batch.status)}</p>
             {#if batch.status === "failed"}
               <p class="batch-error" role="alert">
                 {batch.error ?? "Packet construction failed without details."}
               </p>
             {/if}
-          {:else}
-            <p>
-              No synthesis batch has opened yet. The first scheduled normal-Arena session will create one.
-            </p>
-          {/if}
-        </div>
-        <span
-          class={[
-            "badge",
-            batch?.status === "waiting" && "warn",
-            batch?.status === "ready" && "success",
-            (batch?.status === "insufficient" || batch?.status === "failed") && "neg",
-          ]}
-        >
-          {batch?.status ?? "not started"}
-        </span>
-      </header>
-      {#if batch}
+          </div>
+          <span
+            class={[
+              "badge",
+              batch.status === "waiting" && "warn",
+              batch.status === "ready" && "success",
+              (batch.status === "insufficient" || batch.status === "failed") && "neg",
+            ]}
+          >
+            {batch.status}
+          </span>
+        </header>
         <dl class="batch-counts">
           <div>
             <dt>Session</dt>
@@ -464,8 +458,21 @@
             {/if}
           </p>
         {/if}
-      {/if}
-    </section>
+      </section>
+    {:else}
+      <section class="batch-panel" aria-labelledby="batch-title">
+        <header>
+          <div>
+            <h2 id="batch-title">Source batches</h2>
+            <p>
+              No synthesis batch has opened yet. The first scheduled normal-Arena session will create one for
+              each agent.
+            </p>
+          </div>
+          <span class="badge">not started</span>
+        </header>
+      </section>
+    {/each}
   {/if}
 
   {#if track === "rebuilt"}

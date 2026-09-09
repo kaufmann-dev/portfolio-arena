@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { metaBatchStatusCopy } from "./meta";
 
 describe("Meta Arena batch states", () => {
-  it("explains that a waiting batch is gated by normal portfolios", () => {
-    expect(metaBatchStatusCopy("waiting")).toContain("normal-portfolio run");
+  it("explains that a waiting batch is gated only by normal portfolios with the same agent", () => {
+    expect(metaBatchStatusCopy("waiting")).toContain("normal-portfolio run for the same agent");
   });
 
   it("identifies a ready batch as frozen and scoped to each meta portfolio", () => {
