@@ -132,11 +132,7 @@
   );
   const managedRows = $derived.by((): ManagedMetaResponse["portfolios"] => {
     if (!managedData) return [];
-    const references = managedData.portfolios.filter(
-      (row) => row.kind === "benchmark" || row.kind === "control",
-    );
-    const controlAlreadyIncluded = references.some((row) => row.kind === "control");
-    if (!controlAlreadyIncluded && managedData.control) references.push(managedData.control);
+    const references = managedData.portfolios.filter((row) => row.kind === "benchmark");
     return [
       ...references,
       ...filteredMetaRows.filter((row): row is ManagedArenaPortfolio => row.kind === "managed"),
@@ -144,11 +140,7 @@
   });
   const rebuiltRows = $derived.by((): RebuiltMetaResponse["portfolios"] => {
     if (!rebuiltData) return [];
-    const references = rebuiltData.portfolios.filter(
-      (row) => row.kind === "benchmark" || row.kind === "control",
-    );
-    const controlAlreadyIncluded = references.some((row) => row.kind === "control");
-    if (!controlAlreadyIncluded && rebuiltData.control) references.push(rebuiltData.control);
+    const references = rebuiltData.portfolios.filter((row) => row.kind === "benchmark");
     return [
       ...references,
       ...filteredMetaRows.filter((row): row is RebuiltArenaPortfolio => row.kind === "rebuilt"),
@@ -167,14 +159,6 @@
       name: entry.name,
       points: entry.series,
     }));
-    if (compareData.control_series?.series.length) {
-      series.push({
-        name: compareData.control_series.name,
-        points: compareData.control_series.series,
-        dashed: true,
-        color: "var(--warn)",
-      });
-    }
     if (compareData.spy_series.length) {
       series.push({
         name: compareData.direction === "short" ? "Short SPY" : "SPY",
@@ -354,8 +338,7 @@
       <h1 id="meta-title">Meta Arena</h1>
       <p class="lede">
         Each Meta portfolio combines normal portfolios using the same agent, managed/rebuilt mode, and
-        long/short direction. Consensus Control is a broader reference averaging the same mode and direction
-        across all agents.
+        long/short direction.
       </p>
     </div>
     <div class="valuation-stamp">
@@ -536,10 +519,7 @@
         <strong class="num">
           H{rebuiltData.common_policy.horizon} · {pctPoints(rebuiltData.common_policy.exposure_pct, 0)} exposure
         </strong>
-        <p>
-          Selected exclusively from normal rebuilt portfolios, then applied to meta portfolios and the
-          consensus control.
-        </p>
+        <p>Selected exclusively from normal rebuilt portfolios, then applied to meta portfolios.</p>
       {:else}
         <strong>Pending evidence</strong>
         <p>No normal-Arena common horizon and exposure pair is eligible yet.</p>
@@ -565,12 +545,11 @@
         <div class="compare-status" role="status" aria-live="polite">
           {#if selected.length}
             <span>
-              Comparing {selected.length} meta portfolio{selected.length === 1 ? "" : "s"} with Consensus Control
-              and SPY.
+              Comparing {selected.length} meta portfolio{selected.length === 1 ? "" : "s"} with SPY.
             </span>
             <button class="btn small" type="button" onclick={clearComparison}>Clear</button>
           {:else}
-            <span>Select a portfolio to compare it with Consensus Control and SPY.</span>
+            <span>Select a portfolio to compare it with SPY.</span>
           {/if}
         </div>
       </div>
@@ -584,7 +563,7 @@
           <h2 id="meta-comparison-title">
             {compareData?.start ? `Rebased to 100 at ${compareData.start}` : "Meta portfolio comparison"}
           </h2>
-          <p>Meta selections are compared with the same-cell consensus control and direction-matched SPY.</p>
+          <p>Meta selections are compared with direction-matched SPY.</p>
         </div>
         {#if compareLoading && compareData}<span role="status">Updating…</span>{/if}
       </header>

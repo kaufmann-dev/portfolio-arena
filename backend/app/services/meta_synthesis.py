@@ -23,7 +23,6 @@ from ..models import (
 from .model_catalog import agent_name
 
 SNAPSHOT_SCHEMA_VERSION = 1
-CONTROL_FORMULA_VERSION = "same_cell_equal_source_v1"
 SOURCE_PACKET_MAX_CHARS = 300_000
 TERMINAL_RUN_STATUSES = {"cancelled", "succeeded", "failed", "skipped"}
 
@@ -246,19 +245,12 @@ def build_snapshot(session: Session, batch: MetaBatch, now: datetime | None = No
         "fallback_total": sum(1 for source in sources if source["decision_status"] == "fallback"),
         "missing_total": sum(1 for source in sources if source["decision_status"] == "missing"),
     }
-    controls = {
-        f"{mode}_{direction}": _control_for(sources, mode, direction, batch.session_date)
-        for mode in ("managed", "rebuilt")
-        for direction in ("long", "short")
-    }
     return {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
-        "formula_version": CONTROL_FORMULA_VERSION,
         "session_date": batch.session_date.isoformat(),
         "created_at": current_time.isoformat(),
         "counts": counts,
         "sources": sources,
-        "controls": controls,
     }
 
 

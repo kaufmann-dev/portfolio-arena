@@ -1,6 +1,8 @@
-"""Public Meta Arena isolation, redaction, controls, and comparisons."""
+"""Public Meta Arena isolation, redaction, and SPY comparisons."""
 
 from datetime import UTC, date, datetime, timedelta
+
+import pytest
 
 from .util import backdate_allocation
 
@@ -42,12 +44,7 @@ def _member(meta_set: dict, mode: str, direction: str) -> dict:
     )
 
 
-def _ready_batch(
-    effective_date: date,
-    *,
-    managed_long_positions: list[dict] | None = None,
-    managed_long_contributors: int = 3,
-) -> None:
+def _ready_batch(effective_date: date) -> None:
     from app.db import session_factory
     from app.models import MetaBatch
 
@@ -65,9 +62,6 @@ def _ready_batch(
             "contributor_count": 3,
             "positions": [{"symbol": symbol, "weight_pct": 100}],
         }
-    if managed_long_positions is not None:
-        cells["managed_long"]["positions"] = managed_long_positions
-        cells["managed_long"]["contributor_count"] = managed_long_contributors
     with session_factory()() as session:
         session.add(
             MetaBatch(
@@ -139,7 +133,7 @@ def _trading_days(start: date, count: int) -> list[date]:
     return days
 
 
-def test_meta_managed_is_isolated_redacted_and_has_control(
+def test_meta_managed_is_isolated_redacted_and_compares_only_with_spy(
     client,
     admin_headers,
     sample_agent,
@@ -191,11 +185,8 @@ def test_meta_managed_is_isolated_redacted_and_has_control(
         "target_count": 4,
     }
     slugs = [row["slug"] for row in payload["portfolios"]]
-    assert slugs == ["spy", "consensus-control-managed-long", core["slug"]]
-    assert payload["control"]["kind"] == "control"
-    assert payload["control"]["rank"] is None
-    assert payload["control"]["contributor_count"] == 3
-    assert payload["control"]["formula_version"] == "same_cell_equal_source_v1"
+    assert slugs == ["spy", core["slug"]]
+    assert "control" not in payload
     assert "never expose this source thesis" not in response.text
     assert "private position note" not in response.text
     detail = client.get(f"/api/portfolios/{core['slug']}")
@@ -223,7 +214,8 @@ def test_meta_managed_is_isolated_redacted_and_has_control(
         params={"track": "managed", "direction": "long", "slugs": core["slug"]},
     )
     assert comparison.status_code == 200, comparison.text
-    assert comparison.json()["control_series"]["kind"] == "control"
+    assert "control_series" not in comparison.json()
+    assert comparison.json()["spy_series"]
     assert comparison.json()["series"][0]["slug"] == core["slug"]
 
 
@@ -269,65 +261,44 @@ def test_rebuilt_meta_uses_normal_common_policy_without_joining_normal_arena(
     payload = meta.json()
     assert payload["common_policy"] == baseline_policy
     assert pulse["slug"] in {row["slug"] for row in payload["portfolios"]}
-    assert payload["control"]["kind"] == "control"
+    assert "control" not in payload
+    assert {row["kind"] for row in payload["portfolios"]} == {"benchmark", "rebuilt"}
     ranked = [row for row in payload["portfolios"] if row.get("rank") is not None]
     assert all(row["kind"] == "rebuilt" for row in ranked)
 
 
-def test_control_formula_and_public_history_keep_equal_source_full_union(client):
-    from app.db import session_factory
-    from app.services.meta import control_history
-    from app.services.meta_synthesis import _control_for
-
-    sources = [
-        {
-            "portfolio": {"mode": "managed", "direction": "long"},
-            "decision_status": "same_session",
-            "positions": [{"symbol": "AAPL", "weight_pct": 100}],
-        },
-        {
-            "portfolio": {"mode": "managed", "direction": "long"},
-            "decision_status": "fallback",
-            "positions": [
-                {"symbol": "MSFT", "weight_pct": 50},
-                {"symbol": "RSP", "weight_pct": 50},
-            ],
-        },
-        {
-            "portfolio": {"mode": "managed", "direction": "long"},
-            "decision_status": "missing",
-            "positions": [],
-        },
-    ]
-    control = _control_for(sources, "managed", "long", date(2026, 6, 1))
-    assert control["contributor_count"] == 2
-    assert control["positions"] == [
-        {"symbol": "AAPL", "weight_pct": 50.0},
-        {"symbol": "MSFT", "weight_pct": 25.0},
-        {"symbol": "RSP", "weight_pct": 25.0},
-    ]
-
-    _ready_batch(
-        date(2026, 6, 1),
-        managed_long_positions=control["positions"],
-        managed_long_contributors=2,
-    )
-    _ready_batch(
-        date(2026, 6, 2),
-        managed_long_positions=[{"symbol": "AAPL", "weight_pct": 100}],
-        managed_long_contributors=1,
-    )
-    with session_factory()() as session:
-        history, latest_session = control_history(session, "managed", "long")
-    assert history is not None
-    assert latest_session == "2026-06-02"
-    assert len(history.allocations) == 2
-    assert [(position.symbol, position.weight_pct) for position in history.allocations[0].positions] == [
-        ("AAPL", 50.0),
-        ("MSFT", 25.0),
-        ("RSP", 25.0),
-    ]
-    assert history.allocations[1].contributor_count == 1
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize(
+    "track,view,horizon",
+    [
+        ("managed", "common", None),
+        ("rebuilt", "common", None),
+        ("rebuilt", "tuned", None),
+        ("rebuilt", "signal", 10),
+    ],
+)
+def test_saved_controls_do_not_appear_in_empty_meta_views(
+    client, admin_headers, sample_agent, direction, track, view, horizon
+):
+    meta_set = _create_meta_set(client, admin_headers, sample_agent)
+    member = _member(meta_set, track, direction)
+    _ready_batch(date.today() - timedelta(days=45))
+    params = {"direction": direction}
+    if track == "rebuilt":
+        params["view"] = view
+        if view == "signal":
+            params["cost_basis"] = "gross"
+        if horizon is not None:
+            params["horizon"] = horizon
+    response = client.get(f"/api/meta/{track}", params=params)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert "control" not in payload
+    assert [row["slug"] for row in payload["portfolios"]] == ["spy", member["slug"]]
+    comparison = client.get("/api/meta/compare", params={**params, "track": track, "slugs": member["slug"]})
+    assert comparison.status_code == 200, comparison.text
+    assert "control_series" not in comparison.json()
+    assert comparison.json()["series"] == []
 
 
 def test_normal_operational_mcp_reads_exclude_meta_portfolios(
