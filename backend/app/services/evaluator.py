@@ -26,8 +26,10 @@ from .arena import compute_valuations
 from .harnesses import automation_harness_ids, get_harness, supports_automation
 from .meta_synthesis import (
     build_snapshot,
+    has_usable_sources,
     render_source_packet,
     snapshot_hash,
+    source_packet_for,
     sources_are_terminal,
 )
 from .model_catalog import agent_out, agent_snapshot_out, model_ref
@@ -39,6 +41,7 @@ FINISHED_STATUSES = {"cancelled", "succeeded", "failed", "skipped"}
 RUN_ERROR_MAX_LENGTH = 4000
 RUN_REPORT_MAX_LENGTH = 20_000
 INSTANCE_STALE_SECONDS = 180
+NO_META_SOURCES = "No usable frozen source decisions match this Meta portfolio's agent, mode, and direction."
 
 
 def _managed_liquidations(
@@ -196,7 +199,13 @@ def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
         batch = session.get(MetaBatch, run.meta_batch_id) if run.meta_batch_id is not None else None
         if batch is None or batch.status != "ready" or batch.snapshot is None:
             raise RuntimeError("Arena-synthesis run has no ready frozen source batch")
-        execution_prompt = f"{execution_prompt}\n\n{render_source_packet(batch.snapshot)}"
+        packet = source_packet_for(
+            batch.snapshot,
+            agent_id=run.agent_id,
+            mode=run.portfolio.prompt_mode,
+            direction=run.portfolio.direction,
+        )
+        execution_prompt = f"{execution_prompt}\n\n{render_source_packet(packet)}"
     return {
         **run_out(run),
         "execution_prompt": execution_prompt,
@@ -571,6 +580,22 @@ def enqueue_manual_runs(
                     }
                 )
                 continue
+            packet = source_packet_for(
+                latest_meta_batch.snapshot,
+                agent_id=portfolio.agent_id,
+                mode=portfolio.prompt_mode,
+                direction=portfolio.direction,
+            )
+            if not has_usable_sources(packet):
+                items.append(
+                    {
+                        "portfolio_id": portfolio_id,
+                        "action": "rejected",
+                        "reason": NO_META_SOURCES,
+                        "run": None,
+                    }
+                )
+                continue
         active = _active_run(session, portfolio_id)
         if active is not None:
             items.append(
@@ -637,6 +662,15 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
         batch = session.get(MetaBatch, source.meta_batch_id) if source.meta_batch_id else None
         if batch is None or batch.status != "ready" or batch.snapshot is None:
             raise AdminOpError(409, "The original Meta source batch is no longer available")
+        if not has_usable_sources(
+            source_packet_for(
+                batch.snapshot,
+                agent_id=source.portfolio.agent_id,
+                mode=source.portfolio.prompt_mode,
+                direction=source.portfolio.direction,
+            )
+        ):
+            raise AdminOpError(409, NO_META_SOURCES)
     run = _new_run(
         config,
         settings,
@@ -869,7 +903,18 @@ def _advance_meta_batches(
         batch.status = "ready" if usable_count > 0 else "insufficient"
         if batch.status == "ready":
             try:
-                render_source_packet(snapshot)
+                targets = session.scalars(
+                    select(Portfolio).where(Portfolio.id.in_(batch.target_portfolio_ids))
+                ).all()
+                for portfolio in targets:
+                    packet = source_packet_for(
+                        snapshot,
+                        agent_id=portfolio.agent_id,
+                        mode=portfolio.prompt_mode,
+                        direction=portfolio.direction,
+                    )
+                    if has_usable_sources(packet):
+                        render_source_packet(packet)
             except RuntimeError as exc:
                 batch.status = "failed"
                 batch.error = str(exc)
@@ -1008,6 +1053,31 @@ def claim_runs(
                     select(Prompt.id).where(Prompt.id.in_(prompt_ids)).order_by(Prompt.id).with_for_update()
                 ).all()
             for run in rows:
+                if run.portfolio.prompt.context_scope == "arena":
+                    batch = session.get(MetaBatch, run.meta_batch_id)
+                    if batch is None or batch.status != "ready" or batch.snapshot is None:
+                        run.status = "failed"
+                        run.error = "Arena-synthesis run has no ready frozen source batch"
+                        run.finished_at = current_time
+                        continue
+                    packet = source_packet_for(
+                        batch.snapshot,
+                        agent_id=run.agent_id,
+                        mode=run.portfolio.prompt_mode,
+                        direction=run.portfolio.direction,
+                    )
+                    if not has_usable_sources(packet):
+                        run.status = "skipped"
+                        run.error = NO_META_SOURCES
+                        run.finished_at = current_time
+                        continue
+                    try:
+                        render_source_packet(packet)
+                    except RuntimeError as exc:
+                        run.status = "failed"
+                        run.error = str(exc)
+                        run.finished_at = current_time
+                        continue
                 run.status = "running"
                 run.attempt_count += 1
                 run.worker_id = worker_id

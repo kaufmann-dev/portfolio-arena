@@ -7,8 +7,10 @@ describe("Meta Arena batch states", () => {
     expect(metaBatchStatusCopy("waiting")).toContain("normal-portfolio run");
   });
 
-  it("identifies a ready batch as frozen and shared", () => {
-    expect(metaBatchStatusCopy("ready")).toContain("exact snapshot");
+  it("identifies a ready batch as frozen and scoped to each meta portfolio", () => {
+    expect(metaBatchStatusCopy("ready")).toContain(
+      "matching its agent, managed/rebuilt mode, and long/short direction",
+    );
   });
 
   it("explains why an insufficient batch cannot synthesize", () => {

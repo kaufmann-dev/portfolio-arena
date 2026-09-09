@@ -353,8 +353,9 @@
     <div>
       <h1 id="meta-title">Meta Arena</h1>
       <p class="lede">
-        Compare agents that reconcile the normal Arena's latest independent reasoning into one portfolio. The
-        consensus control tests whether synthesis adds value beyond simply averaging the same-cell sources.
+        Each Meta portfolio combines normal portfolios using the same agent, managed/rebuilt mode, and
+        long/short direction. Consensus Control is a broader reference averaging the same mode and direction
+        across all agents.
       </p>
     </div>
     <div class="valuation-stamp">

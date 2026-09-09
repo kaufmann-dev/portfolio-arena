@@ -13,8 +13,8 @@ The app maintains two normal experiments. Managed portfolios are stateful paper 
 models decide when to rebalance. Rebuilt portfolios submit an independent signal every trading day;
 the arena measures every 1–20-session holding period and 10–100% exposure policy. Each track is
 split into Long and Short arenas and ranked against its direction-matched SPY reference. A separate
-Meta arena measures agents that synthesize the normal arena's same-session reasoning after its daily
-runs finish. It is an _arena_: honest, deterministic measurement — not trading and not advice.
+Meta arena measures agents that synthesize normal portfolios with the same agent, mode, and direction
+after the daily runs finish. It is an _arena_: honest, deterministic measurement — not trading and not advice.
 
 ## Architecture
 
@@ -50,7 +50,9 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
   submission protocol is private to the deployment.
 - **Meta synthesis** — arena-scoped prompts create atomic Managed/Rebuilt × Long/Short portfolio
   families. One frozen daily batch records the active normal cohort, waits for due source runs to
-  become terminal, and then supplies the same hashed reasoning packet to every Meta evaluator.
+  become terminal, and supplies each Meta evaluator only the frozen sources matching its execution
+  Agent ID, Managed/Rebuilt mode, and Long/Short direction, with an equal-source control computed from
+  those same sources. Different reasoning-effort profiles are different Agents even on the same model.
 
 ## Experiment-integrity rules (enforced in code)
 
@@ -98,10 +100,13 @@ runs finish. It is an _arena_: honest, deterministic measurement — not trading
 - **Prompt scope is immutable.** Normal `portfolio` prompts and synthesis-only `arena` prompts are
   separate stable identities. Meta portfolios never enter normal leaderboards, comparisons, or the
   rebuilt Common-policy source cohort.
-- **Meta evidence is frozen, not performance-selected.** Each batch contains every frozen source's
-  latest portfolio and position notes, with explicit prior-decision fallbacks for failed sources.
-  Performance, ranks, evaluator reports, and older history are excluded. Four unranked controls
-  equally average the complete same-mode, same-direction source decisions without trimming their
+- **Meta evidence is frozen, not performance-selected.** Each worker receives only matching-agent,
+  matching-mode, matching-direction source decisions and notes from the frozen daily batch, including
+  explicit prior-decision fallbacks for failed sources. Counts and the worker's equal-source control
+  use the same subset. A run with no usable matching decisions is skipped; manual runs and retries
+  without matching evidence are rejected. Performance, ranks, evaluator reports, and older history
+  are excluded. The public Consensus Control remains a broader reference: four unranked controls
+  equally average same-mode, same-direction source decisions across all agents without trimming their
   symbol union.
 - **Mode-level allocation policies.** Admin → Settings defines server-enforced minimum and maximum
   position weights for each track. Managed defaults to 10–25% (4–10 positions); rebuilt defaults to
@@ -240,8 +245,10 @@ Arena-scoped scheduled runs are dependent work. The scheduler freezes the active
 the daily window opens, queues normal work first, and waits through automatic retries until every due
 source is terminal. Successful same-session decisions are used directly; failures use clearly marked
 prior-decision fallbacks. Only then are the frozen Meta targets queued for that same scheduled
-session, even if execution finishes after close. The worker receives the packet by server-side prompt
-injection; normal workers retain the same read-only tools and never receive an arena-wide data tool.
+session, even if execution finishes after close. Before server-side prompt injection, each packet is
+filtered to the run's snapshotted Agent ID and the target's mode and direction. Later portfolio
+reassignments do not change the agent used by an already queued run. Normal workers retain the same
+read-only tools and never receive an arena-wide data tool.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Muse Code runs via `muse exec`
