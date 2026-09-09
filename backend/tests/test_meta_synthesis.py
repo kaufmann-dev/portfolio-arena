@@ -1,9 +1,13 @@
-"""Daily source barriers and frozen execution packets for Meta portfolios."""
+"""Daily source barriers and scoped frozen execution packets for Meta portfolios."""
 
+import json
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+
 from app.services import evaluator
-from app.services.meta_synthesis import _control_for, render_source_packet
+from app.services.meta_synthesis import _control_for, render_source_packet, source_packet_for
 
 
 def test_control_equal_weights_sources_and_keeps_full_symbol_union():
@@ -86,14 +90,139 @@ def _claim(session, now: datetime, limit: int = 5) -> dict:
     )
 
 
-def test_meta_runs_wait_for_normal_success_and_share_frozen_packet(
+def test_meta_packets_match_agent_and_cell_and_keep_queued_identity(
+    client, admin_headers, sample_agent, sample_model, sample_prompt
+):
+    from app.db import session_factory
+    from app.models import Allocation, MetaBatch, Portfolio, Position, Signal, SignalPosition
+    from app.services import admin_ops
+
+    first_family = _create_meta_set(client, admin_headers, sample_agent)
+    now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
+    with session_factory()() as session:
+        second_agent = admin_ops.create_agent(
+            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
+        )
+        second_family = admin_ops.create_meta_portfolio_set(
+            session,
+            family_name="Other Confluence",
+            agent_id=second_agent["id"],
+            prompt_id=first_family["prompt_id"],
+        )
+        expected = {}
+        for family in (first_family, second_family):
+            for member in family["portfolios"]:
+                mode, direction = member["prompt_mode"], member["direction"]
+                marker = f"evidence-for-{family['agent_id']}-{mode}-{direction}"
+                source = Portfolio(
+                    name=marker,
+                    slug=marker,
+                    agent_id=family["agent_id"],
+                    prompt_id=sample_prompt["id"],
+                    prompt_mode=mode,
+                    direction=direction,
+                    cost_bps=10,
+                )
+                session.add(source)
+                decision_type, position_type = (
+                    (Allocation, Position) if mode == "managed" else (Signal, SignalPosition)
+                )
+                decision = decision_type(
+                    portfolio=source,
+                    entered_at=now - timedelta(days=1),
+                    effective_date=now.date() - timedelta(days=1),
+                    note=marker,
+                    positions=[position_type(symbol="AAPL", weight_pct=100, note=marker)],
+                )
+                if isinstance(decision, Signal):
+                    decision.provenance = "browser_admin"
+                session.add(decision)
+                expected[member["id"]] = (family["agent_id"], mode, direction, marker)
+        session.commit()
+        evaluator.update_settings(session, max_concurrency=10)
+
+        # Freeze and queue without claiming, then change the family's live agent.
+        assert _claim(session, now, limit=0)["runs"] == []
+        batch = session.query(MetaBatch).one()
+        frozen = deepcopy(batch.snapshot)
+        admin_ops.update_meta_portfolio_set(session, first_family["id"], agent_id=second_agent["id"])
+        # Later edits to a source cannot alter its frozen agent or reasoning either.
+        source.agent_id = sample_agent["id"]
+        decision.note = "edited-after-freeze"
+        session.commit()
+
+        runs = _claim(session, now + timedelta(minutes=1), limit=10)["runs"]
+        assert len(runs) == 8
+        for run in runs:
+            agent_id, mode, direction, marker = expected[run["portfolio"]["id"]]
+            assert run["agent"]["id"] == agent_id
+            rendered = run["execution_prompt"].split("FROZEN ARENA SYNTHESIS SOURCE PACKET\n", 1)[1]
+            packet = json.loads(rendered[rendered.index("{") :])
+            assert packet["scope"] == {"agent_id": agent_id, "mode": mode, "direction": direction}
+            assert [item["note"] for item in packet["sources"]] == [marker]
+            assert packet["counts"]["source_total"] == 1
+            assert packet["counts"]["fallback_total"] == 1
+            assert list(packet["controls"]) == [f"{mode}_{direction}"]
+            assert packet["controls"][f"{mode}_{direction}"]["contributor_count"] == 1
+            assert "edited-after-freeze" not in rendered
+            assert all(other == marker or other not in rendered for *_, other in expected.values())
+        session.refresh(batch)
+        assert batch.snapshot == frozen
+
+
+@pytest.mark.parametrize("agent_id", [1, 2])
+@pytest.mark.parametrize("mode", ["managed", "rebuilt"])
+@pytest.mark.parametrize("direction", ["long", "short"])
+def test_filtered_control_and_counts_exclude_other_agents_and_cells(agent_id, mode, direction):
+    sources = [
+        {
+            "portfolio": {"id": index, "mode": source_mode, "direction": source_direction},
+            "agent": {"id": source_agent},
+            "due": True,
+            "run_status": "succeeded",
+            "decision_status": "same_session",
+            "positions": [{"symbol": symbol, "weight_pct": 100}],
+        }
+        for index, (source_agent, source_mode, source_direction, symbol) in enumerate(
+            [
+                (agent_id, mode, direction, "AAPL"),
+                (agent_id, mode, direction, "MSFT"),
+                (3 - agent_id, mode, direction, "SPY"),
+                (agent_id, "rebuilt" if mode == "managed" else "managed", direction, "SPY"),
+                (agent_id, mode, "short" if direction == "long" else "long", "SPY"),
+            ]
+        )
+    ]
+    snapshot = {
+        "session_date": "2026-08-04",
+        "created_at": "2026-08-04T19:00:00+00:00",
+        "sources": sources,
+        "controls": {"unfiltered": {"positions": [{"symbol": "SPY", "weight_pct": 100}]}},
+    }
+    packet = source_packet_for(snapshot, agent_id=agent_id, mode=mode, direction=direction)
+    assert [source["portfolio"]["id"] for source in packet["sources"]] == [0, 1]
+    assert packet["counts"] == {
+        "source_total": 2,
+        "due_total": 2,
+        "terminal_total": 2,
+        "succeeded_total": 2,
+        "fallback_total": 0,
+        "missing_total": 0,
+    }
+    assert packet["controls"][f"{mode}_{direction}"]["positions"] == [
+        {"symbol": "AAPL", "weight_pct": 50.0},
+        {"symbol": "MSFT", "weight_pct": 50.0},
+    ]
+
+
+def test_meta_runs_wait_for_normal_success_and_skip_cells_without_sources(
     client,
     admin_headers,
     sample_agent,
     sample_portfolio,
 ):
     from app.db import session_factory
-    from app.models import MetaBatch
+    from app.models import EvaluationRun, MetaBatch
 
     meta_set = _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
@@ -124,8 +253,13 @@ def test_meta_runs_wait_for_normal_success_and_share_frozen_packet(
 
         second_claim = _claim(session, now + timedelta(minutes=3))
         assert {run["portfolio"]["id"] for run in second_claim["runs"]} == {
-            portfolio["id"] for portfolio in meta_set["portfolios"]
+            portfolio["id"]
+            for portfolio in meta_set["portfolios"]
+            if portfolio["prompt_mode"] == "managed" and portfolio["direction"] == "long"
         }
+        skipped = session.query(EvaluationRun).filter(EvaluationRun.status == "skipped").all()
+        assert len(skipped) == 3
+        assert all(run.error == evaluator.NO_META_SOURCES and run.attempt_count == 0 for run in skipped)
         assert len({run["meta_batch_id"] for run in second_claim["runs"]}) == 1
         assert all(
             "FROZEN ARENA SYNTHESIS SOURCE PACKET" in run["execution_prompt"] for run in second_claim["runs"]
@@ -198,7 +332,7 @@ def test_meta_barrier_waits_through_retry_then_uses_failure_fallback(
         )
 
         meta_runs = _claim(session, now + timedelta(minutes=4))["runs"]
-        assert len(meta_runs) == 4
+        assert len(meta_runs) == 1
         batch = session.get(MetaBatch, meta_runs[0]["meta_batch_id"])
         assert batch.status == "ready"
         assert batch.snapshot["counts"]["succeeded_total"] == 0
@@ -262,6 +396,13 @@ def test_manual_meta_run_requires_and_reuses_latest_ready_batch(
         )
         assert manual["items"][0]["action"] == "queued"
         assert manual["items"][0]["run"]["meta_batch_id"] is not None
+        unmatched = evaluator.enqueue_manual_runs(
+            session,
+            portfolio_ids=[meta_set["portfolios"][1]["id"]],
+            now=now.replace(hour=19, minute=5),
+        )
+        assert unmatched["items"][0]["action"] == "rejected"
+        assert unmatched["items"][0]["reason"] == evaluator.NO_META_SOURCES
 
 
 def test_deleted_frozen_source_finishes_as_missing_without_queuing_meta(
@@ -424,11 +565,13 @@ def test_failed_scheduled_meta_retry_keeps_batch_session_after_close(
     admin_headers,
     sample_agent,
     sample_portfolio,
+    sample_model,
 ):
     from app.db import session_factory
     from app.models import Allocation, EvaluationRun, MetaBatch
+    from app.services import admin_ops
 
-    _create_meta_set(client, admin_headers, sample_agent)
+    family = _create_meta_set(client, admin_headers, sample_agent)
     now = datetime(2026, 8, 4, 19, 0, tzinfo=UTC)
     with session_factory()() as session:
         evaluator.update_portfolio_config(
@@ -467,6 +610,13 @@ def test_failed_scheduled_meta_retry_keeps_batch_session_after_close(
         )
 
         after_close = now.replace(hour=20, minute=30)
+        replacement = admin_ops.create_agent(
+            session, model_id=sample_model["id"], harness="codex", reasoning_effort="high"
+        )
+        admin_ops.update_meta_portfolio_set(session, family["id"], agent_id=replacement["id"])
+        with pytest.raises(admin_ops.AdminOpError, match="No usable frozen source decisions"):
+            evaluator.retry_run(session, run_id=original["id"], now=after_close)
+        admin_ops.update_meta_portfolio_set(session, family["id"], agent_id=sample_agent["id"])
         retry = evaluator.retry_run(session, run_id=original["id"], now=after_close)
         assert retry["run"]["scheduled_for"] == "2026-08-04"
         assert retry["run"]["meta_batch_id"] == original["meta_batch_id"]
@@ -530,7 +680,7 @@ def test_unlinked_active_source_blocks_batch_past_close(
             now=after_close + timedelta(minutes=1),
         )
         meta_runs = _claim(session, after_close + timedelta(minutes=2))["runs"]
-        assert len(meta_runs) == 4
+        assert len(meta_runs) == 1
         session.refresh(batch)
         assert batch.status == "ready"
         assert batch.snapshot["sources"][0]["decision_status"] == "fallback"

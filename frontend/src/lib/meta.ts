@@ -2,7 +2,7 @@ import type { MetaBatchStatus } from "./api/types";
 
 export function metaBatchStatusCopy(status: MetaBatchStatus): string {
   if (status === "ready") {
-    return "The source packet is frozen and every meta run uses this exact snapshot.";
+    return "Each meta run uses frozen sources matching its agent, managed/rebuilt mode, and long/short direction.";
   }
   if (status === "insufficient") {
     return "The batch did not contain enough usable normal-portfolio decisions to run synthesis.";
