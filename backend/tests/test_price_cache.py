@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.db import session_factory
 from app.models import PriceCache
 from app.services import arena, market_refresh, massive, price_cache
-from app.services.trading_calendar import is_trading_day
+from app.services.trading_calendar import boundary_value, is_trading_day
 
 REQUIRED_START = date(2026, 7, 1)
 PRIOR = date(2026, 7, 28)
@@ -54,7 +54,7 @@ def _stub_requirements(monkeypatch, *symbols: str) -> None:
     monkeypatch.setattr(
         arena,
         "global_pricing_requirements",
-        lambda _portfolios, _target: (
+        lambda _portfolios, _target, **_kwargs: (
             _requirements(*symbols),
             set(symbols),
         ),
@@ -79,8 +79,8 @@ def test_request_read_is_cache_only_during_publication_lag(monkeypatch):
         )
 
     assert loaded.status == "updating"
-    assert loaded.as_of == PRIOR.isoformat()
-    assert loaded.target_as_of == TARGET.isoformat()
+    assert loaded.as_of == boundary_value(PRIOR, "close")
+    assert loaded.target_as_of == boundary_value(TARGET, "close")
     assert loaded.stale_symbols == set()
 
 
@@ -97,7 +97,7 @@ def test_publication_lag_becomes_stale_only_after_grace_period():
         )
 
     assert loaded.status == "stale"
-    assert loaded.as_of == PRIOR.isoformat()
+    assert loaded.as_of == boundary_value(PRIOR, "close")
     assert loaded.stale_symbols == {"SPY", "AAPL"}
 
 
@@ -190,7 +190,7 @@ def test_background_refresh_publishes_complete_target_batch(monkeypatch):
     assert outcome.complete is True
     assert outcome.updated_symbols == ("AAPL", "SPY")
     assert loaded.status == "fresh"
-    assert loaded.as_of == TARGET.isoformat()
+    assert loaded.as_of == boundary_value(TARGET, "close")
 
 
 def test_grouped_refresh_scales_to_the_live_symbol_count_with_one_provider_batch(monkeypatch):
@@ -366,3 +366,72 @@ def test_newer_narrower_series_cannot_discard_history():
     assert row.series == NEW_SERIES
     assert row.start_date == REQUIRED_START
     assert row.end_date == TARGET
+
+
+def test_available_boundary_waits_for_delay_and_skips_holidays():
+    from app.services.trading_calendar import NY, boundary_value
+
+    assert price_cache.latest_available_boundary(datetime(2026, 7, 6, 9, 44, tzinfo=NY)) == boundary_value(
+        date(2026, 7, 2), "close"
+    )
+    assert price_cache.latest_available_boundary(datetime(2026, 7, 6, 9, 45, tzinfo=NY)) == boundary_value(
+        date(2026, 7, 6), "open"
+    )
+    assert price_cache.latest_available_boundary(datetime(2026, 11, 27, 13, 15, tzinfo=NY)) == boundary_value(
+        date(2026, 11, 27), "close"
+    )
+
+
+def test_morning_cache_publication_discards_developing_close():
+    morning = datetime(2026, 7, 29, 13, 46, tzinfo=UTC)
+    assert price_cache.published_series(
+        [{"date": "2026-07-28", "open": 98, "close": 99}, {"date": "2026-07-29", "open": 100, "close": 105}],
+        morning,
+    ) == [{"date": "2026-07-28", "open": 98, "close": 99}, {"date": "2026-07-29", "open": 100}]
+    assert price_cache.published_series([{"date": "2026-07-29", "close": 105}], morning) == []
+
+
+def test_merge_preserves_open_when_evening_response_only_has_close():
+    assert price_cache.merge_series(
+        [{"date": "2026-07-29", "close": 105}], [{"date": "2026-07-29", "open": 100}]
+    ) == [{"date": "2026-07-29", "open": 100, "close": 105}]
+
+
+def test_evening_refresh_does_not_repeat_morning_corporate_action(monkeypatch):
+    history = [
+        {"date": "2026-07-01", "open": 200.0, "close": 202.0},
+        {"date": "2026-07-28", "open": 204.0, "close": 206.0},
+    ]
+    _seed("SPY", series=history)
+    _stub_requirements(monkeypatch, "SPY")
+    monkeypatch.setattr(
+        massive,
+        "download_grouped_session",
+        lambda symbols, day: massive.GroupedSessionDownload(
+            prices={"SPY": [{"date": day.isoformat(), "open": 103.0, "close": 106.0}]},
+            historical_factors={"SPY": 0.5},
+        ),
+    )
+    monkeypatch.setattr(
+        massive,
+        "download_prices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("slow fallback used")),
+    )
+    with session_factory()() as session:
+        morning = market_refresh._refresh_locked(session, datetime(2026, 7, 29, 13, 46, tzinfo=UTC), TARGET)
+        assert morning.complete
+        points = price_cache.get_cache_entries(session, ["SPY"])["SPY"].series
+        assert points[0] == {"date": "2026-07-01", "open": 100.0, "close": 101.0}
+        assert points[-1] == {"date": "2026-07-29", "open": 103.0}
+        evening = market_refresh._refresh_locked(session, UPDATING_NOW, TARGET)
+        assert evening.complete
+        points = price_cache.get_cache_entries(session, ["SPY"])["SPY"].series
+        assert points[0] == {"date": "2026-07-01", "open": 100.0, "close": 101.0}
+        assert points[-1] == {"date": "2026-07-29", "open": 103.0, "close": 106.0}
+
+
+def test_history_coverage_starts_at_first_trading_session():
+    entry = price_cache.cache_entry([{"date": "2026-07-06", "open": 100, "close": 101}], UPDATING_NOW)
+    assert entry.covers(date(2026, 7, 3))  # observed holiday, followed by weekend
+    assert entry.covers(date(2026, 7, 4))
+    assert not entry.covers(date(2026, 7, 2))

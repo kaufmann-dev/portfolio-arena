@@ -1,54 +1,53 @@
-"""Deterministic paper-portfolio valuation. The correctness core of the app.
+"""Pure, transaction-cost-free valuation on the shared open/close timeline.
 
-Pure functions only: same allocations + same price series => identical output.
-No wall-clock reads — callers pass every date in. All NAV series are base-100
-at the portfolio's first effective close.
-
-Conventions:
-- USD-denominated equities and ETFs hold fractional shares.
-- Entry cost at inception applies to the fully invested NAV.
-- Rebalance: turnover = 0.5 * sum(|w_new - w_drift|) over all symbols,
-  cost = NAV * 2 * (turnover/100) * bps/1e4 (both sides pay), then all state
-  resets from the new weights on the post-cost NAV.
-- Calendar = days SPY has a close. Missing prices carry forward and are
-  flagged; nothing is guessed silently.
+Every timestamp comes from caller-supplied prices and boundaries. Holdings only
+change at decision boundaries; extra chart observations never introduce trades.
 """
 
+from __future__ import annotations
+
 import math
-from bisect import bisect_right
 from dataclasses import dataclass, field
-from datetime import date as date_type
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Literal
 
-TRADING_DAYS_PER_YEAR = 252
-# A held symbol with no fresh print for this many trading days is presumed
-# delisted/halted and surfaced as frozen.
-FROZEN_AFTER_TRADING_DAYS = 5
+from .trading_calendar import boundary_value, is_trading_day
 
-Series = list[dict]  # [{"date": "YYYY-MM-DD", "close": float}, ...]
+TRADING_DAYS_PER_YEAR = 252
+FROZEN_AFTER_TRADING_DAYS = 5
+Series = list[dict]
 Direction = Literal["long", "short"]
+Boundary = dict[str, str]
+Phase = Literal["open", "close"]
+
+
+def point_boundary(point: dict) -> Boundary:
+    return {"timestamp": point["timestamp"], "phase": point["phase"]}
+
+
+def boundary_date(point: Boundary) -> str:
+    return point["timestamp"][:10]
 
 
 @dataclass(frozen=True)
 class PositionInput:
     symbol: str
     weight_pct: float
-    note: str = ""  # admin-only per-stock message, carried between cycles
+    note: str = ""
 
 
 @dataclass(frozen=True)
 class AllocationInput:
-    effective_date: str  # ISO date
+    effective_date: str
     positions: tuple[PositionInput, ...]
 
 
 @dataclass
 class AppliedAllocation:
     effective_date: str
-    applied_date: str | None  # calendar date the state reset happened; None = pending
-    turnover_pct: float | None  # one-sided, % of NAV; None for the initial allocation
-    cost: float  # NAV points (base-100 units)
+    effective_at: Boundary
+    applied_at: Boundary | None
+    turnover_pct: float | None
     nav_before: float | None
     nav_after: float | None
 
@@ -56,639 +55,329 @@ class AppliedAllocation:
 @dataclass
 class Holding:
     symbol: str
-    weight_pct: float  # drifted, as of the last valued day
-    target_weight_pct: float  # from the latest applied allocation
-    value: float  # NAV points
+    weight_pct: float
+    target_weight_pct: float
+    value: float
     entry_price: float | None = None
     current_price: float | None = None
-    note: str = ""  # per-stock note from the latest applied allocation
+    note: str = ""
 
 
 @dataclass
 class ValuationResult:
-    series: Series  # [{"date", "nav"}]
+    series: Series
     allocations: list[AppliedAllocation]
     holdings: list[Holding]
-    stale_days: dict[str, list[str]] = field(default_factory=dict)  # symbol -> dates carried
+    stale_days: dict[str, list[str]] = field(default_factory=dict)
     frozen_symbols: list[str] = field(default_factory=list)
-    cumulative_cost: float = 0.0  # NAV points spent on costs
-    cumulative_turnover_pct: float = 0.0  # sum of one-sided rebalance turnover
-    liquidated_at: str | None = None
+    cumulative_turnover_pct: float = 0.0
+    liquidated_at: Boundary | None = None
 
 
-class ValuationError(Exception):
-    """A portfolio cannot be valued from the given inputs (e.g. a symbol has
-    no price at or before its first effective close)."""
+class ValuationError(ValueError):
+    """The supplied market observations cannot price this portfolio."""
 
 
-class _PriceLookup:
-    """Last-known-close lookup over a daily series."""
+class PriceLookup:
+    """Exact boundary prices: an opening print is never replaced by a close."""
 
     def __init__(self, points: Series):
-        cleaned = sorted(
-            (p["date"], float(p["close"]))
-            for p in points or []
-            if p.get("close") is not None and math.isfinite(float(p["close"]))
-        )
-        self.dates = [d for d, _ in cleaned]
-        self.closes = [c for _, c in cleaned]
-
-    def at(self, day: str) -> tuple[float, bool] | None:
-        """(close, exact) for the last print on or before `day`, or None."""
-        index = bisect_right(self.dates, day)
-        if index == 0:
-            return None
-        return self.closes[index - 1], self.dates[index - 1] == day
-
-    def last_date_at_or_before(self, day: str) -> str | None:
-        index = bisect_right(self.dates, day)
-        return self.dates[index - 1] if index else None
-
-
-def build_calendar(spy_series: Series, as_of: str) -> list[str]:
-    """Trading calendar = days SPY has a close, capped at as_of."""
-    return sorted({p["date"] for p in spy_series if p["date"] <= as_of})
-
-
-def _value_long_portfolio(
-    allocations: list[AllocationInput],
-    cost_bps: int,
-    prices: dict[str, Series],
-    calendar: list[str],
-    as_of: str,
-) -> ValuationResult:
-    """Value one portfolio over `calendar` up to `as_of` (inclusive)."""
-    calendar = [d for d in calendar if d <= as_of]
-    allocations = sorted(allocations, key=lambda a: a.effective_date)
-    lookups = {symbol: _PriceLookup(points) for symbol, points in prices.items()}
-
-    applied: list[AppliedAllocation] = []
-    # Map each allocation to the first calendar date >= its effective date
-    # (an unscheduled closure shifts the effective close to the next actual one).
-    schedule: dict[str, list[AllocationInput]] = {}
-    for allocation in allocations:
-        index = bisect_right(calendar, allocation.effective_date)
-        if index and calendar[index - 1] == allocation.effective_date:
-            index -= 1
-        if index >= len(calendar):
-            applied.append(
-                AppliedAllocation(
-                    effective_date=allocation.effective_date,
-                    applied_date=None,
-                    turnover_pct=None,
-                    cost=0.0,
-                    nav_before=None,
-                    nav_after=None,
-                )
-            )
-            continue
-        schedule.setdefault(calendar[index], []).append(allocation)
-    pending = list(applied)  # keep pending entries; applied ones are appended in date order
-    applied = []
-
-    if not schedule:
-        return ValuationResult(series=[], allocations=pending, holdings=[])
-
-    first_day = min(schedule)
-    day_index = calendar.index(first_day)
-
-    # Portfolio state
-    shares: dict[str, float] = {}
-    targets: dict[str, PositionInput] = {}
-    entry_prices: dict[str, float] = {}
-    nav = 100.0
-    cumulative_cost = 0.0
-    cumulative_turnover = 0.0
-    stale_days: dict[str, list[str]] = {}
-    series: Series = []
-
-    def lookup(symbol: str, day: str, holder: str) -> float:
-        """Price lookup with carry-forward; flags stale days."""
-        entry = lookups.get(symbol)
-        result = entry.at(day) if entry else None
-        if result is None:
-            raise ValuationError(f"No price for {holder} at or before {day}.")
-        close, exact = result
-        if not exact:
-            stale_days.setdefault(holder, []).append(day)
-        return close
-
-    def position_value(day: str) -> float:
-        return sum(quantity * lookup(symbol, day, symbol) for symbol, quantity in shares.items())
-
-    def apply_allocation(allocation: AllocationInput, day: str, first: bool) -> None:
-        nonlocal nav, cumulative_cost, cumulative_turnover, shares, targets, entry_prices
-        positions = [p for p in allocation.positions if p.weight_pct > 0]
-
-        if first:
-            nav_before = 100.0
-            cost = nav_before * cost_bps / 10_000.0
-            turnover_pct = None
-        else:
-            nav_before = position_value(day)
-            drifted = _drifted_weights(day)
-            new_weights = {p.symbol: p.weight_pct for p in positions}
-            symbols = set(drifted) | set(new_weights)
-            turnover_pct = 0.5 * sum(abs(new_weights.get(s, 0.0) - drifted.get(s, 0.0)) for s in symbols)
-            cost = nav_before * 2 * (turnover_pct / 100.0) * cost_bps / 10_000.0
-            cumulative_turnover += turnover_pct
-
-        nav_after = nav_before - cost
-        cumulative_cost += cost
-
-        shares = {}
-        entry_prices = {}
-        for position in positions:
-            value = nav_after * position.weight_pct / 100.0
-            price = lookup(position.symbol, day, position.symbol)
-            shares[position.symbol] = value / price
-            entry_prices[position.symbol] = price
-
-        targets = {p.symbol: p for p in positions}
-        nav = nav_after
-        applied.append(
-            AppliedAllocation(
-                effective_date=allocation.effective_date,
-                applied_date=day,
-                turnover_pct=turnover_pct,
-                cost=cost,
-                nav_before=nav_before,
-                nav_after=nav_after,
-            )
-        )
-
-    def _drifted_weights(day: str) -> dict[str, float]:
-        """Drifted position weights as a percentage of NAV at `day`."""
-        total = position_value(day)
-        if total <= 0:
-            return {}
-        return {
-            symbol: quantity * lookup(symbol, day, symbol) / total * 100.0
-            for symbol, quantity in shares.items()
+        self.values = {
+            (str(point["date"]), phase): float(point[phase])
+            for point in points
+            for phase in ("open", "close")
+            if point.get(phase) is not None and math.isfinite(float(point[phase])) and float(point[phase]) > 0
         }
 
-    first_seen = False
-    for day in calendar[day_index:]:
-        for allocation in schedule.get(day, ()):
-            apply_allocation(allocation, day, first=not first_seen)
-            first_seen = True
-        nav = position_value(day)
-        series.append({"date": day, "nav": nav})
+    def at(self, boundary: Boundary) -> float | None:
+        return self.values.get((boundary_date(boundary), boundary["phase"]))
 
-    # As-of holdings (drifted weights on the last valued day)
-    holdings: list[Holding] = []
-    last_day = series[-1]["date"]
-    last_nav = series[-1]["nav"]
-    if last_nav > 0:
-        for symbol, quantity in sorted(shares.items()):
-            current_price = lookup(symbol, last_day, symbol)
-            value = quantity * current_price
-            holdings.append(
-                Holding(
-                    symbol=symbol,
-                    weight_pct=value / last_nav * 100.0,
-                    target_weight_pct=targets[symbol].weight_pct if symbol in targets else 0.0,
-                    value=value,
-                    entry_price=entry_prices.get(symbol),
-                    current_price=current_price,
-                    note=targets[symbol].note if symbol in targets else "",
-                )
+    def require(self, boundary: Boundary, symbol: str) -> float:
+        value = self.at(boundary)
+        if value is None:
+            raise ValuationError(
+                f"Missing {boundary['phase']} price for {symbol} at {boundary['timestamp']}."
             )
-
-    # Frozen symbols: still held, but no fresh print for a while.
-    frozen: list[str] = []
-    recent = calendar[-FROZEN_AFTER_TRADING_DAYS:]
-    if recent:
-        threshold = recent[0]
-        for symbol in shares:
-            entry = lookups.get(symbol)
-            last_print = entry.last_date_at_or_before(last_day) if entry else None
-            if last_print is None or last_print < threshold:
-                frozen.append(symbol)
-
-    # De-duplicate stale day lists (a day can be hit by several valuations).
-    deduped_stale = {symbol: sorted(set(days)) for symbol, days in stale_days.items()}
-
-    return ValuationResult(
-        series=series,
-        allocations=applied + pending,
-        holdings=holdings,
-        stale_days=deduped_stale,
-        frozen_symbols=sorted(frozen),
-        cumulative_cost=cumulative_cost,
-        cumulative_turnover_pct=cumulative_turnover,
-    )
+        return value
 
 
-def _value_short_portfolio(
-    allocations: list[AllocationInput],
-    cost_bps: int,
-    prices: dict[str, Series],
-    calendar: list[str],
-    as_of: str,
-) -> ValuationResult:
-    """Value a 100%-collateralized portfolio of absolute short shares."""
-    calendar = [day for day in calendar if day <= as_of]
-    allocations = sorted(allocations, key=lambda allocation: allocation.effective_date)
-    lookups = {symbol: _PriceLookup(points) for symbol, points in prices.items()}
+def build_calendar(spy_series: Series, as_of: Boundary) -> list[Boundary]:
+    """Every scheduled boundary in the observed range, including missing prints.
 
-    applied: list[AppliedAllocation] = []
-    schedule: dict[str, list[AllocationInput]] = {}
-    for allocation in allocations:
-        index = bisect_right(calendar, allocation.effective_date)
-        if index and calendar[index - 1] == allocation.effective_date:
-            index -= 1
-        if index >= len(calendar):
-            applied.append(
-                AppliedAllocation(
-                    effective_date=allocation.effective_date,
-                    applied_date=None,
-                    turnover_pct=None,
-                    cost=0.0,
-                    nav_before=None,
-                    nav_after=None,
-                )
-            )
-            continue
-        schedule.setdefault(calendar[index], []).append(allocation)
-    pending = list(applied)
-    applied = []
-
-    if not schedule:
-        return ValuationResult(series=[], allocations=pending, holdings=[])
-
-    first_day = min(schedule)
-    day_index = calendar.index(first_day)
-    shares: dict[str, float] = {}
-    targets: dict[str, PositionInput] = {}
-    entry_prices: dict[str, float] = {}
-    anchor_nav = 100.0
-    cumulative_cost = 0.0
-    cumulative_turnover = 0.0
-    stale_days: dict[str, list[str]] = {}
-    series: Series = []
-    liquidated_at: str | None = None
-
-    def lookup(symbol: str, day: str, holder: str) -> float:
-        entry = lookups.get(symbol)
-        result = entry.at(day) if entry else None
-        if result is None:
-            raise ValuationError(f"No price for {holder} at or before {day}.")
-        close, exact = result
-        if not exact:
-            stale_days.setdefault(holder, []).append(day)
-        return close
-
-    def equity(day: str) -> float:
-        return anchor_nav + sum(
-            quantity * (entry_prices[symbol] - lookup(symbol, day, symbol))
-            for symbol, quantity in shares.items()
-        )
-
-    def gross_weights(day: str, nav: float) -> dict[str, float]:
-        if nav <= 0:
-            return {}
-        return {
-            symbol: quantity * lookup(symbol, day, symbol) / nav * 100.0
-            for symbol, quantity in shares.items()
-        }
-
-    def apply_allocation(allocation: AllocationInput, day: str, first: bool) -> bool:
-        nonlocal anchor_nav, cumulative_cost, cumulative_turnover, shares, targets, entry_prices
-        positions = [position for position in allocation.positions if position.weight_pct > 0]
-        nav_before = 100.0 if first else equity(day)
-        if nav_before <= 0:
-            return False
-
-        if first:
-            cost = nav_before * cost_bps / 10_000.0
-            turnover_pct = None
-        else:
-            drifted = gross_weights(day, nav_before)
-            new_weights = {position.symbol: position.weight_pct for position in positions}
-            symbols = set(drifted) | set(new_weights)
-            turnover_pct = 0.5 * sum(
-                abs(new_weights.get(symbol, 0.0) - drifted.get(symbol, 0.0)) for symbol in symbols
-            )
-            cost = nav_before * 2.0 * (turnover_pct / 100.0) * cost_bps / 10_000.0
-            cumulative_turnover += turnover_pct
-
-        nav_after = nav_before - cost
-        cumulative_cost += cost
-        applied.append(
-            AppliedAllocation(
-                effective_date=allocation.effective_date,
-                applied_date=day,
-                turnover_pct=turnover_pct,
-                cost=cost,
-                nav_before=nav_before,
-                nav_after=max(0.0, nav_after),
-            )
-        )
-        if nav_after <= 0:
-            anchor_nav = 0.0
-            shares = {}
-            targets = {}
-            entry_prices = {}
-            return False
-
-        shares = {}
-        entry_prices = {}
-        for position in positions:
-            price = lookup(position.symbol, day, position.symbol)
-            notional = nav_after * position.weight_pct / 100.0
-            shares[position.symbol] = notional / price
-            entry_prices[position.symbol] = price
-        targets = {position.symbol: position for position in positions}
-        anchor_nav = nav_after
-        return True
-
-    first_seen = False
-    stop_index: int | None = None
-    for current_index, day in enumerate(calendar[day_index:], start=day_index):
-        if first_seen and equity(day) <= 0:
-            liquidated_at = day
-            series.append({"date": day, "nav": 0.0})
-            shares = {}
-            targets = {}
-            entry_prices = {}
-            anchor_nav = 0.0
-            stop_index = current_index
-            break
-
-        for allocation in schedule.get(day, ()):
-            if not apply_allocation(allocation, day, first=not first_seen):
-                liquidated_at = day
-                break
-            first_seen = True
-        if liquidated_at is not None:
-            series.append({"date": day, "nav": 0.0})
-            stop_index = current_index
-            break
-        series.append({"date": day, "nav": equity(day)})
-
-    if stop_index is not None:
-        series.extend({"date": day, "nav": 0.0} for day in calendar[stop_index + 1 :])
-        applied_effective_dates = {allocation.effective_date for allocation in applied}
-        for day in calendar[stop_index:]:
-            for allocation in schedule.get(day, ()):
-                if allocation.effective_date not in applied_effective_dates:
-                    pending.append(
-                        AppliedAllocation(
-                            effective_date=allocation.effective_date,
-                            applied_date=None,
-                            turnover_pct=None,
-                            cost=0.0,
-                            nav_before=None,
-                            nav_after=None,
-                        )
-                    )
-
-    holdings: list[Holding] = []
-    if series and liquidated_at is None:
-        last_day = series[-1]["date"]
-        last_nav = series[-1]["nav"]
-        if last_nav > 0:
-            for symbol, quantity in sorted(shares.items()):
-                current_price = lookup(symbol, last_day, symbol)
-                notional = quantity * current_price
-                holdings.append(
-                    Holding(
-                        symbol=symbol,
-                        weight_pct=notional / last_nav * 100.0,
-                        target_weight_pct=targets[symbol].weight_pct if symbol in targets else 0.0,
-                        value=notional,
-                        entry_price=entry_prices.get(symbol),
-                        current_price=current_price,
-                        note=targets[symbol].note if symbol in targets else "",
-                    )
-                )
-
-    frozen: list[str] = []
-    if series and liquidated_at is None:
-        last_day = series[-1]["date"]
-        recent = calendar[-FROZEN_AFTER_TRADING_DAYS:]
-        if recent:
-            threshold = recent[0]
-            for symbol in shares:
-                entry = lookups.get(symbol)
-                last_print = entry.last_date_at_or_before(last_day) if entry else None
-                if last_print is None or last_print < threshold:
-                    frozen.append(symbol)
-
-    deduped_stale = {symbol: sorted(set(days)) for symbol, days in stale_days.items()}
-    return ValuationResult(
-        series=series,
-        allocations=applied + pending,
-        holdings=holdings,
-        stale_days=deduped_stale,
-        frozen_symbols=sorted(frozen),
-        cumulative_cost=cumulative_cost,
-        cumulative_turnover_pct=cumulative_turnover,
-        liquidated_at=liquidated_at,
-    )
+    A missing full SPY session must not compress holding horizons or make a
+    multiple-session price change appear to be one full-session observation.
+    """
+    if not spy_series:
+        return []
+    day = date.fromisoformat(min(point["date"] for point in spy_series))
+    last = date.fromisoformat(boundary_date(as_of))
+    calendar = []
+    while day <= last:
+        if is_trading_day(day):
+            for phase in ("open", "close"):
+                boundary = boundary_value(day, phase)
+                if boundary["timestamp"] <= as_of["timestamp"]:
+                    calendar.append(boundary)
+        day += timedelta(days=1)
+    return calendar
 
 
 def value_portfolio(
     allocations: list[AllocationInput],
-    cost_bps: int,
     prices: dict[str, Series],
-    calendar: list[str],
-    as_of: str,
+    calendar: list[Boundary],
+    as_of: Boundary,
     direction: Direction = "long",
+    execution_boundary: Phase = "close",
 ) -> ValuationResult:
-    """Value one long or 100%-collateralized short portfolio."""
-    if direction == "long":
-        return _value_long_portfolio(allocations, cost_bps, prices, calendar, as_of)
-    if direction == "short":
-        return _value_short_portfolio(allocations, cost_bps, prices, calendar, as_of)
-    raise ValueError("direction must be long or short")
+    if direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
+    if execution_boundary not in ("open", "close"):
+        raise ValueError("execution_boundary must be open or close")
+    events = [event for event in calendar if event["timestamp"] <= as_of["timestamp"]]
+    lookups = {symbol: PriceLookup(points) for symbol, points in prices.items()}
+    schedule: dict[str, list[AllocationInput]] = {}
+    applied: list[AppliedAllocation] = []
+    for allocation in sorted(allocations, key=lambda item: item.effective_date):
+        event = next(
+            (
+                item
+                for item in events
+                if item["phase"] == execution_boundary and boundary_date(item) >= allocation.effective_date
+            ),
+            None,
+        )
+        if event is None:
+            applied.append(
+                AppliedAllocation(
+                    allocation.effective_date,
+                    boundary_value(date.fromisoformat(allocation.effective_date), execution_boundary),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            )
+        else:
+            schedule.setdefault(event["timestamp"], []).append(allocation)
+    if not schedule:
+        return ValuationResult([], applied, [])
+
+    quantities: dict[str, float] = {}
+    entries: dict[str, float] = {}
+    targets: dict[str, PositionInput] = {}
+    anchor = 100.0
+    turnover_total = 0.0
+    series: Series = []
+    liquidated_at = None
+
+    def price(symbol: str, event: Boundary) -> float:
+        if symbol not in lookups:
+            raise ValuationError(f"Missing price series for {symbol}.")
+        return lookups[symbol].require(event, symbol)
+
+    def equity(event: Boundary) -> float:
+        if direction == "long":
+            return sum(quantity * price(symbol, event) for symbol, quantity in quantities.items())
+        return anchor + sum(
+            quantity * (entries[symbol] - price(symbol, event)) for symbol, quantity in quantities.items()
+        )
+
+    first = min(schedule)
+    for event in events:
+        if event["timestamp"] < first:
+            continue
+        nav = equity(event) if series else 100.0
+        if liquidated_at is None and series and nav <= 0:
+            liquidated_at = event
+            quantities = {}
+            targets = {}
+            anchor = 0.0
+        if liquidated_at is None:
+            for allocation in schedule.get(event["timestamp"], []):
+                positions = [position for position in allocation.positions if position.weight_pct > 0]
+                weights = {
+                    symbol: quantity * price(symbol, event) / nav * 100
+                    for symbol, quantity in quantities.items()
+                }
+                new_weights = {position.symbol: position.weight_pct for position in positions}
+                turnover = (
+                    0.5
+                    * sum(
+                        abs(weights.get(symbol, 0) - new_weights.get(symbol, 0))
+                        for symbol in weights.keys() | new_weights.keys()
+                    )
+                    if series or quantities
+                    else None
+                )
+                turnover_total += turnover or 0.0
+                entries = {position.symbol: price(position.symbol, event) for position in positions}
+                quantities = {
+                    position.symbol: nav * position.weight_pct / 100 / entries[position.symbol]
+                    for position in positions
+                }
+                targets = {position.symbol: position for position in positions}
+                anchor = nav
+                applied.append(
+                    AppliedAllocation(
+                        allocation.effective_date,
+                        boundary_value(date.fromisoformat(allocation.effective_date), execution_boundary),
+                        event,
+                        turnover,
+                        nav,
+                        nav,
+                    )
+                )
+        else:
+            for allocation in schedule.get(event["timestamp"], []):
+                applied.append(
+                    AppliedAllocation(
+                        allocation.effective_date,
+                        boundary_value(date.fromisoformat(allocation.effective_date), execution_boundary),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                )
+        series.append({**event, "nav": max(0.0, nav) if liquidated_at is None else 0.0})
+
+    holdings = []
+    if series and liquidated_at is None and series[-1]["nav"] > 0:
+        event = point_boundary(series[-1])
+        for symbol, quantity in sorted(quantities.items()):
+            current = price(symbol, event)
+            holdings.append(
+                Holding(
+                    symbol,
+                    quantity * current / series[-1]["nav"] * 100,
+                    targets[symbol].weight_pct,
+                    quantity * current,
+                    entries[symbol],
+                    current,
+                    targets[symbol].note,
+                )
+            )
+    return ValuationResult(
+        series,
+        sorted(applied, key=lambda item: item.effective_date),
+        holdings,
+        cumulative_turnover_pct=turnover_total,
+        liquidated_at=liquidated_at,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
+def rebase_series(points: Series, start: Boundary, end: Boundary, direction: Direction = "long") -> Series:
+    """Direction-matched SPY; short reference resets only at market close."""
+    if direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
+    calendar = [event for event in build_calendar(points, end) if event["timestamp"] >= start["timestamp"]]
+    if not calendar:
+        return []
+    lookup = PriceLookup(points)
+    entry = lookup.require(calendar[0], "SPY")
+    anchor = 100.0
+    result = []
+    liquidated = False
+    for event in calendar:
+        current = lookup.require(event, "SPY")
+        nav = current / entry * 100 if direction == "long" else anchor * (2 - current / entry)
+        if liquidated or nav <= 0:
+            nav = 0.0
+            liquidated = True
+        result.append({**event, "nav": nav})
+        if direction == "short" and event["phase"] == "close":
+            anchor, entry = nav, current
+    return result
 
-TRAILING_WINDOWS = {"r1m": 30, "r3m": 91, "r6m": 182, "r1y": 365}
+
+def full_session_points(series: Series) -> Series:
+    """Nonoverlapping full sessions ending at the latest published phase."""
+    if not series:
+        return []
+    phase = series[-1]["phase"]
+    return [point for point in series if point["phase"] == phase]
 
 
-def _daily_returns(series: Series) -> list[float]:
+def session_returns(series: Series, benchmark: Series) -> list[dict]:
+    points = full_session_points(series)
+    benchmark_values = {point["timestamp"]: point["nav"] for point in benchmark}
     returns = []
-    for previous, current in zip(series, series[1:], strict=False):
-        if previous["nav"] > 0:
-            returns.append(current["nav"] / previous["nav"] - 1.0)
+    for previous, current in zip(points, points[1:], strict=False):
+        if previous["nav"] <= 0:
+            continue
+        prior = benchmark_values.get(previous["timestamp"])
+        latest = benchmark_values.get(current["timestamp"])
+        market_return = latest / prior - 1 if prior is not None and prior > 0 and latest is not None else None
+        strategy_return = current["nav"] / previous["nav"] - 1
+        returns.append(
+            {
+                **point_boundary(current),
+                "return": strategy_return,
+                "spy_return": market_return,
+                "alpha": strategy_return - market_return if market_return is not None else None,
+            }
+        )
     return returns
 
 
-def _std(values: list[float]) -> float:
+def sample_std(values: list[float]) -> float:
     if len(values) < 2:
         return 0.0
     mean = sum(values) / len(values)
-    return math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
 
 
-def _date_add_days(day: str, days: int) -> str:
-    return (date_type.fromisoformat(day) + timedelta(days=days)).isoformat()
-
-
-def _nav_at_or_before(series: Series, day: str) -> float | None:
-    best = None
-    for point in series:
-        if point["date"] <= day:
-            best = point["nav"]
-        else:
-            break
-    return best
-
-
-def compute_metrics(
-    result: ValuationResult,
-    spy_series: Series,
-    direction: Direction = "long",
+def series_metrics(
+    series: Series, benchmark: Series, turnover: float, liquidated_at: Boundary | None
 ) -> dict:
-    """Portfolio metrics from the base-100 series; SPY compared over the
-    identical window using its total-return closes."""
-    if direction not in ("long", "short"):
-        raise ValueError("direction must be long or short")
-    series = result.series
     if not series:
         return {"has_data": False}
-
-    first_day, last_day = series[0]["date"], series[-1]["date"]
-    last_nav = series[-1]["nav"]
-
-    itd_return = last_nav / 100.0 - 1.0
-
-    returns = _daily_returns(series)
-    daily_alpha: list[float] = []
-    spy_return = None
-    if direction == "long":
-        spy_lookup = _PriceLookup(spy_series)
-        spy_start = spy_lookup.at(first_day)
-        spy_end = spy_lookup.at(last_day)
-        if spy_start and spy_end and spy_start[0] > 0:
-            spy_return = spy_end[0] / spy_start[0] - 1.0
-
-        for previous, current in zip(series, series[1:], strict=False):
-            spy_previous = spy_lookup.at(previous["date"])
-            spy_current = spy_lookup.at(current["date"])
-            if (
-                previous["nav"] > 0
-                and spy_previous is not None
-                and spy_current is not None
-                and spy_previous[0] > 0
-            ):
-                strategy_daily = current["nav"] / previous["nav"] - 1.0
-                spy_daily = spy_current[0] / spy_previous[0] - 1.0
-                daily_alpha.append(strategy_daily - spy_daily)
-    else:
-        matched_spy = rebase_series(spy_series, first_day, last_day, direction="short")
-        matched_by_date = {point["date"]: point["nav"] for point in matched_spy}
-        if matched_spy and matched_spy[-1]["date"] == last_day:
-            spy_return = matched_spy[-1]["nav"] / 100.0 - 1.0
-        for previous, current in zip(series, series[1:], strict=False):
-            spy_previous = matched_by_date.get(previous["date"])
-            spy_current = matched_by_date.get(current["date"])
-            if (
-                previous["nav"] > 0
-                and spy_previous is not None
-                and spy_previous > 0
-                and spy_current is not None
-            ):
-                strategy_daily = current["nav"] / previous["nav"] - 1.0
-                spy_daily = spy_current / spy_previous - 1.0
-                daily_alpha.append(strategy_daily - spy_daily)
-    volatility = _std(returns) * math.sqrt(TRADING_DAYS_PER_YEAR) if returns else None
-    sharpe = None
-    if returns:
-        std = _std(returns)
-        if std > 0:
-            mean = sum(returns) / len(returns)
-            sharpe = mean / std * math.sqrt(TRADING_DAYS_PER_YEAR)
-    information_ratio = None
-    if daily_alpha:
-        alpha_std = _std(daily_alpha)
-        if alpha_std > 0:
-            information_ratio = (
-                sum(daily_alpha) / len(daily_alpha) / alpha_std * math.sqrt(TRADING_DAYS_PER_YEAR)
-            )
-
-    # Local import avoids a module cycle: rebuilt analytics reuses the base
-    # valuation input dataclasses, while managed metrics share its HAC routine.
-    from .rebuilt import automatic_hac_lag, hac_mean_statistics
-
-    alpha_statistics = hac_mean_statistics(
-        daily_alpha,
-        lag=automatic_hac_lag(len(daily_alpha)),
-        family_size=1,
-    )
-
-    peak = -math.inf
-    max_drawdown = 0.0
+    daily = session_returns(series, benchmark)
+    returns = [point["return"] for point in daily]
+    alphas = [point["alpha"] for point in daily if point["alpha"] is not None]
+    std = sample_std(returns)
+    alpha_std = sample_std(alphas)
+    peak = 100.0
+    drawdown = 0.0
     for point in series:
         peak = max(peak, point["nav"])
         if peak > 0:
-            max_drawdown = min(max_drawdown, point["nav"] / peak - 1.0)
-
-    trailing: dict[str, float | None] = {}
-    for key, days in TRAILING_WINDOWS.items():
-        anchor = _date_add_days(last_day, -days)
-        if first_day <= anchor:
-            base = _nav_at_or_before(series, anchor)
-            trailing[key] = last_nav / base - 1.0 if base else None
-        else:
-            trailing[key] = None
-
+            drawdown = min(drawdown, point["nav"] / peak - 1)
+    total_return = series[-1]["nav"] / 100 - 1
+    spy_return = benchmark[-1]["nav"] / 100 - 1 if benchmark else None
     return {
         "has_data": True,
-        "start_date": first_day,
-        "end_date": last_day,
-        "itd_return": itd_return,
+        "start_at": point_boundary(series[0]),
+        "end_at": point_boundary(series[-1]),
+        "itd_return": total_return,
         "spy_return": spy_return,
-        "cumulative_excess": itd_return - spy_return if spy_return is not None else None,
-        "ann_volatility": volatility,
-        "sharpe": sharpe,
-        "information_ratio": information_ratio,
-        **alpha_statistics,
-        "max_drawdown": max_drawdown,
-        "cost_drag_pct": result.cumulative_cost,
-        "turnover_pct": result.cumulative_turnover_pct,
-        "liquidated_at": result.liquidated_at,
-        **trailing,
+        "cumulative_excess": total_return - spy_return if spy_return is not None else None,
+        "ann_volatility": std * math.sqrt(TRADING_DAYS_PER_YEAR) if returns else None,
+        "sharpe": sum(returns) / len(returns) / std * math.sqrt(TRADING_DAYS_PER_YEAR)
+        if returns and std > 0
+        else None,
+        "information_ratio": sum(alphas) / len(alphas) / alpha_std * math.sqrt(TRADING_DAYS_PER_YEAR)
+        if alphas and alpha_std > 0
+        else None,
+        "max_drawdown": drawdown,
+        "turnover_pct": turnover,
+        "liquidated_at": liquidated_at,
     }
 
 
-def rebase_series(
-    points: Series,
-    start: str,
-    end: str,
-    direction: Direction = "long",
-) -> Series:
-    """Base-100 a raw close series over [start, end] (for SPY overlays)."""
-    if direction not in ("long", "short"):
-        raise ValueError("direction must be long or short")
-    window = [p for p in points if start <= p["date"] <= end]
-    if not window:
-        return []
-    base = window[0]["close"]
-    if not base:
-        return []
-    if direction == "long":
-        return [{"date": p["date"], "nav": p["close"] / base * 100.0} for p in window]
+def compute_metrics(result: ValuationResult, spy_series: Series, direction: Direction = "long") -> dict:
+    from .rebuilt import automatic_hac_lag, hac_mean_statistics
 
-    nav = 100.0
-    result: Series = [{"date": window[0]["date"], "nav": nav}]
-    for index, (previous, current) in enumerate(
-        zip(window, window[1:], strict=False),
-        start=1,
-    ):
-        if not previous["close"]:
-            return []
-        factor = 2.0 - current["close"] / previous["close"]
-        if factor <= 0:
-            result.append({"date": current["date"], "nav": 0.0})
-            result.extend({"date": point["date"], "nav": 0.0} for point in window[index + 1 :])
-            break
-        nav *= factor
-        result.append({"date": current["date"], "nav": nav})
-    return result
+    if not result.series:
+        return {"has_data": False}
+    series = result.series
+    benchmark = rebase_series(spy_series, point_boundary(series[0]), point_boundary(series[-1]), direction)
+    alphas = [point["alpha"] for point in session_returns(series, benchmark) if point["alpha"] is not None]
+    metrics = series_metrics(series, benchmark, result.cumulative_turnover_pct, result.liquidated_at)
+    metrics.update(hac_mean_statistics(alphas, automatic_hac_lag(len(alphas))))
+    for name, days in {"r1m": 30, "r3m": 91, "r6m": 182, "r1y": 365}.items():
+        anchor_day = (date.fromisoformat(boundary_date(series[-1])) - timedelta(days=days)).isoformat()
+        bases = [point["nav"] for point in series if boundary_date(point) <= anchor_day]
+        metrics[name] = series[-1]["nav"] / bases[-1] - 1 if bases and bases[-1] > 0 else None
+    return metrics

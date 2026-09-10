@@ -1,53 +1,25 @@
-import type {
-  CostBasis,
-  Direction,
-  RebuiltAnalysisContext,
-  RebuiltObjective,
-  RebuiltView,
-} from "./api/types";
-
-export const DEFAULT_REBUILT_VIEW: RebuiltView = "tuned";
+import type { ArenaVersion, Direction } from "./api/types";
 
 export function parseDirection(value: string | null): Direction {
   return value === "short" ? "short" : "long";
 }
 
-export function rebuiltContext(
-  view: RebuiltView,
-  objective: RebuiltObjective,
-  costBasis: CostBasis,
-  horizon: number,
-): RebuiltAnalysisContext {
-  if (view === "signal") {
-    return {
-      view,
-      objective: "canonical",
-      cost_basis: "gross",
-      horizon: Math.min(20, Math.max(1, Math.trunc(horizon))),
-    };
-  }
-  return { view, objective, cost_basis: costBasis, horizon: null };
-}
-
-export function rebuiltContextParams(context: RebuiltAnalysisContext, includeTrack = false): URLSearchParams {
-  const query = new URLSearchParams({
-    view: context.view,
-    objective: context.objective,
-    cost_basis: context.cost_basis,
-  });
-  if (includeTrack) query.set("track", "rebuilt");
-  if (context.horizon !== null) query.set("horizon", String(context.horizon));
-  return query;
+export function selectedVersion(
+  versions: ArenaVersion[],
+  requested: string | null,
+): ArenaVersion | undefined {
+  return (
+    versions.find((version) => String(version.id) === requested) ??
+    [...versions].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id)[0]
+  );
 }
 
 export function portfolioAnalysisHref(
   slug: string,
   track: "managed" | "rebuilt",
   direction: Direction,
-  context?: RebuiltAnalysisContext,
+  versionId: number,
 ): string {
-  if (track === "managed") return `/p/${slug}?track=managed&direction=${direction}`;
-  const query = rebuiltContextParams(context ?? rebuiltContext("common", "canonical", "net", 1), true);
-  query.set("direction", direction);
-  return `/p/${slug}?${query.toString()}`;
+  const query = new URLSearchParams({ track, direction, version: String(versionId) });
+  return `/p/${slug}?${query}`;
 }

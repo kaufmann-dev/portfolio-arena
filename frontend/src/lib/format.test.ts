@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { num, pct, pctPoints, pctPointsSignClass, pctSignClass } from "./format";
+import { fmtDate, num, pct, pctPoints, pctPointsSignClass, pctSignClass } from "./format";
 
 describe("numeric display normalization", () => {
   it("renders exact and rounded ratio zeros without a sign or color", () => {
@@ -25,5 +25,12 @@ describe("numeric display normalization", () => {
 
   it("normalizes negative zero in plain numbers", () => {
     expect(num(-Number.EPSILON, 2)).toBe("0.00");
+  });
+});
+
+describe("market boundary labels", () => {
+  it("distinguishes opening and closing marks on the same day", () => {
+    expect(fmtDate({ timestamp: "2026-09-01T13:30:00+00:00", phase: "open" })).toBe("2026-09-01 open");
+    expect(fmtDate({ timestamp: "2026-09-01T20:00:00+00:00", phase: "close" })).toBe("2026-09-01 close");
   });
 });

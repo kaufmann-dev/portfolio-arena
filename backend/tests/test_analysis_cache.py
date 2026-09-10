@@ -74,6 +74,7 @@ def _create_rebuilt(client, admin_headers, sample_agent, sample_prompt) -> dict:
         "/api/portfolios",
         json={
             "name": "Cached Rebuilt",
+            "version_id": 1,
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "rebuilt",
@@ -106,7 +107,7 @@ def test_rebuilt_cache_reuses_analysis_and_invalidates_on_signal_change(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(arena, "evaluate_policy_grid", counted)
-    url = "/api/arena/rebuilt?direction=long"
+    url = "/api/arena/rebuilt?version_id=1&direction=long"
     assert client.get(url).status_code == 200
     assert client.get(url).status_code == 200
     assert calls == 1
@@ -134,7 +135,7 @@ def test_rebuilt_cache_reuses_analysis_and_invalidates_on_signal_change(
     assert calls == 2
 
 
-def test_managed_note_change_reuses_numeric_analysis_but_refreshes_holding_note(
+def test_managed_note_change_refreshes_holding_note(
     client,
     admin_headers,
     sample_portfolio,
@@ -176,7 +177,7 @@ def test_managed_note_change_reuses_numeric_analysis_but_refreshes_holding_note(
     assert second.status_code == 200, second.text
     holdings = {item["symbol"]: item for item in second.json()["portfolio"]["holdings"]}
     assert holdings["AAPL"]["note"] == "current handoff note"
-    assert calls == 1
+    assert calls == 2
 
 
 def test_price_content_change_invalidates_managed_analysis(
@@ -199,7 +200,7 @@ def test_price_content_change_invalidates_managed_analysis(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(arena, "value_portfolio", counted)
-    url = "/api/arena/managed?direction=long"
+    url = "/api/arena/managed?version_id=1&direction=long"
     assert client.get(url).status_code == 200
     assert calls == 1
 
@@ -212,32 +213,3 @@ def test_price_content_change_invalidates_managed_analysis(
 
     assert client.get(url).status_code == 200
     assert calls == 2
-
-
-def test_rebuilt_policy_scope_avoids_unused_grid_cells(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-    monkeypatch,
-):
-    from app.services import arena
-    from app.services.market_refresh import refresh_market_data_once
-
-    portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt)
-    refresh_market_data_once()
-    original = arena.evaluate_policy_grid
-    pair_counts = []
-
-    def counted(*args, **kwargs):
-        pair_counts.append(len(kwargs["policy_pairs"]))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(arena, "evaluate_policy_grid", counted)
-    assert client.get("/api/arena/rebuilt?direction=long").status_code == 200
-    assert pair_counts == [20]
-
-    detail = client.get(f"/api/portfolios/{portfolio['slug']}")
-    assert detail.status_code == 200, detail.text
-    assert pair_counts == [20, 200]
-    assert len(detail.json()["portfolio"]["policy_matrix"]) == 200

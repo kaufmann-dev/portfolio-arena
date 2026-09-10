@@ -1,4 +1,4 @@
-"""Prompt identity, immutable version history, and archive lifecycle tests."""
+"""Prompt identity, immutable version history, and deletion protection tests."""
 
 import pytest
 from sqlalchemy import func, select
@@ -56,6 +56,7 @@ def _create_portfolio(
     response = client.post(
         "/api/portfolios",
         json={
+            "version_id": 1,
             "name": f"Prompt History {prompt_mode.title()} Portfolio",
             "agent_id": sample_agent["id"],
             "prompt_id": prompt_id,
@@ -71,8 +72,6 @@ def _create_portfolio(
 def test_create_commits_v1_and_populates_current_pointer(client, admin_headers):
     created = _create_prompt(client, admin_headers)
 
-    assert created["status"] == "active"
-    assert created["archived_at"] is None
     assert created["current_version"] == 1
     assert created["version_count"] == 1
     assert created["portfolio_count"] == 0
@@ -417,22 +416,22 @@ def test_patch_merges_then_normalizes_mode_specific_text(client, admin_headers):
     assert expanded.json()["rebuilt_short_text"] == "New rebuilt short strategy."
 
 
-@pytest.mark.parametrize("portfolio_status", ["active", "archived"])
+@pytest.mark.parametrize("version_enabled", [True, False])
 def test_narrowing_rejects_removing_mode_used_by_any_portfolio(
     client,
     admin_headers,
     sample_agent,
-    portfolio_status,
+    version_enabled,
 ):
     created = _create_prompt(client, admin_headers)
-    portfolio = _create_portfolio(client, admin_headers, sample_agent, created["id"])
-    if portfolio_status == "archived":
-        archived = client.patch(
-            f"/api/portfolios/{portfolio['id']}",
-            json={"status": "archived"},
+    _create_portfolio(client, admin_headers, sample_agent, created["id"])
+    if not version_enabled:
+        paused = client.patch(
+            "/api/admin/versions/1",
+            json={"evaluation_enabled": False},
             headers=admin_headers,
         )
-        assert archived.status_code == 200, archived.text
+        assert paused.status_code == 200, paused.text
 
     response = client.patch(
         f"/api/admin/prompts/{created['id']}",
@@ -443,28 +442,28 @@ def test_narrowing_rejects_removing_mode_used_by_any_portfolio(
     assert response.status_code == 409
 
 
-@pytest.mark.parametrize("portfolio_status", ["active", "archived"])
+@pytest.mark.parametrize("version_enabled", [True, False])
 def test_narrowing_rejects_removing_direction_used_by_any_portfolio(
     client,
     admin_headers,
     sample_agent,
-    portfolio_status,
+    version_enabled,
 ):
     created = _create_prompt(client, admin_headers, direction="both")
-    portfolio = _create_portfolio(
+    _create_portfolio(
         client,
         admin_headers,
         sample_agent,
         created["id"],
         direction="short",
     )
-    if portfolio_status == "archived":
-        archived = client.patch(
-            f"/api/portfolios/{portfolio['id']}",
-            json={"status": "archived"},
+    if not version_enabled:
+        paused = client.patch(
+            "/api/admin/versions/1",
+            json={"evaluation_enabled": False},
             headers=admin_headers,
         )
-        assert archived.status_code == 200, archived.text
+        assert paused.status_code == 200, paused.text
 
     response = client.patch(
         f"/api/admin/prompts/{created['id']}",
@@ -475,7 +474,7 @@ def test_narrowing_rejects_removing_direction_used_by_any_portfolio(
     assert response.status_code == 409
 
 
-def test_restore_rejects_removing_mode_used_by_archived_portfolio(
+def test_restore_rejects_removing_mode_used_by_paused_version_portfolio(
     client,
     admin_headers,
     sample_agent,
@@ -496,19 +495,19 @@ def test_restore_rejects_removing_mode_used_by_archived_portfolio(
         headers=admin_headers,
     )
     assert expanded.status_code == 200, expanded.text
-    portfolio = _create_portfolio(
+    _create_portfolio(
         client,
         admin_headers,
         sample_agent,
         created["id"],
         prompt_mode="rebuilt",
     )
-    archived = client.patch(
-        f"/api/portfolios/{portfolio['id']}",
-        json={"status": "archived"},
+    paused = client.patch(
+        "/api/admin/versions/1",
+        json={"evaluation_enabled": False},
         headers=admin_headers,
     )
-    assert archived.status_code == 200, archived.text
+    assert paused.status_code == 200, paused.text
 
     restored = client.post(
         f"/api/admin/prompts/{created['id']}/versions/1/restore",
@@ -518,7 +517,7 @@ def test_restore_rejects_removing_mode_used_by_archived_portfolio(
     assert restored.status_code == 409
 
 
-def test_restore_rejects_removing_direction_used_by_archived_portfolio(
+def test_restore_rejects_removing_direction_used_by_paused_version_portfolio(
     client,
     admin_headers,
     sample_agent,
@@ -534,19 +533,19 @@ def test_restore_rejects_removing_direction_used_by_archived_portfolio(
         headers=admin_headers,
     )
     assert expanded.status_code == 200, expanded.text
-    portfolio = _create_portfolio(
+    _create_portfolio(
         client,
         admin_headers,
         sample_agent,
         created["id"],
         direction="short",
     )
-    archived = client.patch(
-        f"/api/portfolios/{portfolio['id']}",
-        json={"status": "archived"},
+    paused = client.patch(
+        "/api/admin/versions/1",
+        json={"evaluation_enabled": False},
         headers=admin_headers,
     )
-    assert archived.status_code == 200, archived.text
+    assert paused.status_code == 200, paused.text
 
     restored = client.post(
         f"/api/admin/prompts/{created['id']}/versions/1/restore",
@@ -556,7 +555,7 @@ def test_restore_rejects_removing_direction_used_by_archived_portfolio(
     assert restored.status_code == 409
 
 
-def test_admin_list_has_status_history_and_usage_metadata(
+def test_admin_list_has_history_and_usage_metadata(
     client,
     admin_headers,
     sample_agent,
@@ -564,20 +563,20 @@ def test_admin_list_has_status_history_and_usage_metadata(
     created = _create_prompt(client, admin_headers)
     _create_portfolio(client, admin_headers, sample_agent, created["id"])
 
-    response = client.get("/api/admin/prompts?status=all", headers=admin_headers)
+    response = client.get("/api/admin/prompts", headers=admin_headers)
     assert response.status_code == 200, response.text
     row = next(prompt for prompt in response.json()["prompts"] if prompt["id"] == created["id"])
     assert set(row) == {
         "id",
         "slug",
-        "context_scope",
-        "status",
-        "archived_at",
         "created_at",
         "updated_at",
         "current_version",
         "version_count",
         "portfolio_count",
+        "evaluation_run_count",
+        "can_delete",
+        "delete_blocker",
         "name",
         "mode",
         "direction",
@@ -591,74 +590,6 @@ def test_admin_list_has_status_history_and_usage_metadata(
     assert row["current_version"] == 1
     assert row["version_count"] == 1
     assert row["portfolio_count"] == 1
-
-
-def test_archive_is_blocked_while_an_active_portfolio_references_prompt(
-    client,
-    admin_headers,
-    sample_agent,
-):
-    created = _create_prompt(client, admin_headers)
-    _create_portfolio(client, admin_headers, sample_agent, created["id"])
-
-    response = client.post(
-        f"/api/admin/prompts/{created['id']}/archive",
-        headers=admin_headers,
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "Archive every portfolio using this prompt before archiving the prompt."
-    )
-
-
-def test_restore_appends_version_and_preserves_archive_status(client, admin_headers):
-    created = _create_prompt(client, admin_headers)
-    archived = client.post(
-        f"/api/admin/prompts/{created['id']}/archive",
-        headers=admin_headers,
-    )
-    assert archived.status_code == 200, archived.text
-    assert archived.json()["status"] == "archived"
-    assert archived.json()["archived_at"] is not None
-
-    blocked_update = client.patch(
-        f"/api/admin/prompts/{created['id']}",
-        json={"managed_long_text": "This edit must not be accepted."},
-        headers=admin_headers,
-    )
-    assert blocked_update.status_code == 409
-
-    restored = client.post(
-        f"/api/admin/prompts/{created['id']}/versions/1/restore",
-        headers=admin_headers,
-    )
-    assert restored.status_code == 201, restored.text
-    assert restored.json()["status"] == "archived"
-    assert restored.json()["archived_at"] == archived.json()["archived_at"]
-    assert restored.json()["current_version"] == 2
-    assert restored.json()["version_count"] == 2
-
-    history = client.get(
-        f"/api/admin/prompts/{created['id']}/versions",
-        headers=admin_headers,
-    ).json()
-    assert history["versions"][0]["version"] == 2
-    assert history["versions"][0]["mode"] == "both"
-    assert history["versions"][0]["direction"] == "both"
-    assert history["versions"][0]["managed_long_text"] == created["managed_long_text"]
-    assert history["versions"][0]["managed_short_text"] == created["managed_short_text"]
-    assert history["versions"][0]["rebuilt_long_text"] == created["rebuilt_long_text"]
-    assert history["versions"][0]["rebuilt_short_text"] == created["rebuilt_short_text"]
-    assert history["versions"][0]["restored_from_version"] == 1
-
-    unarchived = client.post(
-        f"/api/admin/prompts/{created['id']}/unarchive",
-        headers=admin_headers,
-    )
-    assert unarchived.status_code == 200, unarchived.text
-    assert unarchived.json()["status"] == "active"
-    assert unarchived.json()["archived_at"] is None
 
 
 @pytest.mark.parametrize("run_status", ["running", "cancel_requested"])

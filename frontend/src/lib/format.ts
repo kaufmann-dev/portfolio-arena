@@ -1,3 +1,5 @@
+import type { Boundary } from "./api/types";
+
 export function pct(value: number | null | undefined, digits = 1): string {
   const scaled = rounded(value, digits, 100);
   if (scaled === null) return "—";
@@ -16,9 +18,9 @@ export function num(value: number | null | undefined, digits = 2): string {
   return result === null ? "—" : result.toFixed(digits);
 }
 
-export function fmtDate(value: string | null | undefined): string {
+export function fmtDate(value: string | Boundary | null | undefined): string {
   if (!value) return "—";
-  return value;
+  return typeof value === "string" ? value : `${value.timestamp.slice(0, 10)} ${value.phase}`;
 }
 
 export function fmtDateTime(value: string | null | undefined): string {

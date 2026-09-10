@@ -29,7 +29,7 @@ TICKER_SEARCH_PROVIDER_LIMIT = 1_000
 DIVIDEND_HISTORY_LOOKBACK_DAYS = 5 * 366
 SUCCESS_RESPONSE_STATUSES = {"OK", "DELAYED"}
 
-Series = list[dict]  # [{"date": "YYYY-MM-DD", "close": float}, ...]
+Series = list[dict]  # [{"date": "YYYY-MM-DD", "open"?: float, "close"?: float}, ...]
 
 
 class MassiveError(RuntimeError):
@@ -210,17 +210,17 @@ def parse_aggregate_bars(payload: dict) -> Series | None:
     points = []
     for bar in _results(payload):
         try:
-            close = float(bar["c"])
+            prices = {phase: float(bar[key]) for phase, key in (("open", "o"), ("close", "c")) if key in bar}
             timestamp_ms = int(bar["t"])
         except (KeyError, TypeError, ValueError) as exc:
             raise MassiveMalformedResponse("Massive returned a malformed aggregate bar") from exc
-        if not math.isfinite(close) or close <= 0:
-            raise MassiveMalformedResponse("Massive returned an invalid aggregate close")
+        if not prices or any(not math.isfinite(value) or value <= 0 for value in prices.values()):
+            raise MassiveMalformedResponse("Massive returned an invalid aggregate price")
         try:
             session_date = datetime.fromtimestamp(timestamp_ms / 1000, NY).date().isoformat()
         except (OSError, OverflowError, ValueError) as exc:
             raise MassiveMalformedResponse("Massive returned an invalid aggregate timestamp") from exc
-        points.append({"date": session_date, "close": round(close, 6)})
+        points.append({"date": session_date, **{phase: round(value, 6) for phase, value in prices.items()}})
 
     deduped = {point["date"]: point for point in points}
     parsed = [deduped[day] for day in sorted(deduped)]
@@ -232,7 +232,7 @@ def parse_grouped_session(
     session_date: date,
     symbols: set[str],
 ) -> dict[str, Series]:
-    """Extract requested adjusted closes from one market-wide daily response."""
+    """Extract requested opening/closing prices from one market-wide daily response."""
     if payload.get("adjusted") is not True:
         raise MassiveMalformedResponse("Massive grouped response was not split-adjusted")
 
@@ -243,14 +243,23 @@ def parse_grouped_session(
         if symbol not in requested:
             continue
         try:
-            close = float(item["c"])
+            prices_for_symbol = {
+                phase: float(item[key]) for phase, key in (("open", "o"), ("close", "c")) if key in item
+            }
         except (KeyError, TypeError, ValueError):
             logger.warning("Massive returned a malformed grouped bar symbol=%s", symbol)
             continue
-        if not math.isfinite(close) or close <= 0:
-            logger.warning("Massive returned an invalid grouped close symbol=%s", symbol)
+        if not prices_for_symbol or any(
+            not math.isfinite(value) or value <= 0 for value in prices_for_symbol.values()
+        ):
+            logger.warning("Massive returned an invalid grouped price symbol=%s", symbol)
             continue
-        prices[symbol] = [{"date": session_date.isoformat(), "close": round(close, 6)}]
+        prices[symbol] = [
+            {
+                "date": session_date.isoformat(),
+                **{phase: round(value, 6) for phase, value in prices_for_symbol.items()},
+            }
+        ]
     return prices
 
 
@@ -287,7 +296,16 @@ def apply_dividend_adjustments(series: Series, dividends: list[dict]) -> Series:
         day = date.fromisoformat(point["date"])
         index = bisect_right(factor_dates, day)
         factor = factors_by_date[factor_dates[index]] if index < len(factor_dates) else 1.0
-        adjusted.append({"date": point["date"], "close": round(float(point["close"]) * factor, 6)})
+        adjusted.append(
+            {
+                "date": point["date"],
+                **{
+                    phase: round(float(point[phase]) * factor, 6)
+                    for phase in ("open", "close")
+                    if phase in point
+                },
+            }
+        )
     return adjusted
 
 

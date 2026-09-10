@@ -55,7 +55,7 @@
       <details>
         <summary>
           <span class="disclosure-primary">
-            <strong class="num">{fmtDate(signal.effective_date)}</strong>
+            <strong class="num">{fmtDate(signal.effective_at)}</strong>
             <span>{signal.positions.length} positions</span>
           </span>
           <span class="disclosure-meta">
@@ -68,7 +68,7 @@
           <div class="table-scroll">
             <table class="data-table">
               <caption class="visually-hidden">
-                Positions for the signal effective {fmtDate(signal.effective_date)}
+                Positions for the signal effective {fmtDate(signal.effective_at)}
               </caption>
               <thead><tr><th scope="col">Symbol</th><th scope="col" class="right">Weight</th></tr></thead>
               <tbody>

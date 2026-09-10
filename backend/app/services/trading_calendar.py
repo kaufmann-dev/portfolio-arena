@@ -1,17 +1,11 @@
-"""US (NYSE) trading-day arithmetic for the no-lookahead rule.
-
-An allocation entered at time T takes effect at the first market close
-strictly after T. This module predicts scheduled trading days and close
-times (including early closes); the valuation engine itself uses SPY's
-*actual* close calendar, so an unscheduled closure merely shifts the
-effective close to the next actual close.
-"""
+"""NYSE trading sessions and deterministic opening/closing boundary arithmetic."""
 
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 NY = ZoneInfo("America/New_York")
 
+REGULAR_OPEN = time(9, 30)
 REGULAR_CLOSE = time(16, 0)
 EARLY_CLOSE = time(13, 0)
 
@@ -97,18 +91,33 @@ def close_at(d: date) -> datetime:
     return datetime.combine(d, close_time(d), tzinfo=NY).astimezone(UTC)
 
 
-def effective_date_for(entered_at: datetime) -> date:
-    """First trading day whose close is strictly after entered_at."""
+def open_at(d: date) -> datetime:
+    """The regular opening of trading day d as an aware UTC datetime."""
+    return datetime.combine(d, REGULAR_OPEN, tzinfo=NY).astimezone(UTC)
+
+
+def boundary_at(d: date, phase: str) -> datetime:
+    if phase not in {"open", "close"}:
+        raise ValueError("Execution boundary must be open or close")
+    return open_at(d) if phase == "open" else close_at(d)
+
+
+def boundary_value(d: date, phase: str) -> dict:
+    return {"timestamp": boundary_at(d, phase).isoformat(), "phase": phase}
+
+
+def effective_date_for(entered_at: datetime, execution_boundary: str = "close") -> date:
+    """First trading day whose requested boundary is strictly after entered_at."""
     if entered_at.tzinfo is None:
         entered_at = entered_at.replace(tzinfo=UTC)
     d = entered_at.astimezone(NY).date()
-    while not (is_trading_day(d) and close_at(d) > entered_at):
+    while not (is_trading_day(d) and boundary_at(d, execution_boundary) > entered_at):
         d += timedelta(days=1)
     return d
 
 
-def is_locked(effective_date: date, now: datetime) -> bool:
-    """An allocation locks the moment its effective close has occurred."""
+def is_locked(effective_date: date, now: datetime, execution_boundary: str = "close") -> bool:
+    """A decision locks the moment its effective boundary has occurred."""
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
-    return now >= close_at(effective_date)
+    return now >= boundary_at(effective_date, execution_boundary)

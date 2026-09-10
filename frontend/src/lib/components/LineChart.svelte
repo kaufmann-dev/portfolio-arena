@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fmtDate } from "../format";
   import { SvelteSet } from "svelte/reactivity";
 
   import type { SeriesPoint } from "../api/types";
@@ -27,7 +28,7 @@
 
   const dates = $derived.by(() => {
     const all = new SvelteSet<string>();
-    for (const entry of series) for (const point of entry.points) all.add(point.date);
+    for (const entry of series) for (const point of entry.points) all.add(point.timestamp);
     return [...all].sort();
   });
 
@@ -60,7 +61,7 @@
   function path(points: SeriesPoint[]): string {
     let d = "";
     for (const point of points) {
-      const i = dateIndex.get(point.date);
+      const i = dateIndex.get(point.timestamp);
       if (i === undefined) continue;
       d += `${d ? "L" : "M"}${x(i).toFixed(1)},${y(point.nav).toFixed(1)}`;
     }
@@ -101,7 +102,7 @@
   }
 
   function valueAt(entry: ChartSeries, date: string): number | null {
-    const point = entry.points.find((p) => p.date === date);
+    const point = entry.points.find((p) => p.timestamp === date);
     return point ? point.nav : null;
   }
 
@@ -195,7 +196,11 @@
 
     <div class="legend" aria-live="polite" aria-atomic="true">
       {#if hoverDate}
-        <span class="num muted">{hoverDate}</span>
+        <span class="num muted"
+          >{fmtDate(
+            series.flatMap((entry) => entry.points).find((point) => point.timestamp === hoverDate),
+          )}</span
+        >
       {/if}
       {#each series as entry, idx (entry.name)}
         <span class="legend-item">
@@ -220,7 +225,7 @@
           {@const latest = entry.points.at(-1)}
           <div>
             <dt>{entry.name}</dt>
-            <dd class="num">{latest ? `${latest.nav.toFixed(1)} on ${latest.date}` : "No data"}</dd>
+            <dd class="num">{latest ? `${latest.nav.toFixed(1)} on ${fmtDate(latest)}` : "No data"}</dd>
           </div>
         {/each}
       </dl>

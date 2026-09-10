@@ -2,14 +2,13 @@
 
 from datetime import UTC, date, datetime, timedelta
 
-import pytest
-
 
 def _create_rebuilt(client, admin_headers, sample_agent, sample_prompt, name):
     response = client.post(
         "/api/portfolios",
         json={
             "name": name,
+            "version_id": 1,
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "rebuilt",
@@ -31,18 +30,6 @@ def _weekdays(start: date, count: int) -> list[date]:
             result.append(day)
         day += timedelta(days=1)
     return result
-
-
-def _trading_days_ending(end: date, count: int) -> list[date]:
-    from app.services.trading_calendar import is_trading_day
-
-    result = []
-    day = end
-    while len(result) < count:
-        if is_trading_day(day):
-            result.append(day)
-        day -= timedelta(days=1)
-    return sorted(result)
 
 
 def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str = "AAPL"):
@@ -70,70 +57,8 @@ def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str 
     refresh_market_data_once()
 
 
-def _set_founding(portfolio_id: int) -> None:
-    from app.db import session_factory
-    from app.models import Portfolio
-
-    with session_factory()() as session:
-        session.get(Portfolio, portfolio_id).founding_v2 = True
-        session.commit()
-
-
 def _row(payload: dict, slug: str) -> dict:
     return next(row for row in payload["portfolios"] if row["slug"] == slug)
-
-
-def test_separate_track_routes_have_synthetic_spy_and_no_rsp(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-    sample_portfolio,
-):
-    rebuilt = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Daily Rebuilt",
-    )
-
-    managed = client.get("/api/arena/managed?direction=long")
-    assert managed.status_code == 200, managed.text
-    managed_payload = managed.json()
-    assert managed_payload["track"] == "managed"
-    assert managed_payload["portfolios"][0]["kind"] == "benchmark"
-    assert managed_payload["portfolios"][0]["slug"] == "spy"
-    assert sample_portfolio["slug"] in {row["slug"] for row in managed_payload["portfolios"]}
-
-    response = client.get("/api/arena/rebuilt?direction=long")
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["track"] == "rebuilt"
-    assert payload["context"] == {
-        "view": "common",
-        "objective": "canonical",
-        "cost_basis": "net",
-        "horizon": None,
-    }
-    assert payload["portfolios"][0]["kind"] == "benchmark"
-    assert rebuilt["slug"] in {row["slug"] for row in payload["portfolios"]}
-    assert all(row["slug"] != "rsp" for row in payload["portfolios"])
-
-
-def test_rebuilt_query_combinations_are_explicitly_validated(client):
-    assert client.get("/api/arena/rebuilt?direction=long&view=signal").status_code == 422
-    assert (
-        client.get(
-            "/api/arena/rebuilt?direction=long&view=signal&horizon=5&cost_basis=gross&objective=max_alpha"
-        ).status_code
-        == 422
-    )
-    assert client.get("/api/arena/rebuilt?direction=long&view=tuned&horizon=5").status_code == 422
-    assert (
-        client.get("/api/arena/rebuilt?direction=long&view=signal&horizon=5&cost_basis=gross").status_code
-        == 200
-    )
 
 
 def test_rebuilt_detail_bounds_recent_signals_and_public_payload_hides_provenance(
@@ -180,195 +105,6 @@ def test_rebuilt_detail_bounds_recent_signals_and_public_payload_hides_provenanc
     ]
 
 
-def test_common_detail_exposes_live_h20_book_during_incubation(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-):
-    portfolio = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Incubating Book",
-    )
-    from app.services import price_cache
-
-    target = price_cache.latest_available_session(datetime.now(UTC))
-    _insert_signals(portfolio["id"], [target])
-
-    response = client.get(f"/api/portfolios/{portfolio['slug']}")
-    assert response.status_code == 200, response.text
-    detail = response.json()["portfolio"]
-
-    assert detail["common_admitted"] is False
-    assert detail["selected_policy"] is None
-    assert detail["aggregate_policy"] == {
-        "horizon": 20,
-        "exposure_pct": 100,
-        "provisional": True,
-    }
-    assert detail["completion"] == {
-        "complete_count": 0,
-        "open_count": 1,
-        "completion_ratio": 0,
-        "eligible": False,
-    }
-    assert {item["symbol"]: item["weight_pct"] for item in detail["holdings"]} == pytest.approx(
-        {"AAPL": 5, "SPY": 95}
-    )
-    assert len(detail["active_cohorts"]) == 1
-    assert detail["active_cohorts"][0]["positions"] == [{"symbol": "AAPL", "weight_pct": 100.0}]
-    assert detail["rank"] is None
-    assert detail["metrics"]["evidence"] == "pending"
-    assert detail["series"] == []
-    assert detail["spy_series"] == []
-
-    cached = client.get(f"/api/portfolios/{portfolio['slug']}").json()["portfolio"]
-    assert cached["aggregate_policy"] == detail["aggregate_policy"]
-    assert cached["holdings"] == detail["holdings"]
-    assert cached["active_cohorts"] == detail["active_cohorts"]
-
-
-def test_common_rows_and_spy_use_one_shared_scoring_window(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-):
-    first = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Common First",
-    )
-    second = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Common Second",
-    )
-    _insert_signals(first["id"], _weekdays(date(2026, 4, 1), 5), "AAPL")
-    _insert_signals(second["id"], _weekdays(date(2026, 4, 8), 5), "MSFT")
-
-    payload = client.get("/api/arena/rebuilt?direction=long").json()
-    scoring_start = payload["common_policy"]["scoring_start"]
-    rows = [row for row in payload["portfolios"] if row["slug"] in {first["slug"], second["slug"]}]
-
-    assert len(rows) == 2
-    assert all(row["common_admitted"] for row in rows)
-    assert {row["metrics"]["start_date"] for row in rows} == {scoring_start}
-    assert payload["portfolios"][0]["metrics"]["start_date"] == scoring_start
-    assert payload["common_policy"]["metrics"]["family_size"] == 20
-    assert payload["portfolios"][0]["metrics"]["itd_return"] == pytest.approx(
-        payload["common_policy"]["metrics"]["spy_return"]
-    )
-    assert all(
-        row["selected_policy"]["objective_score"] == pytest.approx(row["metrics"]["ci_lower"]) for row in rows
-    )
-
-    detail = client.get(f"/api/portfolios/{first['slug']}").json()["portfolio"]
-    assert detail["aggregate_policy"] == {
-        "horizon": detail["selected_policy"]["horizon"],
-        "exposure_pct": detail["selected_policy"]["exposure_pct"],
-        "provisional": False,
-    }
-    assert detail["series"][0] == {"date": scoring_start, "nav": 100.0}
-    assert detail["spy_series"][0] == {"date": scoring_start, "nav": 100.0}
-    assert detail["spy_series"][-1]["nav"] / 100.0 - 1.0 == pytest.approx(detail["metrics"]["spy_return"])
-
-    comparison = client.get(
-        f"/api/compare?direction=long&track=rebuilt&slugs={first['slug']},{second['slug']}"
-    ).json()
-    assert comparison["start"] == scoring_start
-    assert comparison["spy_series"][0] == {"date": scoring_start, "nav": 100.0}
-    assert all(line["series"][0] == {"date": scoring_start, "nav": 100.0} for line in comparison["series"])
-
-    optimized = client.get("/api/arena/rebuilt?direction=long&objective=max_alpha").json()
-    assert optimized["common_policy"]["metrics"]["family_size"] == 200
-
-
-def test_common_incubation_gate_disables_result_and_rank(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-):
-    founder = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Common Founder",
-    )
-    incubating = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Common Incubating",
-    )
-    from app.services import price_cache
-
-    target = price_cache.latest_available_session(datetime.now(UTC))
-    recent_sessions = _trading_days_ending(target, 6)
-    _set_founding(founder["id"])
-    _insert_signals(
-        founder["id"],
-        _trading_days_ending(target - timedelta(days=60), 5),
-        "MSFT",
-    )
-    _insert_signals(incubating["id"], recent_sessions[:-1], "AAPL")
-
-    signal_payload = client.get(
-        "/api/arena/rebuilt?direction=long&view=signal&horizon=1&cost_basis=gross"
-    ).json()
-    signal_row = _row(signal_payload, incubating["slug"])
-    assert signal_row["metrics"]["eligible"] is True
-    assert signal_row["selected_policy"]["objective_score"] == pytest.approx(
-        signal_row["metrics"]["ci_lower"]
-    )
-
-    common_payload = client.get("/api/arena/rebuilt?direction=long").json()
-    founder_row = _row(common_payload, founder["slug"])
-    incubating_row = _row(common_payload, incubating["slug"])
-    assert founder_row["common_admitted"] is True
-    assert incubating_row["common_admitted"] is False
-    assert incubating_row["selected_policy"] is None
-    assert incubating_row["rank"] is None
-    assert incubating_row["rank_score"] is None
-    assert incubating_row["metrics"]["eligible"] is False
-    assert incubating_row["metrics"]["evidence"] == "pending"
-    assert incubating_row["metrics"]["ci_lower"] is None
-    assert incubating_row["metrics"]["ci_upper"] is None
-
-
-def test_founding_common_admission_is_known_before_a_policy_can_be_selected(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-):
-    founder = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Progressive Founder",
-    )
-    _set_founding(founder["id"])
-
-    payload = client.get("/api/arena/rebuilt?direction=long").json()
-    row = _row(payload, founder["slug"])
-    assert payload["common_policy"] is None
-    assert row["common_admitted"] is True
-    assert row["selected_policy"] is None
-    assert row["rank_score"] is None
-
-
 def test_compare_rejects_missing_and_wrong_track_slugs(
     client,
     admin_headers,
@@ -384,69 +120,122 @@ def test_compare_rejects_missing_and_wrong_track_slugs(
         "Compare Rebuilt",
     )
 
-    missing = client.get(f"/api/compare?direction=long&track=rebuilt&slugs={rebuilt['slug']},missing")
+    missing = client.get(
+        f"/api/compare?version_id=1&direction=long&track=rebuilt&slugs={rebuilt['slug']},missing"
+    )
     assert missing.status_code == 404
     wrong_track = client.get(
-        f"/api/compare?direction=long&track=rebuilt&slugs={rebuilt['slug']},{sample_portfolio['slug']}"
+        f"/api/compare?version_id=1&direction=long&track=rebuilt&slugs={rebuilt['slug']},{sample_portfolio['slug']}"
     )
     assert wrong_track.status_code == 422
 
 
-def test_rebuilt_rows_flag_stale_and_frozen_symbol_coverage(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-    monkeypatch,
+def test_versions_scope_readiness_and_keep_paused_history_visible(
+    client, admin_headers, sample_portfolio, sample_agent, sample_prompt
 ):
-    from sqlalchemy import select
-
     from app.db import session_factory
-    from app.models import PriceCache
-    from app.services import arena, price_cache
-    from app.services.trading_calendar import is_trading_day
+    from app.models import Allocation, Portfolio, Position
+    from tests.util import backdate_allocation
 
-    portfolio = _create_rebuilt(
-        client,
-        admin_headers,
-        sample_agent,
-        sample_prompt,
-        "Frozen Rebuilt",
+    effective_date = backdate_allocation(sample_portfolio["allocation"]["id"], 30)
+    created = client.post("/api/admin/versions", json={"name": "v2"}, headers=admin_headers)
+    assert created.status_code == 201, created.text
+    version = created.json()
+    assert version["evaluation_enabled"] is False
+    newer = client.post(
+        "/api/portfolios",
+        json={
+            "name": "New version",
+            "version_id": version["id"],
+            "agent_id": sample_agent["id"],
+            "prompt_id": sample_prompt["id"],
+            "prompt_mode": "managed",
+            "direction": "long",
+            "execution_boundary": "open",
+        },
+        headers=admin_headers,
     )
-    target = price_cache.latest_available_session(datetime.now(UTC))
-    effective_dates = []
-    day = target
-    while len(effective_dates) < 5:
-        if is_trading_day(day):
-            effective_dates.append(day)
-        day -= timedelta(days=1)
-    history_start = target - timedelta(days=45)
-    while not is_trading_day(history_start):
-        history_start += timedelta(days=1)
-    _insert_signals(portfolio["id"], sorted([history_start, *effective_dates]), "AAPL")
-
+    assert newer.status_code == 201, newer.text
+    newer = newer.json()
+    # This version needs a symbol without cached prices; it must not hold back v1.
     with session_factory()() as session:
-        cached = {
-            row.symbol: row.series
-            for row in session.scalars(select(PriceCache).order_by(PriceCache.symbol)).all()
-        }
-    cached["AAPL"] = cached["AAPL"][:-6]
-    as_of = cached["SPY"][-1]["date"]
-    monkeypatch.setattr(
-        arena,
-        "load_price_series",
-        lambda *_args, **_kwargs: arena.PriceSeriesLoad(
-            series=cached,
-            status="stale",
-            as_of=as_of,
-            target_as_of=as_of,
-            stale_symbols={"AAPL"},
-        ),
+        decision = Allocation(
+            portfolio_id=newer["id"],
+            entered_at=datetime.now(UTC),
+            effective_date=effective_date,
+            note="missing market data",
+        )
+        decision.positions.append(Position(symbol="NO_DATA", weight_pct=100, note="private"))
+        session.add(decision)
+        session.get(Portfolio, newer["id"]).execution_locked = True
+        session.commit()
+    paused = client.patch("/api/admin/versions/1", json={"evaluation_enabled": False}, headers=admin_headers)
+    assert paused.status_code == 200, paused.text
+    payload = client.get("/api/arena/managed?version_id=1&direction=long").json()
+    row = _row(payload, sample_portfolio["slug"])
+    assert row["version"]["evaluation_enabled"] is False
+    assert row["metrics"]["has_data"] is True
+    assert payload["market_data_status"] == "fresh"
+    assert all(item["slug"] != newer["slug"] for item in payload["portfolios"])
+    assert client.get("/api/market-data?version_id=1").json()["market_data_status"] == "fresh"
+    assert (
+        client.get(f"/api/market-data?version_id={version['id']}").json()["market_data_status"]
+        == "unavailable"
     )
-    response = client.get("/api/arena/rebuilt?direction=long&view=signal&horizon=1&cost_basis=gross")
-    assert response.status_code == 200, response.text
-    payload = response.json()
+    detail = client.get(f"/api/portfolios/{sample_portfolio['slug']}").json()
+    assert detail["version_id"] == 1
+    assert detail["portfolio"]["series"]
+    cross_version = client.get(
+        "/api/compare",
+        params={
+            "version_id": 1,
+            "track": "managed",
+            "direction": "long",
+            "slugs": f"{sample_portfolio['slug']},{newer['slug']}",
+        },
+    )
+    assert cross_version.status_code == 404
+    versions = client.get("/api/versions").json()["versions"]
+    assert versions[0]["id"] == version["id"]
+    assert {item["id"] for item in versions} == {1, version["id"]}
+
+
+def test_version_required_for_arena_compare_and_snapshot(client):
+    for url in (
+        "/api/arena/managed?direction=long",
+        "/api/arena/rebuilt?direction=long",
+        "/api/compare?track=managed&direction=long&slugs=one",
+        "/api/market-data",
+    ):
+        assert client.get(url).status_code == 422, url
+    assert client.get("/api/arena/managed?version_id=999&direction=long").status_code == 404
+    assert client.get("/api/meta/managed?direction=long").status_code == 404
+    assert client.get("/api/meta/rebuilt?direction=long").status_code == 404
+
+
+def test_rebuilt_api_exposes_only_canonical_horizons(client, admin_headers, sample_agent, sample_prompt):
+    portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt, "Canonical Horizons")
+    _insert_signals(portfolio["id"], _weekdays(date(2026, 4, 1), 8))
+    payload = client.get("/api/arena/rebuilt?version_id=1&direction=long").json()
     row = _row(payload, portfolio["slug"])
-    assert payload["market_data_status"] == "stale"
-    assert row["stale_data"] is True
-    assert row["frozen_symbols"] == ["AAPL"]
+    assert set(row["selected_policy"]) == {"horizon"}
+    assert row["selected_policy"]["horizon"] in [step / 2 for step in range(1, 41)]
+    assert [item["horizon"] for item in row["signal_horizons"]] == [step / 2 for step in range(1, 41)]
+    assert row["metrics"]["family_size"] == 40
+    assert not {"common_policy", "context"}.intersection(payload)
+    assert not {"cost_bps", "founding_v2", "common_admitted", "status"}.intersection(row)
+    detail = client.get(f"/api/portfolios/{portfolio['slug']}").json()["portfolio"]
+    assert not {"policy_matrix", "aggregate_policy"}.intersection(detail)
+    assert all(set(point) == {"timestamp", "phase", "nav"} for point in detail["series"])
+    assert detail["signals"][0]["effective_at"]["phase"] == "close"
+    assert "effective_date" not in detail["signals"][0]
+
+
+def test_empty_rebuilt_has_forty_pending_cells_without_price_cache(
+    client, admin_headers, sample_agent, sample_prompt
+):
+    portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt, "Empty horizons")
+    row = _row(client.get("/api/arena/rebuilt?version_id=1&direction=long").json(), portfolio["slug"])
+    assert [item["horizon"] for item in row["signal_horizons"]] == [step / 2 for step in range(1, 41)]
+    assert all(item["evidence"] == "pending" and item["has_data"] is False for item in row["signal_horizons"])
+    assert row["selected_policy"] is None

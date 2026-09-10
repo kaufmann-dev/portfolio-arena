@@ -644,3 +644,38 @@ def test_missing_ticker_returns_none(monkeypatch):
         lambda: _client(lambda _request: httpx.Response(404)),
     )
     assert REAL_FETCH_TICKER_DETAILS("NOPE") is None
+
+
+def test_opening_and_closing_prices_share_dividend_basis():
+    points = massive.parse_aggregate_bars(
+        {
+            "status": "DELAYED",
+            "adjusted": True,
+            "results": [
+                {"t": int(datetime(2026, 7, 6, 4, tzinfo=UTC).timestamp() * 1000), "o": 100, "c": 110}
+            ],
+        }
+    )
+    assert points == [{"date": "2026-07-06", "open": 100.0, "close": 110.0}]
+    adjusted = massive.apply_dividend_adjustments(
+        points,
+        [
+            {
+                "ex_dividend_date": "2026-07-07",
+                "historical_adjustment_factor": 0.9,
+            }
+        ],
+    )
+    assert adjusted == [{"date": "2026-07-06", "open": 90.0, "close": 99.0}]
+
+
+def test_missing_opening_price_is_not_synthesized_from_close():
+    assert massive.parse_grouped_session(
+        {
+            "status": "OK",
+            "adjusted": True,
+            "results": [{"T": "SPY", "c": 110}],
+        },
+        date(2026, 7, 6),
+        {"SPY"},
+    ) == {"SPY": [{"date": "2026-07-06", "close": 110.0}]}

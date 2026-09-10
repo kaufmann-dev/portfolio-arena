@@ -15,3 +15,9 @@ def test_hashed_assets_are_immutable_but_other_files_are_not():
         "Cache-Control": "public, max-age=31536000, immutable"
     }
     assert static_cache_headers("favicon.svg") is None
+
+
+def test_unknown_api_routes_do_not_serve_the_spa(client):
+    response = client.get("/api/retired-endpoint")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not found"}

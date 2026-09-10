@@ -132,14 +132,17 @@ def clean_db(client):
         session.execute(
             text(
                 "TRUNCATE auth_sessions, settings, model_harness_capabilities, model_definitions, "
-                "agents, prompts, meta_portfolio_sets, portfolios, allocations, "
+                "agents, prompts, arena_versions, portfolios, allocations, "
                 "positions, signals, signal_positions, evaluation_runs, evaluator_settings, "
-                "portfolio_evaluator_configs, meta_batches, "
+                "portfolio_evaluator_configs, "
                 "evaluator_instances, price_cache, api_keys RESTART IDENTITY CASCADE"
             )
         )
         session.commit()
         run_seed(session)
+        # Test portfolios are eligible unless a case explicitly pauses their version.
+        session.execute(text("UPDATE arena_versions SET evaluation_enabled = true"))
+        session.commit()
     arena.clear_analysis_caches()
     get_oidc_client.cache_clear()
     client.cookies.clear()
@@ -265,7 +268,13 @@ def stub_massive(monkeypatch):
             i = 0
             while day <= end:
                 if is_trading_day(day):
-                    points.append({"date": day.isoformat(), "close": round(base * (1 + 0.001 * i), 6)})
+                    points.append(
+                        {
+                            "date": day.isoformat(),
+                            "open": round(base * (1 + 0.001 * i), 6),
+                            "close": round(base * (1 + 0.001 * i), 6),
+                        }
+                    )
                     i += 1
                 day += timedelta(days=1)
             result[symbol] = points
@@ -274,7 +283,13 @@ def stub_massive(monkeypatch):
     def fake_grouped_download(symbols, session_date):
         return massive.GroupedSessionDownload(
             prices={
-                symbol: [{"date": session_date.isoformat(), "close": base_prices[symbol]}]
+                symbol: [
+                    {
+                        "date": session_date.isoformat(),
+                        "open": base_prices[symbol],
+                        "close": base_prices[symbol],
+                    }
+                ]
                 for symbol in symbols
                 if symbol in base_prices
             },
@@ -398,6 +413,7 @@ def sample_portfolio(client, admin_headers, sample_agent, sample_prompt) -> dict
         "/api/portfolios",
         json={
             "name": "Claude Weekly",
+            "version_id": 1,
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "managed",

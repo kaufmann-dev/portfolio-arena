@@ -1,6 +1,6 @@
 """MCP tools for the operational arena surface.
 
-API-key management and archived prompt recovery remain browser-admin-only.
+API-key management and prompt revision history/restore remain browser-admin-only.
 Reads use the shared serializers; writes call ``services.admin_ops`` so every
 integrity rule is enforced exactly as it is for the REST admin panel.
 
@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import session_factory
@@ -30,7 +30,7 @@ from ..services.serialize import (
     synthetic_spy_row,
 )
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
-from ..services.trading_calendar import effective_date_for
+from ..services.trading_calendar import boundary_value, effective_date_for
 from .server import mcp
 
 
@@ -75,23 +75,29 @@ def _resolve_portfolio(session: Session, slug_or_id: str) -> Portfolio:
     return portfolio
 
 
+def _benchmark(arena, rows: list[dict], direction: str) -> dict:
+    start = min(
+        (row["inception"] for row in rows if row.get("inception")),
+        key=lambda boundary: boundary["timestamp"],
+        default=None,
+    )
+    return synthetic_spy_row(arena.spy_series, start, direction=direction, as_of=arena.as_of)
+
+
 # --- Flagship reads ---------------------------------------------------------
 
 
 @mcp.tool()
-def list_portfolios() -> dict:
-    """Complete admin inventory of active and archived normal and Meta portfolios,
-    independent of market data and automation eligibility. Includes assignments,
-    lifecycle blockers, each portfolio's meta_set_id, and meta_sets with member
-    IDs. Use this to discover portfolios and Meta families before editing them."""
+def list_portfolios(version_id: int | None = None) -> dict:
+    """List portfolio assignments, versions, timing and editing blockers, optionally within one version."""
     with _session() as session:
-        return admin_ops.list_portfolios(session)
+        return _guard(admin_ops.list_portfolios, session, version_id=version_id)
 
 
 @mcp.tool()
 def get_portfolio(slug_or_id: str) -> dict:
     """Everything needed to evaluate ONE portfolio. Managed mode includes
-    drifted holdings, notes, allocation history, performance, and costs. Rebuilt
+    drifted holdings, notes, allocation history, and performance. Rebuilt
     mode intentionally excludes all prior portfolio state. Both modes include
     only the applicable mode-specific strategy text, allocation policy, prompt
     mode, and next effective date. Accepts a slug or a numeric id."""
@@ -116,10 +122,14 @@ def get_portfolio(slug_or_id: str) -> dict:
                     ),
                     "prompt_mode": "rebuilt",
                     "direction": portfolio.direction,
-                    "status": portfolio.status,
+                    "version": admin_ops.version_out(portfolio.version),
+                    "execution_boundary": portfolio.execution_boundary,
                     "next_entry": {
                         "entered_at": now.isoformat(),
-                        "effective_date": effective_date_for(now).isoformat(),
+                        "effective_at": boundary_value(
+                            effective_date_for(now, portfolio.execution_boundary),
+                            portfolio.execution_boundary,
+                        ),
                     },
                 },
             }
@@ -140,7 +150,9 @@ def get_portfolio(slug_or_id: str) -> dict:
         now = datetime.now(UTC)
         payload["next_entry"] = {
             "entered_at": now.isoformat(),
-            "effective_date": effective_date_for(now).isoformat(),
+            "effective_at": boundary_value(
+                effective_date_for(now, portfolio.execution_boundary), portfolio.execution_boundary
+            ),
         }
         return {
             "as_of": detail["as_of"],
@@ -150,90 +162,45 @@ def get_portfolio(slug_or_id: str) -> dict:
 
 
 @mcp.tool()
-def get_arena_overview(direction: str) -> dict:
-    """Managed and default rebuilt (Common/Canonical/Net) summaries for one
-    all-long or all-short direction."""
+def get_arena_overview(direction: str, version_id: int) -> dict:
+    """Managed and portfolio-tuned rebuilt summaries within one Arena version and direction."""
     selected_direction = _direction(direction)
     with _session() as session:
+        _guard(admin_ops._version, session, version_id)
         settings = admin_ops.get_app_settings(session)
-        managed_policy = settings["managed_allocation_policy"]
-        rebuilt_policy = settings["rebuilt_allocation_policy"]
-        portfolios = load_portfolios(session)
         selected = [
-            portfolio
-            for portfolio in portfolios
-            if portfolio.prompt.context_scope == "portfolio" and portfolio.direction == selected_direction
+            p for p in load_portfolios(session, version_id=version_id) if p.direction == selected_direction
         ]
         valuations = compute_valuations(session, selected)
-        managed_rows = []
-        for portfolio in selected:
-            if portfolio.prompt_mode != "managed":
-                continue
-            valuation = valuations.by_portfolio_id.get(portfolio.id)
-            if valuation is None:
-                continue
-            summary = serialize_summary(valuation, valuations, managed_policy)
-            summary.pop("sparkline", None)
-            managed_rows.append(summary)
-        rank_rows(managed_rows)
-        managed_benchmark_start = min(
-            (row["inception"] for row in managed_rows if row["inception"] is not None),
-            default=None,
-        )
-
-        rebuilt = compute_rebuilt_arena(
-            session,
-            selected,
-            view="common",
-            objective="canonical",
-            cost_basis="net",
-        )
-        rebuilt_rows = [
-            serialize_rebuilt_summary(analysis, rebuilt, rebuilt_policy, view="common")
-            for analysis in rebuilt.by_portfolio_id.values()
-            if analysis.portfolio.direction == selected_direction
+        managed_rows = [
+            serialize_summary(v, valuations, settings["managed_allocation_policy"])
+            for v in valuations.by_portfolio_id.values()
         ]
-        for row in rebuilt_rows:
-            row.pop("sparkline", None)
+        rank_rows(managed_rows)
+        rebuilt = compute_rebuilt_arena(session, selected)
+        rebuilt_rows = [
+            serialize_rebuilt_summary(a, rebuilt, settings["rebuilt_allocation_policy"])
+            for a in rebuilt.by_portfolio_id.values()
+        ]
         rank_rows(rebuilt_rows)
-        common = rebuilt.common_for(selected_direction)
+        for row in [*managed_rows, *rebuilt_rows]:
+            row.pop("sparkline", None)
         return {
+            "version_id": version_id,
             "direction": selected_direction,
             "managed": {
                 "as_of": valuations.as_of,
                 "market_data_status": valuations.market_data_status,
                 "portfolios": [
-                    synthetic_spy_row(
-                        valuations.spy_series,
-                        start=managed_benchmark_start,
-                        direction=selected_direction,
-                    ),
+                    _benchmark(valuations, managed_rows, selected_direction),
                     *managed_rows,
                 ],
             },
             "rebuilt": {
                 "as_of": rebuilt.as_of,
                 "market_data_status": rebuilt.market_data_status,
-                "context": {
-                    "view": "common",
-                    "objective": "canonical",
-                    "cost_basis": "net",
-                    "horizon": None,
-                },
-                "common_policy": common.policy,
                 "portfolios": [
-                    (
-                        synthetic_spy_row(
-                            common.spy_series,
-                            precomputed_nav=True,
-                            direction=selected_direction,
-                        )
-                        if common.spy_series
-                        else synthetic_spy_row(
-                            rebuilt.spy_series,
-                            direction=selected_direction,
-                        )
-                    ),
+                    _benchmark(rebuilt, rebuilt_rows, selected_direction),
                     *rebuilt_rows,
                 ],
             },
@@ -241,104 +208,28 @@ def get_arena_overview(direction: str) -> dict:
 
 
 @mcp.tool()
-def get_rebuilt_analysis(
-    direction: str,
-    view: str = "common",
-    objective: str = "canonical",
-    cost_basis: str = "net",
-    horizon: int | None = None,
-) -> dict:
-    """Analyze rebuilt portfolios in Common, Tuned, or direct Signal view.
-
-    Signal view requires a 1-20 horizon, canonical objective, and gross basis.
-    Common/Tuned do not accept a horizon.
-    """
+def get_rebuilt_analysis(direction: str, version_id: int) -> dict:
+    """Portfolio-tuned rebuilt rankings and all H0.5–H20 signal alpha observations."""
     selected_direction = _direction(direction)
-    allowed_views = {"common", "tuned", "signal"}
-    allowed_objectives = {
-        "canonical",
-        "max_alpha",
-        "max_information_ratio",
-        "max_sharpe",
-    }
-    if view not in allowed_views:
-        raise ValueError("view must be common, tuned, or signal")
-    if objective not in allowed_objectives:
-        raise ValueError("objective must be canonical, max_alpha, max_information_ratio, or max_sharpe")
-    if cost_basis not in {"net", "gross"}:
-        raise ValueError("cost_basis must be net or gross")
-    if view == "signal":
-        if horizon is None or horizon < 1 or horizon > 20:
-            raise ValueError("signal view requires horizon between 1 and 20")
-        if objective != "canonical" or cost_basis != "gross":
-            raise ValueError("signal view requires objective=canonical and cost_basis=gross")
-    elif horizon is not None:
-        raise ValueError("horizon is valid only for signal view")
-
     with _session() as session:
-        allocation_policy = admin_ops.get_app_settings(session)["rebuilt_allocation_policy"]
-        portfolios = load_portfolios(session)
+        _guard(admin_ops._version, session, version_id)
+        policy = admin_ops.get_app_settings(session)["rebuilt_allocation_policy"]
         selected = [
-            portfolio
-            for portfolio in portfolios
-            if portfolio.prompt.context_scope == "portfolio" and portfolio.direction == selected_direction
+            p for p in load_portfolios(session, version_id=version_id) if p.direction == selected_direction
         ]
-        arena = compute_rebuilt_arena(
-            session,
-            selected,
-            view=view,
-            objective=objective,
-            cost_basis=cost_basis,
-            horizon=horizon,
-        )
-        rows = [
-            serialize_rebuilt_summary(
-                analysis,
-                arena,
-                allocation_policy,
-                view=view,
-                horizon=horizon,
-            )
-            for analysis in arena.by_portfolio_id.values()
-            if analysis.portfolio.direction == selected_direction
-        ]
-        for row in rows:
-            row.pop("sparkline", None)
+        arena = compute_rebuilt_arena(session, selected)
+        rows = [serialize_rebuilt_summary(a, arena, policy) for a in arena.by_portfolio_id.values()]
         rank_rows(rows)
-        common = arena.common_for(selected_direction)
-        spy_row = (
-            synthetic_spy_row(
-                common.spy_series,
-                precomputed_nav=True,
-                direction=selected_direction,
-            )
-            if view == "common" and common.spy_series
-            else synthetic_spy_row(arena.spy_series, direction=selected_direction)
-        )
         return {
+            "version_id": version_id,
             "direction": selected_direction,
             "as_of": arena.as_of,
             "market_data_status": arena.market_data_status,
-            "context": {
-                "view": view,
-                "objective": objective,
-                "cost_basis": cost_basis,
-                "horizon": horizon,
-            },
-            "common_policy": common.policy,
-            "portfolios": [
-                spy_row,
-                *rows,
-            ],
+            "portfolios": [_benchmark(arena, rows, selected_direction), *rows],
         }
 
 
 # --- Supporting reads -------------------------------------------------------
-
-
-def _portfolio_counts(session: Session, column) -> dict[int, int]:
-    rows = session.execute(select(column, func.count()).group_by(column)).all()
-    return {key: count for key, count in rows}
 
 
 def _portfolio_prompt_out(
@@ -363,10 +254,10 @@ def _portfolio_prompt_out(
 
 
 @mcp.tool()
-def list_agents(status: str = "active") -> dict:
-    """List agent profiles by lifecycle status: active, archived, or all."""
+def list_agents() -> dict:
+    """List all agent execution profiles and deletion blockers."""
     with _session() as session:
-        return _guard(admin_ops.list_agents, session, status=status)
+        return _guard(admin_ops.list_agents, session)
 
 
 @mcp.tool()
@@ -384,48 +275,28 @@ def list_models() -> dict:
 
 @mcp.tool()
 def list_prompts() -> dict:
-    """List active prompts (names, modes, directions, and notes, without full text) with
-    portfolio usage counts. Use `get_prompt` for current mode-specific text."""
+    """List prompt support and usage. Use get_prompt for current strategy text."""
     with _session() as session:
-        counts = _portfolio_counts(session, Portfolio.prompt_id)
-        prompts = session.scalars(select(Prompt).where(Prompt.status == "active").order_by(Prompt.slug)).all()
-        return {
-            "prompts": [
-                {
-                    "id": prompt.id,
-                    "slug": prompt.slug,
-                    "context_scope": prompt.context_scope,
-                    "name": prompt.name,
-                    "mode": prompt.mode,
-                    "direction": prompt.direction,
-                    "notes": prompt.notes,
-                    "portfolio_count": counts.get(prompt.id, 0),
-                }
-                for prompt in prompts
-            ]
-        }
+        result = admin_ops.list_prompts(session)
+        for prompt in result["prompts"]:
+            for field in (
+                "managed_long_text",
+                "managed_short_text",
+                "rebuilt_long_text",
+                "rebuilt_short_text",
+            ):
+                prompt.pop(field, None)
+        return result
 
 
 @mcp.tool()
 def get_prompt(slug_or_id: str) -> dict:
-    """Fetch an active prompt's current mode-specific text. Accepts a slug or id."""
+    """Fetch a prompt's current mode-specific text by slug or id."""
     with _session() as session:
-        text = str(slug_or_id).strip()
-        prompt = None
-        if text.isdigit():
-            prompt = session.scalars(
-                select(Prompt).where(
-                    Prompt.id == int(text),
-                    Prompt.status == "active",
-                )
-            ).first()
+        value = str(slug_or_id).strip()
+        prompt = session.get(Prompt, int(value)) if value.isdigit() else None
         if prompt is None:
-            prompt = session.scalars(
-                select(Prompt).where(
-                    Prompt.slug == text,
-                    Prompt.status == "active",
-                )
-            ).first()
+            prompt = session.scalar(select(Prompt).where(Prompt.slug == value))
         if prompt is None:
             raise ValueError(f"Prompt '{slug_or_id}' not found")
         return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
@@ -457,11 +328,16 @@ def validate_symbol(symbol: str) -> dict:
 
 
 @mcp.tool()
-def get_effective_date() -> dict:
-    """The effective market-close date a new allocation or signal entered right
-    now would take (the no-backdating rule: first close strictly after entry)."""
-    now = datetime.now(UTC)
-    return {"entered_at": now.isoformat(), "effective_date": effective_date_for(now).isoformat()}
+def get_effective_date(portfolio_id: int) -> dict:
+    """Return the next opening or closing boundary for a manual decision in this portfolio."""
+    with _session() as session:
+        portfolio = _resolve_portfolio(session, str(portfolio_id))
+        now = datetime.now(UTC)
+        day = effective_date_for(now, portfolio.execution_boundary)
+        return {
+            "entered_at": now.isoformat(),
+            "effective_at": boundary_value(day, portfolio.execution_boundary),
+        }
 
 
 # --- Writes: models and agents ---------------------------------------------
@@ -552,23 +428,9 @@ def update_agent(
 
 @mcp.tool()
 def delete_agent(agent_id: int) -> dict:
-    """Permanently delete an unreferenced agent. Archive preserves referenced history."""
+    """Permanently delete an unreferenced agent."""
     with _session() as session:
         return _guard(admin_ops.delete_agent, session, agent_id)
-
-
-@mcp.tool()
-def archive_agent(agent_id: int) -> dict:
-    """Archive an agent with no active portfolios while preserving archived portfolios and run history."""
-    with _session() as session:
-        return _guard(admin_ops.archive_agent, session, agent_id)
-
-
-@mcp.tool()
-def unarchive_agent(agent_id: int) -> dict:
-    """Restore an archived agent when no active agent has the same execution profile."""
-    with _session() as session:
-        return _guard(admin_ops.unarchive_agent, session, agent_id)
 
 
 # --- Writes: prompts --------------------------------------------------------
@@ -579,7 +441,6 @@ def create_prompt(
     name: str,
     mode: str,
     direction: str,
-    context_scope: str = "portfolio",
     managed_long_text: str | None = None,
     managed_short_text: str | None = None,
     rebuilt_long_text: str | None = None,
@@ -592,7 +453,6 @@ def create_prompt(
             admin_ops.create_prompt,
             session,
             name=name,
-            context_scope=context_scope,
             mode=mode,
             direction=direction,
             managed_long_text=managed_long_text,
@@ -635,26 +495,9 @@ def update_prompt(
             notes=notes,
         )
         prompt = session.get(Prompt, updated["id"])
-        if prompt is None or prompt.status != "active":
-            raise ValueError("Prompt not found")
-        return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
-
-
-@mcp.tool()
-def archive_prompt(prompt_id: int) -> dict:
-    """Archive an active prompt after all portfolios using it are archived.
-    Archived content and version history are browser-admin-only."""
-    with _session() as session:
-        prompt = session.scalars(
-            select(Prompt).where(
-                Prompt.id == prompt_id,
-                Prompt.status == "active",
-            )
-        ).first()
         if prompt is None:
             raise ValueError("Prompt not found")
-        _guard(admin_ops.archive_prompt, session, prompt_id)
-        return {"ok": True, "prompt_id": prompt_id}
+        return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
 
 
 # --- Writes: portfolios -----------------------------------------------------
@@ -662,16 +505,17 @@ def archive_prompt(prompt_id: int) -> dict:
 
 @mcp.tool()
 def create_portfolio(
+    version_id: int,
     name: str,
     agent_id: int,
     prompt_id: int,
     prompt_mode: str,
     direction: str,
-    cost_bps: int | None = None,
+    execution_boundary: str = "close",
 ) -> dict:
     """Create a portfolio bound to an agent, canonical prompt, and prompt mode
     (`managed` or `rebuilt`) and whole-book direction (`long` or `short`).
-    `cost_bps` defaults to the configured default."""
+    Select its Arena version and execution boundary."""
     with _session() as session:
         return _guard(
             admin_ops.create_portfolio,
@@ -681,46 +525,8 @@ def create_portfolio(
             prompt_id=prompt_id,
             prompt_mode=prompt_mode,
             direction=_direction(direction),
-            cost_bps=cost_bps,
-        )
-
-
-@mcp.tool()
-def create_meta_portfolio_set(
-    family_name: str,
-    agent_id: int,
-    prompt_id: int,
-    variant_label: str | None = None,
-) -> dict:
-    """Atomically create and enable weekday automation for a four-cell arena
-    synthesis family: managed long Core, rebuilt long Pulse, managed short
-    Shadow, and rebuilt short Probe. The prompt must be arena-scoped and support
-    both modes and directions; the agent must support integrated automation.
-    An optional variant label distinguishes a comparison set and is appended to
-    every member name, for example `Confluence Core Ultra`."""
-    with _session() as session:
-        return _guard(
-            admin_ops.create_meta_portfolio_set,
-            session,
-            family_name=family_name,
-            variant_label=variant_label,
-            agent_id=agent_id,
-            prompt_id=prompt_id,
-        )
-
-
-@mcp.tool()
-def update_meta_portfolio_set(meta_set_id: int, agent_id: int) -> dict:
-    """Atomically reassign all remaining members of a Meta family to one
-    automation-capable agent. Discover meta_set_id through list_portfolios.
-    Existing decisions and queued run snapshots are
-    preserved; the new profile applies to future runs."""
-    with _session() as session:
-        return _guard(
-            admin_ops.update_meta_portfolio_set,
-            session,
-            meta_set_id,
-            agent_id=agent_id,
+            version_id=version_id,
+            execution_boundary=execution_boundary,
         )
 
 
@@ -728,36 +534,33 @@ def update_meta_portfolio_set(meta_set_id: int, agent_id: int) -> dict:
 def update_portfolio(
     portfolio_id: int,
     name: str | None = None,
-    status: str | None = None,
+    version_id: int | None = None,
     agent_id: int | None = None,
     prompt_id: int | None = None,
     prompt_mode: str | None = None,
     direction: str | None = None,
-    cost_bps: int | None = None,
+    execution_boundary: str | None = None,
 ) -> dict:
-    """Edit a portfolio: rename, archive/unarchive (`status` = "active" |
-    "archived"), reassign agent/prompt, select `managed` or `rebuilt` prompt
-    mode, direction, or cost_bps. Omitted fields are left unchanged. Meta members'
-    prompt, mode, and direction belong to their family; reassign their agent with
-    update_meta_portfolio_set using the meta_set_id from list_portfolios."""
+    """Edit portfolio assignments and timing. Timing locks permanently at the first decision;
+    track and direction require empty decision history. Live runs block structural changes."""
     with _session() as session:
         return _guard(
             admin_ops.update_portfolio,
             session,
             portfolio_id,
             name=name,
-            status=status,
             agent_id=agent_id,
             prompt_id=prompt_id,
             prompt_mode=prompt_mode,
             direction=_direction(direction) if direction is not None else None,
-            cost_bps=cost_bps,
+            version_id=version_id,
+            execution_boundary=execution_boundary,
         )
 
 
 @mcp.tool()
 def delete_portfolio(portfolio_id: int) -> dict:
-    """Delete a normal or Meta portfolio, its decisions, and all evaluation runs. Irreversible."""
+    """Delete a portfolio, its decisions, and all evaluation runs. Irreversible."""
     with _session() as session:
         return _guard(admin_ops.delete_portfolio, session, portfolio_id)
 
@@ -778,7 +581,7 @@ def create_allocation(portfolio_id: int, positions: list[PositionIn], note: str 
     """Enter a managed rebalance (or first allocation). Weights must sum to exactly
     100 and satisfy the portfolio prompt's position limits. Each position's
     `note` and the general `note` are the handoff to the next rebalance. Entry
-    time is server-set; the allocation freezes after its effective close."""
+    time is server-set; the allocation freezes after its effective boundary."""
     with _session() as session:
         return _guard(admin_ops.create_allocation, session, portfolio_id, _positions(positions), note)
 
@@ -788,7 +591,7 @@ def update_allocation(
     allocation_id: int, positions: list[PositionIn] | None = None, note: str | None = None
 ) -> dict:
     """Edit a pending allocation. The general `note` is always editable;
-    `positions` can only be changed before the effective close (afterwards, enter
+    `positions` can only be changed before the effective boundary (afterwards, enter
     a new rebalance instead)."""
     with _session() as session:
         pos = _positions(positions) if positions is not None else None
@@ -808,7 +611,7 @@ def delete_allocation(allocation_id: int) -> dict:
 @mcp.tool()
 def create_signal(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
     """Enter one independent rebuilt signal portfolio for the next effective
-    close. Weights must total 100 and satisfy the prompt policy. The server sets
+    boundary. Weights must total 100 and satisfy the prompt policy. The server sets
     entry/effective time; do not use this for managed portfolios."""
     with _session() as session:
         return _guard(
@@ -828,7 +631,7 @@ def update_signal(
     note: str | None = None,
 ) -> dict:
     """Edit a pending rebuilt signal. A signal is wholly immutable after its
-    effective close."""
+    effective boundary."""
     with _session() as session:
         pos = _positions(positions) if positions is not None else None
         return _guard(admin_ops.update_signal, session, signal_id, pos, note)
@@ -845,10 +648,10 @@ def delete_signal(signal_id: int) -> dict:
 
 
 @mcp.tool()
-def get_evaluator_dashboard() -> dict:
+def get_evaluator_dashboard(version_id: int | None = None) -> dict:
     """Read evaluator settings, per-portfolio configuration, and live worker status."""
     with _session() as session:
-        return evaluator.get_dashboard(session)
+        return _guard(evaluator.get_dashboard, session, version_id=version_id)
 
 
 @mcp.tool()
@@ -858,6 +661,7 @@ def update_evaluator_settings(
     poll_seconds: int,
     attempt_timeout_seconds: int,
     max_attempts: int,
+    queue_before_open_minutes: int,
     queue_before_close_minutes: int,
 ) -> dict:
     """Update evaluator settings; max_concurrency applies separately to each harness."""
@@ -870,6 +674,7 @@ def update_evaluator_settings(
             poll_seconds=poll_seconds,
             attempt_timeout_seconds=attempt_timeout_seconds,
             max_attempts=max_attempts,
+            queue_before_open_minutes=queue_before_open_minutes,
             queue_before_close_minutes=queue_before_close_minutes,
         )
 
@@ -915,6 +720,7 @@ def retry_evaluation_run(run_id: int) -> dict:
 
 @mcp.tool()
 def list_evaluation_runs(
+    version_id: int | None = None,
     portfolio_id: int | None = None,
     status: str | None = None,
     cursor: str | None = None,
@@ -926,6 +732,7 @@ def list_evaluation_runs(
             evaluator.list_runs,
             session,
             portfolio_id=portfolio_id,
+            version_id=version_id,
             status=status,
             cursor=cursor,
             limit=limit,
@@ -937,14 +744,13 @@ def list_evaluation_runs(
 
 @mcp.tool()
 def get_settings() -> dict:
-    """Read costs, allocation policies, wrappers, and long/short direction instructions."""
+    """Read allocation policies, wrappers, and long/short direction instructions."""
     with _session() as session:
         return admin_ops.get_app_settings(session)
 
 
 @mcp.tool()
 def update_settings(
-    default_cost_bps: int,
     managed_allocation_policy: AllocationPolicyIn,
     rebuilt_allocation_policy: AllocationPolicyIn,
     managed_wrapper_prompt: str,
@@ -952,12 +758,11 @@ def update_settings(
     long_direction_instructions: str,
     short_direction_instructions: str,
 ) -> dict:
-    """Atomically update costs, sizing, wrappers, and direction instructions."""
+    """Atomically update sizing, wrappers, and direction instructions."""
     with _session() as session:
         return _guard(
             admin_ops.update_app_settings,
             session,
-            default_cost_bps=default_cost_bps,
             managed_allocation_policy=managed_allocation_policy.model_dump(),
             rebuilt_allocation_policy=rebuilt_allocation_policy.model_dump(),
             managed_wrapper_prompt=managed_wrapper_prompt,
@@ -965,3 +770,40 @@ def update_settings(
             long_direction_instructions=long_direction_instructions,
             short_direction_instructions=short_direction_instructions,
         )
+
+
+@mcp.tool()
+def delete_prompt(prompt_id: int) -> dict:
+    """Delete an unused prompt; portfolio and recorded run references prevent deletion."""
+    with _session() as session:
+        return _guard(admin_ops.delete_prompt, session, prompt_id)
+
+
+@mcp.tool()
+def list_versions() -> dict:
+    """List Arena versions newest first, including independent evaluation gates."""
+    with _session() as session:
+        return admin_ops.list_versions(session)
+
+
+@mcp.tool()
+def create_version(name: str) -> dict:
+    """Create an empty Arena version with evaluation paused."""
+    with _session() as session:
+        return _guard(admin_ops.create_version, session, name=name)
+
+
+@mcp.tool()
+def update_version(version_id: int, name: str | None = None, evaluation_enabled: bool | None = None) -> dict:
+    """Rename or pause/resume a version. Pausing cancels queued runs while running attempts may finish."""
+    with _session() as session:
+        return _guard(
+            admin_ops.update_version, session, version_id, name=name, evaluation_enabled=evaluation_enabled
+        )
+
+
+@mcp.tool()
+def delete_version(version_id: int) -> dict:
+    """Delete an empty version. Move or delete its portfolios first."""
+    with _session() as session:
+        return _guard(admin_ops.delete_version, session, version_id)

@@ -34,7 +34,6 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
         )
         admin_ops.update_app_settings(
             session,
-            default_cost_bps=app_settings["default_cost_bps"],
             managed_allocation_policy=app_settings["managed_allocation_policy"],
             rebuilt_allocation_policy=app_settings["rebuilt_allocation_policy"],
             managed_wrapper_prompt=managed_wrapper,
@@ -391,6 +390,7 @@ def test_admin_dashboard_and_internal_worker_auth(
             "attempt_timeout_seconds": 7200,
             "max_attempts": 2,
             "queue_before_close_minutes": 120,
+            "queue_before_open_minutes": 60,
         },
     )
     assert updated.status_code == 200
@@ -407,6 +407,7 @@ def test_admin_dashboard_and_internal_worker_auth(
             "attempt_timeout_seconds": 7201,
             "max_attempts": 2,
             "queue_before_close_minutes": 120,
+            "queue_before_open_minutes": 60,
         },
     )
     assert rejected.status_code == 422
@@ -435,3 +436,238 @@ def test_admin_dashboard_and_internal_worker_auth(
         },
     )
     assert allowed.status_code == 200
+
+
+def test_opening_scheduled_run_keeps_boundary_when_submitted_late(sample_agent, sample_prompt):
+    from app.db import session_factory
+    from app.models import Allocation, Portfolio
+    from app.services.trading_calendar import open_at
+
+    scheduled_for = date(2026, 7, 20)
+    before_open = open_at(scheduled_for) - timedelta(minutes=45)
+    with session_factory()() as session:
+        portfolio = admin_ops.create_portfolio(
+            session,
+            name="Opening strategy",
+            agent_id=sample_agent["id"],
+            prompt_id=sample_prompt["id"],
+            prompt_mode="managed",
+            direction="long",
+            version_id=1,
+            execution_boundary="open",
+        )
+        _enable(session, portfolio, [0])
+        evaluator.update_settings(session, attempt_timeout_seconds=7200)
+        claimed = evaluator.claim_runs(
+            session,
+            worker_id="opening-worker",
+            harness="codex",
+            harness_version="test",
+            limit=1,
+            now=before_open,
+        )["runs"][0]
+        assert claimed["scheduled_boundary"] == {
+            "timestamp": "2026-07-20T13:30:00+00:00",
+            "phase": "open",
+        }
+        assert (
+            claimed["prompt_version_id"] == session.get(Portfolio, portfolio["id"]).prompt.current_version_id
+        )
+        submitted = evaluator.submit_run(
+            session,
+            run_id=claimed["id"],
+            positions=[
+                {"symbol": "AAPL", "weight_pct": 55},
+                {"symbol": "MSFT", "weight_pct": 45},
+            ],
+            note="Late opening result",
+            report="Opening boundary remains authoritative",
+            now=open_at(scheduled_for) + timedelta(minutes=5),
+        )
+        allocation = session.get(Allocation, submitted["result"]["id"])
+        assert allocation.effective_date == scheduled_for
+        assert submitted["run"]["execution_boundary"] == "open"
+        assert session.get(Portfolio, portfolio["id"]).execution_locked
+
+
+def test_enabled_versions_schedule_concurrently_and_paused_version_does_not(sample_agent, sample_prompt):
+    from app.db import session_factory
+
+    with session_factory()() as session:
+        portfolios = []
+        for number in (2, 3):
+            version = admin_ops.create_version(session, name=f"v{number}")
+            admin_ops.update_version(session, version["id"], evaluation_enabled=True)
+            portfolio = admin_ops.create_portfolio(
+                session,
+                name=f"Version {number} strategy",
+                agent_id=sample_agent["id"],
+                prompt_id=sample_prompt["id"],
+                prompt_mode="managed",
+                direction="long",
+                version_id=version["id"],
+            )
+            _enable(session, portfolio, [0])
+            portfolios.append(portfolio)
+        now = close_at(date(2026, 7, 20)) - timedelta(minutes=30)
+        claimed = evaluator.claim_runs(
+            session,
+            worker_id="multi-version-worker",
+            harness="codex",
+            harness_version="test",
+            limit=5,
+            now=now,
+        )["runs"]
+        assert {run["portfolio"]["id"] for run in claimed} == {portfolio["id"] for portfolio in portfolios}
+        first_version = portfolios[0]["version_id"]
+        admin_ops.update_version(session, first_version, evaluation_enabled=False)
+        assert len(evaluator.list_runs(session, version_id=first_version)["items"]) == 1
+        assert len(evaluator.get_dashboard(session, version_id=first_version)["portfolios"]) == 1
+
+
+@pytest.mark.parametrize("outcome", ["submit", "fail", "expire"])
+def test_paused_version_allows_completion_but_not_retries(sample_portfolio, outcome):
+    from app.db import session_factory
+
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
+    with session_factory()() as session:
+        _enable(session, sample_portfolio)
+        queued = evaluator.enqueue_manual_runs(session, portfolio_ids=[sample_portfolio["id"]], now=now)
+        run_id = queued["items"][0]["run"]["id"]
+        evaluator.claim_runs(
+            session, worker_id="pause-worker", harness="codex", harness_version="test", limit=1, now=now
+        )
+        admin_ops.update_version(session, sample_portfolio["version_id"], evaluation_enabled=False)
+        _enable(session, sample_portfolio, [0, 2])
+        rejected = evaluator.enqueue_manual_runs(session, portfolio_ids=[sample_portfolio["id"]], now=now)
+        assert rejected["items"][0]["action"] == "rejected"
+        if outcome == "submit":
+            run = evaluator.submit_run(
+                session,
+                run_id=run_id,
+                positions=[
+                    {"symbol": "AAPL", "weight_pct": 55},
+                    {"symbol": "MSFT", "weight_pct": 45},
+                ],
+                note="Finish while paused",
+                report="Completed normally",
+                now=now + timedelta(minutes=1),
+            )["run"]
+            assert run["status"] == "succeeded"
+        else:
+            if outcome == "fail":
+                evaluator.fail_run(session, run_id=run_id, error="Research failed", now=now)
+            else:
+                evaluator.claim_runs(
+                    session,
+                    worker_id="pause-worker",
+                    harness="codex",
+                    harness_version="test",
+                    limit=1,
+                    now=now + timedelta(hours=3),
+                )
+            assert evaluator.list_runs(session)["items"][0]["status"] == "failed"
+            with pytest.raises(AdminOpError, match="not enabled"):
+                evaluator.retry_run(session, run_id=run_id, now=now)
+
+
+def test_pausing_version_cancels_queued_run(sample_portfolio):
+    from app.db import session_factory
+
+    backdate_allocation(sample_portfolio["allocation"]["id"])
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
+    with session_factory()() as session:
+        _enable(session, sample_portfolio)
+        evaluator.enqueue_manual_runs(session, portfolio_ids=[sample_portfolio["id"]], now=now)
+        admin_ops.update_version(session, sample_portfolio["version_id"], evaluation_enabled=False)
+        assert evaluator.list_runs(session)["items"][0]["status"] == "cancelled"
+        assert (
+            evaluator.claim_runs(
+                session, worker_id="pause-worker", harness="codex", harness_version="test", limit=1, now=now
+            )["runs"]
+            == []
+        )
+
+
+def test_evaluator_waits_for_concurrent_manual_decision_before_duplicate_check(sample_agent, sample_prompt):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from time import monotonic, sleep
+
+    from sqlalchemy import select, text
+
+    from app.db import session_factory
+    from app.models import Allocation
+
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
+    positions = [
+        {"symbol": "AAPL", "weight_pct": 55, "note": ""},
+        {"symbol": "MSFT", "weight_pct": 45, "note": ""},
+    ]
+    with session_factory()() as session:
+        portfolio = admin_ops.create_portfolio(
+            session,
+            name="Concurrent decisions",
+            agent_id=sample_agent["id"],
+            prompt_id=sample_prompt["id"],
+            prompt_mode="managed",
+            direction="long",
+            version_id=1,
+        )
+        _enable(session, portfolio)
+        run_id = evaluator.enqueue_manual_runs(session, portfolio_ids=[portfolio["id"]], now=now)["items"][0][
+            "run"
+        ]["id"]
+        evaluator.claim_runs(
+            session, worker_id="concurrent-worker", harness="codex", harness_version="test", limit=1, now=now
+        )
+
+    worker_started = Event()
+    worker_pids = []
+
+    def submit():
+        with session_factory()() as session:
+            worker_pids.append(session.scalar(text("SELECT pg_backend_pid()")))
+            worker_started.set()
+            return evaluator.submit_run(
+                session,
+                run_id=run_id,
+                positions=positions,
+                note="Worker proposal",
+                report="Research completed",
+                now=now,
+            )
+
+    with session_factory()() as manual_session, ThreadPoolExecutor(max_workers=1) as executor:
+        locked = admin_ops.writable_portfolio(manual_session, portfolio["id"], lock=True)
+        manual = admin_ops._new_allocation(locked, positions, "Manual proposal", now, effective_date_for(now))
+        manual_session.add(manual)
+        manual_session.flush()
+        submitted = executor.submit(submit)
+        try:
+            assert worker_started.wait(timeout=5)
+            deadline = monotonic() + 5
+            with session_factory()() as observer:
+                while monotonic() < deadline:
+                    waiting = observer.scalar(
+                        text("SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = :pid"),
+                        {"pid": worker_pids[0]},
+                    )
+                    observer.commit()  # refresh PostgreSQL's statistics snapshot
+                    if waiting:
+                        break
+                    sleep(0.01)
+                assert waiting, "Evaluator did not wait for the concurrent portfolio write"
+            manual_session.commit()
+        finally:
+            manual_session.rollback()  # release the lock even when an assertion fails
+        result = submitted.result(timeout=5)
+        assert result["run"]["status"] == "skipped"
+        assert result["result"] is None
+    with session_factory()() as session:
+        decisions = session.scalars(
+            select(Allocation).where(Allocation.portfolio_id == portfolio["id"])
+        ).all()
+        assert len(decisions) == 1
+        assert decisions[0].note == "Manual proposal"

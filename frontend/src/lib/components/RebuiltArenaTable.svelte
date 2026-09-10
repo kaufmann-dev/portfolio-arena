@@ -1,16 +1,10 @@
 <script lang="ts">
   import { ChevronDown, ChevronUp } from "@lucide/svelte";
 
-  import type {
-    BenchmarkArenaPortfolio,
-    RebuiltAnalysisContext,
-    RebuiltArenaPortfolio,
-    RebuiltArenaResponse,
-    RebuiltView,
-  } from "../api/types";
+  import type { BenchmarkArenaPortfolio, RebuiltArenaPortfolio, RebuiltArenaResponse } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
-  import { num, pct, pctPoints, pctSignClass } from "../format";
-  import { link } from "../stores/router.svelte";
+  import { fmtDate, num, pct, pctPoints, pctSignClass } from "../format";
+  import { link, versionHref } from "../stores/router.svelte";
   import EvidenceBadge from "./EvidenceBadge.svelte";
   import SelectField from "./ui/SelectField.svelte";
 
@@ -20,18 +14,10 @@
 
   interface Props {
     rows: Row[];
-    view: RebuiltView;
-    context: RebuiltAnalysisContext;
     selected?: string[];
     onToggle?: (slug: string) => void;
   }
 
-  const SIGNAL_SORT_OPTIONS: { value: SortKey; label: string }[] = [
-    { value: "rank_score", label: "Adjusted lower 95%" },
-    { value: "mean_daily_alpha", label: "Mean daily alpha" },
-    { value: "hit_rate", label: "Hit rate" },
-    { value: "completion_ratio", label: "Completion" },
-  ];
   const POLICY_SORT_OPTIONS: { value: SortKey; label: string }[] = [
     { value: "rank_score", label: "Adjusted lower 95%" },
     { value: "mean_daily_alpha", label: "Mean daily alpha" },
@@ -42,10 +28,10 @@
   ];
 
   const uid = $props.id();
-  const { rows, view, context, selected = [], onToggle }: Props = $props();
+  const { rows, selected = [], onToggle }: Props = $props();
   let sortKey = $state<SortKey>("rank_score");
   let sortDesc = $state(true);
-  const sortOptions = $derived(view === "signal" ? SIGNAL_SORT_OPTIONS : POLICY_SORT_OPTIONS);
+  const sortOptions = POLICY_SORT_OPTIONS;
   const activeSortKey = $derived(
     sortOptions.some((option) => option.value === sortKey) ? sortKey : "rank_score",
   );
@@ -100,7 +86,7 @@
   }
 
   function detailHref(row: RebuiltArenaPortfolio): string {
-    return portfolioAnalysisHref(row.slug, "rebuilt", row.direction, context);
+    return portfolioAnalysisHref(row.slug, "rebuilt", row.direction, row.version_id);
   }
 </script>
 
@@ -130,18 +116,17 @@
   <span class="badges">
     <span class="badge">{row.direction}</span>
     <EvidenceBadge state={row.evidence} compact />
-    {#if row.status === "archived"}<span class="badge">archived</span>{/if}
+    <span class="badge">{row.execution_boundary === "open" ? "Open" : "Close"}</span>
     {#if row.is_liquidated}
-      <span class="badge neg" title={row.liquidated_at ? `Liquidated ${row.liquidated_at}` : "Liquidated"}>
+      <span
+        class="badge neg"
+        title={row.liquidated_at ? `Liquidated ${fmtDate(row.liquidated_at)}` : "Liquidated"}
+      >
         policy liquidated
       </span>
     {/if}
-    {#if view === "common" && !row.common_admitted && row.status === "active" && !row.founding_v2 && !row.error}
-      <span class="badge warn" title="Not yet admitted to the Common-policy meta-portfolio">
-        H20 incubation
-      </span>
-    {:else if view !== "common" && !row.completion.eligible}
-      <span class="badge">selected-horizon incubation</span>
+    {#if !row.completion.eligible}
+      <span class="badge">Evidence pending</span>
     {/if}
     {#if row.stale_data}<span class="badge warn">stale data</span>{/if}
     {#if row.frozen_symbols.length}
@@ -182,7 +167,8 @@
   >
     <table class="data-table">
       <caption>
-        Rebuilt portfolio rankings in {view} view. SPY is a pinned reference; portfolio rows are sorted by
+        Rebuilt portfolio rankings with individually selected holding horizons. SPY is a pinned reference;
+        portfolio rows are sorted by
         {currentSortLabel}
         {sortDesc ? " descending" : " ascending"}.
       </caption>
@@ -194,13 +180,12 @@
           <th scope="col">Agent</th>
           <th scope="col">Prompt</th>
           <th scope="col" class="right">Horizon</th>
-          {#if view !== "signal"}<th scope="col" class="right">Exposure</th>{/if}
           {@render sortHeader("rank_score", "Lower 95%")}
           {@render sortHeader("mean_daily_alpha", "Mean α/day")}
-          {#if view !== "signal"}
-            {@render sortHeader("information_ratio", "Info ratio")}
-            {@render sortHeader("sharpe", "Sharpe")}
-          {/if}
+
+          {@render sortHeader("information_ratio", "Info ratio")}
+          {@render sortHeader("sharpe", "Sharpe")}
+
           {@render sortHeader("hit_rate", "Hit rate")}
           {@render sortHeader("completion_ratio", "Completion")}
         </tr>
@@ -217,13 +202,12 @@
             <td>—</td>
             <td>{benchmark.direction === "short" ? "Daily −1× SPY" : "Buy and hold SPY"}</td>
             <td class="right num">—</td>
-            {#if view !== "signal"}<td class="right num">100%</td>{/if}
             <td class="right num">0.00%</td>
             <td class="right num">0.00%</td>
-            {#if view !== "signal"}
-              <td class="right num">—</td>
-              <td class="right num">{num(benchmark.metrics.sharpe)}</td>
-            {/if}
+
+            <td class="right num">—</td>
+            <td class="right num">{num(benchmark.metrics.sharpe)}</td>
+
             <td class="right num">—</td>
             <td class="right num">—</td>
           </tr>
@@ -234,32 +218,32 @@
             <td class="rank-col num">{row.rank ?? "—"}</td>
             <th class="portfolio-col" scope="row">{@render identity(row)}</th>
             <td>
-              <a href="/agent/{row.agent.slug}" onclick={(event) => link(event, `/agent/${row.agent.slug}`)}>
+              <a
+                href={versionHref(`/agent/${row.agent.slug}`)}
+                onclick={(event) => link(event, `/agent/${row.agent.slug}`)}
+              >
                 {row.agent.name}
               </a>
             </td>
             <td>
               <a
-                href="/prompt/{row.prompt.slug}"
+                href={versionHref(`/prompt/${row.prompt.slug}`)}
                 onclick={(event) => link(event, `/prompt/${row.prompt.slug}`)}
               >
                 {row.prompt.name}
               </a>
             </td>
             <td class="right num">{row.selected_policy ? `H${row.selected_policy.horizon}` : "—"}</td>
-            {#if view !== "signal"}
-              <td class="right num">{pctPoints(row.selected_policy?.exposure_pct, 0)}</td>
-            {/if}
             <td class="right num score {pctSignClass(row.rank_score, 2)}">
               {pct(row.rank_score, 2)}
             </td>
             <td class="right num {pctSignClass(row.metrics.mean_daily_alpha, 2)}">
               {pct(row.metrics.mean_daily_alpha, 2)}
             </td>
-            {#if view !== "signal"}
-              <td class="right num">{num(row.metrics.information_ratio)}</td>
-              <td class="right num">{num(row.metrics.sharpe)}</td>
-            {/if}
+
+            <td class="right num">{num(row.metrics.information_ratio)}</td>
+            <td class="right num">{num(row.metrics.sharpe)}</td>
+
             <td class="right num">{pct(row.metrics.hit_rate, 0)}</td>
             <td
               class="right num"
@@ -270,9 +254,7 @@
           </tr>
         {:else}
           <tr>
-            <td colspan={view === "signal" ? 10 : 13} class="table-empty">
-              No rebuilt portfolios match these filters.
-            </td>
+            <td colspan="12" class="table-empty"> No rebuilt portfolios match these filters. </td>
           </tr>
         {/each}
       </tbody>
@@ -321,9 +303,7 @@
         <p class="context">
           {row.agent.name} · {row.prompt.name}
           {#if row.selected_policy}
-            · H{row.selected_policy.horizon}{view === "signal"
-              ? ""
-              : ` · ${pctPoints(row.selected_policy.exposure_pct, 0)} exposure`}
+            · H{row.selected_policy.horizon}
           {/if}
         </p>
         <dl>
@@ -333,10 +313,10 @@
             pct(row.metrics.mean_daily_alpha, 2),
             pctSignClass(row.metrics.mean_daily_alpha, 2),
           )}
-          {#if view !== "signal"}
-            {@render metricTile("Info ratio", num(row.metrics.information_ratio))}
-            {@render metricTile("Sharpe", num(row.metrics.sharpe))}
-          {/if}
+
+          {@render metricTile("Info ratio", num(row.metrics.information_ratio))}
+          {@render metricTile("Sharpe", num(row.metrics.sharpe))}
+
           {@render metricTile("Hit rate", pct(row.metrics.hit_rate, 0))}
           {@render metricTile("Completion", pct(row.completion.completion_ratio, 0))}
         </dl>

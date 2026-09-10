@@ -9,141 +9,79 @@ harness-specific capabilities, combines them into reusable Agents, and controls 
 concurrency, immediate runs, cancellation, retries, and history. Manual submissions and authenticated
 MCP workflows remain available.
 
-The app maintains two normal experiments. Managed portfolios are stateful paper portfolios whose
-models decide when to rebalance. Rebuilt portfolios submit an independent signal every trading day;
-the arena measures every 1–20-session holding period and 10–100% exposure policy. Each track is
-split into Long and Short arenas and ranked against its direction-matched SPY reference. A separate
-Meta arena measures agents that synthesize normal portfolios with the same harness, mode, and direction
-after the daily runs finish. It is an _arena_: honest, deterministic measurement — not trading and not advice.
+Arena versions preserve successive experiments with different models and prompts. Every version stays
+visible and has its own evaluation switch; several versions can run concurrently. Each version
+contains Managed and Rebuilt tracks, split into Long and Short arenas and compared with a
+direction-matched SPY reference.
+
+Managed portfolios retain holdings and notes between decisions. Rebuilt portfolios submit independent
+daily signals and select their own holding horizon from H0.5 through H20 in half-session increments.
+The project measures cost-free paper performance for research.
 
 ## Architecture
 
-- **Backend** — FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (`backend/`). Serves the built SPA
-  with fallback routing.
-- **Frontend** — Svelte 5 + Vite + TypeScript SPA (`frontend/`), built to `frontend/dist/`.
-- **Evaluator** — integrated Codex and Muse Code workers (`backend/app/evaluator/`) whose configuration, queue,
-  leases, and history live in PostgreSQL. It uses Massive and live web search for current research.
-- **Production supervisor** — one Nixpacks start command launches FastAPI and the evaluator worker,
-  restarts the worker if it fails, and shuts both down together.
-- **Admin authentication** — confidential OpenID Connect Authorization Code + PKCE, backed by
-  opaque server-side sessions. Public leaderboard and detail views remain anonymous.
-- **Prices** — Massive's grouped daily stock response refreshes every live symbol in one background
-  batch; same-session dividend and split factors keep cached history on a total-return basis. A
-  bounded per-ticker fallback repairs missing history without monopolizing the refresh loop. Series
-  are cached in Postgres with a ~1h TTL, and valuation requests never wait on Massive.
-- **No persistent NAV snapshots.** Managed NAVs derive from allocations; rebuilt NAVs derive from
-  immutable daily signals and overlapping cohorts. Exact-input analytics are memoized in a bounded
-  in-process cache, and any portfolio or price-content change selects a new result automatically.
-  Corporate-action adjustments change retroactively, so deterministic recomputation remains _more_
-  correct than database snapshots.
-- **Atomic last-known-data fallback.** The background refresher runs after startup, after cache TTL,
-  and when a newly closed session should be available after Massive's 15-minute delay. One grouped
-  response publishes the available live-symbol closes in a single transaction; publication-lag
-  responses stay on the prior complete `as_of` and report `updating` until every active allocation
-  and H1-H20 cohort is ready. Short 15/30/60-second retries handle provider lag without delaying page
-  loads. After a 10-minute publication SLA, incomplete data is explicitly `stale`; missing required
-  history is `unavailable`. Updating pages poll a lightweight status endpoint and refresh once the
-  batch is ready.
-- **MCP server** (`/mcp`) — an API-key-authenticated [Model Context Protocol](https://modelcontextprotocol.io)
-  endpoint exposing the operational arena surface as tools, including evaluator administration.
-  API-key management and archived prompt recovery stay browser-only; the worker-only queue and
-  submission protocol is private to the deployment.
-- **Meta synthesis** — arena-scoped prompts create atomic Managed/Rebuilt × Long/Short portfolio
-  families. Each harness has its own daily batch, which records its active normal cohort and waits
-  only for that harness's due source runs to become terminal. Each Meta evaluator receives sources
-  matching its execution harness, Managed/Rebuilt mode, and Long/Short direction, with an equal-source
-  control computed from those same sources. Sources can use different models and reasoning levels
-  within the same harness; Codex and Muse evidence remain separate.
+- **Backend:** FastAPI, SQLAlchemy 2, Alembic and PostgreSQL (`backend/`); serves the built SPA.
+- **Frontend:** Svelte 5, Vite and TypeScript (`frontend/`), built to `frontend/dist/`.
+- **Evaluator:** integrated Codex and Muse Code workers with database-backed settings, queue, leases
+  and audit history. The production supervisor starts the web app and workers together.
+- **Authentication:** OIDC Authorization Code + PKCE with opaque browser sessions. Rankings and
+  portfolio details are public; `/mcp` requires an API key.
+- **Prices:** Massive grouped daily responses refresh opening and closing prices in the background,
+  with bounded per-ticker history repair. Both fields use the same split/dividend adjustments.
+  A developing closing price is never published with a morning opening price.
+- **Valuation:** NAV is never stored. Pure calculations derive it from decisions and cached prices;
+  a bounded cache memoizes exact-input analytics. Opening and closing observations are separate
+  UTC timestamp/phase events. API boundaries use `{timestamp, phase}` and chart points add `nav`.
+- **Publication:** prices become eligible 15 minutes after their boundary. Reads perform no provider
+  I/O and retain the latest complete boundary while new data is `updating`. After ten minutes of
+  publication lag it is `stale`; missing required history is `unavailable`. Missing openings are
+  never replaced with closing prices. Paused versions continue receiving market data.
 
-## Experiment-integrity rules (enforced in code)
+## Experiment-integrity rules
 
-- **Manual entries do not backdate; scheduled automation is an explicit exception.** A manual
-  allocation or signal entered at time T takes effect at the first market close strictly after T
-  (early closes honored). Scheduled evaluator runs always target their scheduled session, even when
-  they submit after that close.
-- **Submitted targets lock at the effective close.** Pending allocations and signals have a
-  typo-correction window. A completed signal is entirely immutable; managed allocation notes retain
-  their existing editable handoff behavior.
-- **Portfolio resets are explicit and mode-specific.** Resetting a contestant deletes its managed
-  allocation history or rebuilt signal history, cancels in-flight evaluator work, and preserves its
-  identity, configuration, schedule, and evaluator audit records. A portfolio cannot switch mode or
-  direction until its history has been reset and in-flight cancellation has completed.
-- **Admin portfolio management includes every portfolio.** The Portfolios tab uses a dedicated
-  inventory independent of prices and rankings, including active and archived normal and Meta
-  portfolios, with name search and status filters. Meta family agents can be reassigned together;
-  each member's track, direction, and prompt remain tied to its family.
-- **Archive pauses; delete removes.** Archiving a portfolio disables its schedule, cancels queued
-  evaluations, and requests cancellation of running evaluations. Restoring requires an active agent
-  and prompt; automation must be explicitly enabled again. Deleting a portfolio permanently removes
-  its allocations, signals, schedule, and evaluation runs in every state, and stops its worker.
-  Meta members can be deleted individually; siblings remain, and deleting the last member removes
-  the empty family. Frozen synthesis packets for other portfolios remain historical evidence.
-- **Mode- and direction-aware strategy prompts.** Every prompt independently supports Managed,
-  Rebuilt, or Both and Long, Short, or Both. It stores a complete strategy text for each supported
-  mode-and-direction combination. Managed evaluations receive holdings, allocation history, notes,
-  performance, and costs; rebuilt evaluations receive no prior portfolio state and construct each
-  signal independently. The applicable strategy text and the editable Long or Short direction
-  instructions are inserted into that mode's global wrapper under Admin → Settings.
-- **One direction per portfolio.** A portfolio is entirely long or entirely short. Submitted weights
-  are always positive and total exactly 100%; direction is portfolio metadata, so mixed books and
-  signed position weights cannot enter the experiment.
-- **Prompt changes are recoverable.** Editing a prompt's supported modes, supported directions,
-  mode-and-direction-specific texts, or metadata appends an immutable version. Prompts are archived
-  rather than deleted, and restoring an older snapshot creates another new version.
-  Archived prompts and version history are browser-admin-only; public and MCP reads expose only the
-  current version of active prompts.
-- **Agent retirement preserves audit history.** An Agent can be archived after its active portfolios
-  are archived or reassigned. Archived Agents disappear from assignment controls and public lists,
-  while archived portfolios and evaluation runs keep their original references. Permanent deletion
-  is available only when no portfolio or evaluation run references the Agent.
-  Models likewise cannot be deleted while agents or historical runs reference them; the admin panel
-  displays those dependencies. A portfolio's deletion removes its run references as well.
-- **Prompt scope is immutable.** Normal `portfolio` prompts and synthesis-only `arena` prompts are
-  separate stable identities. Meta portfolios never enter normal leaderboards, comparisons, or the
-  rebuilt Common-policy source cohort.
-- **Meta evidence is frozen, not performance-selected.** Each worker receives only matching-harness,
-  matching-mode, matching-direction source decisions and notes from its harness's frozen daily batch, including
-  explicit prior-decision fallbacks for failed sources. Counts and the worker's equal-source control
-  use the same subset. A run with no usable matching decisions is skipped; manual runs and retries
-  without matching evidence are rejected. Performance, ranks, evaluator reports, and older history
-  are excluded. Public Meta rankings and comparisons use direction-matched SPY as their reference.
-  Equal-source controls exist only in the private execution packets and use the matching source subset.
-- **Mode-level allocation policies.** Admin → Settings defines server-enforced minimum and maximum
-  position weights for each track. Managed defaults to 10–25% (4–10 positions); rebuilt defaults to
-  10–100% (1–10 positions). Settings changes govern future submissions without rewriting prompt
-  versions or historical allocations and signals.
-- **SPY is synthetic and direction-matched.** Long arenas use buy-and-hold SPY. Short arenas use a
-  daily rebalanced −1× SPY series. Every leaderboard pins its non-ranked reference over the same
-  comparison window; there are no stored benchmark portfolios and no RSP benchmark.
-- **Rebuilt policies are measured, not prompted.** Each daily signal is evaluated at holding
-  horizons from 1 through 20 trading sessions. Exposure is tested from 10% through 100%; each active
-  session contributes one `exposure / horizon` sleeve. At every close, the aggregate target is the
-  sum of the still-active signal sleeves and the remainder stays in direction-matched SPY. Before a
-  portfolio is admitted to the Common policy, its detail page shows the live H20/100 book as a
-  provisional aggregate while evidence and ranking remain pending.
-- **Short loss is capped at portfolio equity.** Short books use fixed absolute shares between
-  rebalances, 100% collateralized exposure, and the same transaction-cost model as long books.
-  Borrow and financing fees are not modeled. If NAV reaches zero, liquidation is absorbing: the
-  displayed series remains zero, return observations stop after the liquidation close, managed
-  allocations and evaluator runs are blocked until reset, and rebuilt signals may continue to be
-  collected for future policy measurements.
-- **Costs are measured on aggregate turnover.** Net results apply the portfolio's flat transaction
-  cost to actual aggregate turnover, including changes in the SPY sleeve. Gross results remain
-  available for diagnosis.
-- **Notes.** Each managed allocation or rebuilt signal has optional portfolio- and position-level
-  handoff notes.
-- **Search-adjusted evidence.** Rankings use a HAC/Newey–West estimate and a Bonferroni-adjusted 95%
-  confidence interval across the predeclared search family: 20 comparisons for Signal Alpha and the
-  canonical objective, or 200 for an optimized holding-period × exposure search. Evidence is labeled
-  `pending`, `inconclusive`, `positive`, or `negative`; incomplete, carried-forward, or frozen price
-  data is flagged, never guessed.
-
-The Rebuilt arena has three views. **Common Policy** chooses one holding horizon and exposure from an
-equal-weight meta portfolio, then applies that policy to every eligible strategy. **Tuned** selects
-each strategy's own best policy. **Signal Alpha** compares completed independent signals directly at
-a selected holding horizon and exposes the full 1–20-session matrix. The default objective fixes
-exposure at 100% and chooses the horizon with the highest adjusted lower confidence bound; diagnostic
-objectives can instead maximize mean alpha, information ratio, or zero-rate Sharpe.
+- **Versions control evaluation independently.** New versions are empty and paused. Global,
+  version and portfolio switches must all allow evaluation. Pausing a version cancels queued work;
+  already-running attempts may finish without retries. Portfolio schedules remain intact. Only
+  empty versions may be deleted; portfolio IDs and URLs survive a move between versions.
+- **Execution timing belongs to the portfolio.** Choose before-open/opening-price or
+  before-close/closing-price evaluation. Timing locks permanently at its first decision, even after
+  resetting history. Create another portfolio to change it. Separate opening and closing offsets
+  each accept 15–240 minutes and default to 90 minutes on a fresh installation.
+- **Manual submissions never backdate.** They target the first future matching boundary. Scheduled
+  evaluations retain their scheduled session and boundary even if they finish late. NYSE holidays,
+  daylight-saving changes and early closes are respected. Pending decisions can be corrected;
+  decisions lock at their effective boundary. Managed allocation notes remain editable afterward.
+- **Portfolio resets preserve identity.** Reset removes the track's decisions, cancels queued work
+  and requests cancellation of running attempts, preserving schedules, timing lock and audit rows.
+  Track/direction changes require empty history and no live evaluations. Deleting a portfolio
+  removes its decisions, schedule and evaluation runs.
+- **Prompts are shared live strategies.** A prompt supports Managed/Rebuilt/Both and Long/Short/Both
+  with text for each supported combination. Edits apply to every referencing version and append
+  an immutable prompt revision. Workers record the revision used when claiming a run. Restoring
+  a revision creates a new edit; history and restore remain browser-admin-only. A prompt cannot be
+  deleted while a portfolio or recorded evaluation revision references it. Agents and models also
+  retain deletion protection for portfolio/run references.
+- **Research context depends on track.** Managed evaluations receive holdings, notes, allocation
+  history and performance. Rebuilt evaluations receive no prior portfolio state. Strategy and
+  direction instructions are inserted into the editable track-specific wrapper in Admin → Settings.
+- **Books have one direction.** Weights are positive and total exactly 100%. Server-enforced sizing
+  defaults are 10–25% for Managed and 10–100% for Rebuilt. Changes affect future submissions.
+- **Benchmarks are synthetic.** Long SPY is buy-and-hold; short SPY resets to −1× at each close and
+  is also marked at the open. Merely publishing another price does not trigger a portfolio trade.
+- **Rebuilt comparison is portfolio-tuned.** Forty horizons H0.5, H1, H1.5 … H20 are tested at 100%
+  exposure. One half-step advances to the next open/close: morning H0.5 expires that close, morning
+  H1 at the next open; evening H0.5 at the next open and evening H1 at the next close. Each daily
+  cohort gets `1 / ceil(H)` of the book; unused capacity stays in direction-matched SPY.
+  Select the horizon with the largest search-adjusted lower 95% confidence bound, breaking ties
+  toward the shorter horizon. The Signal Alpha matrix shows all forty horizons alongside rankings
+  and in portfolio details. Evidence remains pending until minimum sample requirements are met.
+- **Statistics use full sessions.** Daily observations end at the latest published phase, using
+  open-to-open or close-to-close returns and 252-session annualization. An incomplete initial
+  interval contributes to total return but not inference. HAC lag is `ceil(H) - 1` and the
+  Bonferroni search family contains forty horizons.
+- **Short loss is capped at equity.** Fixed-share shorts are fully collateralized between
+  rebalances. Zero NAV causes absorbing liquidation. Managed evaluations are blocked until reset;
+  rebuilt signals may continue to support future policy measurements.
 
 ## Instruments
 
@@ -159,50 +97,26 @@ stale hard-coded symbol list.
 
 ## MCP server
 
-The app mounts a streamable-HTTP [MCP](https://modelcontextprotocol.io) server at `/mcp`. It exposes
-the operational arena surface as tools: manage portfolios, agents, active prompts, managed
-allocations, and rebuilt signals; validate symbols; read both arena tracks and per-portfolio
-history; and administer the evaluator. API-key management and archived prompt recovery stay in the
-admin panel.
+The streamable-HTTP [MCP](https://modelcontextprotocol.io) endpoint is `/mcp`. Every request requires
+`Authorization: Bearer <key>` or `X-API-Key`. Create/revoke keys in Admin → API Keys; plaintext is
+shown once and only SHA-256 hashes are stored.
 
-- **Auth.** Every request needs an API key (`Authorization: Bearer <key>`, or `X-API-Key`);
-  there is no anonymous access. Create and revoke keys in the admin panel's **API Keys** tab.
-  The plaintext key is shown once at creation; only a SHA-256 hash is stored.
-- **Admin inventory.** `list_portfolios()` returns active and archived normal and Meta portfolios,
-  assignments, lifecycle blockers, and Meta families with their member IDs, independently of prices
-  and automation eligibility. Use its `meta_set_id` with `update_meta_portfolio_set` to reassign a
-  family's agent. This inventory is unavailable to internal evaluator tokens.
-- **Flagship read tools.** `get_portfolio(slug_or_id)` always returns only the strategy text selected
-  for that portfolio's mode and direction, its structured policy, prompt mode, and next effective
-  date. Managed
-  mode also returns drifted holdings with
-  entry/current prices, the full allocation history with notes, performance, and costs. Rebuilt
-  mode intentionally omits prior signals, notes, performance, and costs. `get_arena_overview()`
-  and `get_rebuilt_analysis()` require `direction="long"` or `"short"` and never mix directions.
-  Rebuilt analysis exposes Common Policy, Tuned, and Signal Alpha views. Use `create_allocation` for
-  managed portfolios and `create_signal` for rebuilt portfolios.
-- **Prompt tools.** MCP can list, read, create, update, and archive active prompts, including their
-  immutable Portfolio/Arena scope, Managed/Rebuilt/Both and Long/Short/Both support, and current
-  mode-and-direction-specific texts. `create_meta_portfolio_set` atomically creates and enables all
-  four cells of one arena-scoped family, with an optional comparison-variant label appended to member
-  names. `update_meta_portfolio_set` atomically reassigns every remaining member to one automation-capable
-  Agent for future runs. Normal portfolios can be reassigned with `update_portfolio`, and
-  `reset_portfolio` clears a portfolio's mode-specific decisions while preserving its identity,
-  evaluator configuration, and evaluator audit. `delete_portfolio` removes normal or Meta portfolios
-  together with their decisions and evaluation runs. Prompt tools can archive a prompt after every
-  referencing portfolio is archived. MCP cannot expose archived prompt content, immutable history,
-  unarchive, or restore operations; those recovery controls remain in the browser admin.
-- **Settings tools.** MCP can read and atomically update the default cost, both mode-level allocation
-  policies, both wrapper prompts, and the Long and Short direction instructions.
-- **Automation tools.** `get_evaluator_dashboard`, `update_evaluator_settings`,
-  `configure_portfolio_evaluator`, `run_evaluations`, `cancel_evaluation_run`,
-  `retry_evaluation_run`, and `list_evaluation_runs` mirror the website's evaluator controls.
-- **Execution-profile tools.** `list_harnesses` exposes the code-defined harness registry;
-  `list_models`, `create_model`, `update_model`, and `delete_model` manage model capabilities; Agent
-  tools combine a model, supported harness, and model-valid reasoning effort into a reusable profile.
-  `list_agents` filters by active, archived, or all profiles; `archive_agent` and `unarchive_agent`
-  retire and restore profiles without discarding portfolio or evaluator history.
-- **Connecting a client.** e.g. `claude mcp add --transport http arena https://<host>/mcp
+- `list_versions` and version create/update/delete tools manage experiment groups.
+  `list_portfolios(version_id)` returns inventory, assignments, timing and editing blockers.
+- `get_portfolio(slug_or_id)` supplies the applicable strategy and research context, sizing policy,
+  execution boundary and next effective boundary. `get_effective_date(portfolio_id)` previews
+  manual timing. `create_allocation` submits Managed decisions; `create_signal` submits Rebuilt.
+- `get_arena_overview(direction, version_id)` and `get_rebuilt_analysis(direction, version_id)`
+  return scoped results. Rebuilt analysis includes the forty-column signal matrix.
+- Model, agent, prompt and portfolio tools expose administration with reference-aware deletion.
+  Prompt revision history/restore and API-key management remain browser-only.
+- Settings tools manage allocation policies, wrappers and direction instructions. Evaluator tools
+  mirror dashboard, scheduling, queue, cancellation and retry controls. Inventory, dashboard and
+  run history support optional version filters.
+- Internal worker credentials can access only the small read-only portfolio research tool surface;
+  queue claims and atomic submissions use private deployment routes.
+
+Connect a client with `claude mcp add --transport http arena https://<host>/mcp
 --header "Authorization: Bearer <key>"`.
 
 ## Authentication Setup
@@ -225,14 +139,14 @@ generated from it. A portfolio whose Agent uses Codex or Muse Code automatically
 **Automation** tab, initially disabled. Rebuilt automation runs every Monday through Friday; managed
 automation can run on any selected weekdays or remain manual-only. If a selected day is an NYSE
 holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected days
-converge on the same session. Scheduled close times honor early closes and daylight-saving changes.
+converge on the same session. Opening and closing times honor early closes and daylight-saving changes.
 
-The website can queue an enabled portfolio at any time. Each run captures its Agent and model IDs,
+The website can queue a portfolio when global, version and portfolio evaluation are enabled. Each run captures its Agent and model IDs,
 harness, harness-specific execution model ID, optional reasoning effort, timeout, and attempt limit
 when it is queued. Harness defaults are used; Portfolio Arena does not configure a service tier.
-Scheduled runs enter the queue at the configured offset before close; polling and concurrency may
-delay their actual start. Runs queued before close remain eligible afterward, and successful
-scheduled submissions use the scheduled session even if they finish after its close. Pausing stops
+Scheduled runs enter the queue at the configured offset before their opening or closing boundary;
+polling and concurrency may delay their actual start. Successful scheduled submissions retain the
+scheduled boundary even when they finish afterward. Pausing stops
 new claims while active work finishes. Queued work can be cancelled immediately; running work
 receives a cancellation request and its harness process and MCP children are terminated. Failed runs can be retried
 manually. All paths use the same server-side proposal and symbol validation and atomically create
@@ -240,22 +154,6 @@ either a managed allocation or rebuilt signal. At claim time, the worker receive
 execution prompt rendered from the portfolio's selected mode-and-direction-specific strategy text
 and the editable wrapper for its mode. A liquidated managed short cannot be enabled, queued, claimed,
 retried, or submitted again until its portfolio history is reset.
-
-Arena-scoped scheduled runs are dependent work. The scheduler freezes a separate active normal cohort
-for each harness when its daily batch opens. It waits through automatic retries until every due source
-for that harness, across all models, reasoning levels, modes, and directions, is terminal, then freezes
-the evidence and queues that harness's Meta targets. The other harness's unfinished evaluations do not
-delay this step. Successful same-session decisions are used directly; failures use clearly marked
-prior-decision fallbacks. Meta runs target the same scheduled session, even if execution finishes after
-close. A harness added while the daily window is open gets its own batch without changing another
-harness's frozen cohort. New portfolios within an already frozen cohort enter the next session's batch.
-The Meta Arena displays each harness's batch status separately; its public endpoints return a `batches`
-array with `harness` and `harness_name` for the latest session. Manual Meta runs use the latest ready
-batch for their harness. Before server-side prompt injection, each packet is filtered to the run's
-snapshotted harness and the target's mode and direction. Later portfolio reassignments do not change
-the execution profile or harness used by an already queued run. Retries may use a different model or
-reasoning level within the original harness; a retry without matching harness evidence is rejected.
-Normal workers retain the same read-only tools and never receive an arena-wide data tool.
 
 Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It authenticates through
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Muse Code runs via `muse exec`
@@ -278,62 +176,22 @@ Runtime credentials are deployment-only: `MASSIVE_API_KEY` is passed to both the
 valuations and the worker for research, while the internal worker bearer token is generated in
 memory at startup.
 
-When upgrading an existing Arena database, migration `0006` intentionally aborts if historical cash
-positions exist. Back up the database and resolve those rows before deploying; the migration will
-not silently rewrite the experiment's history.
+### Upgrading to versioned experiments
 
-Migration `0007` preserves portfolios, allocations, prompts, agents, settings, evaluation history,
-price data, and MCP API keys. It removes only the obsolete local-password user table and replaces it
-with short-lived browser-session records; existing JWT browser sessions stop working immediately.
+Migration `0027` requires a database backup and a deployment cutover with old evaluator workers
+stopped or drained. It preserves ordinary portfolio IDs, decisions, schedules, prompts and evaluation
+history. Portfolios using model slug `gpt-5-6-sol` enter paused **v1**; newer portfolios enter enabled
+**v2**. All surviving previously archived records become usable. It permanently removes Meta
+portfolios, their decisions/runs, synthesis prompts, families and batches; ordinary source runs remain.
+It removes archive/cost/common-policy fields, backfills closing execution and permanent timing locks,
+and copies the configured closing queue offset to the new opening offset. Historical prompt revision
+references remain unknown (`null`); new claims record them. Duplicate agent execution profiles cause
+an explicit migration failure rather than silently merging audit identities.
 
-Migration `0015` clears cached Yahoo-originated price series once so they cannot mix with Massive
-total-return data. The background refresher repopulates the cache after startup.
-
-Migration `0016` installs the daily signal arena. It preserves managed allocation history and all
-evaluator audit records, resets only rebuilt v1 allocation history, removes stored benchmark
-portfolios, and marks existing rebuilt portfolios as the founding v2 cohort.
-
-Migration `0017` marks every existing portfolio as long, adds the required portfolio direction, and
-moves each prompt's current content into immutable version 1. It also adds prompt archive state; no
-prompt content is discarded.
-
-Migration `0018` replaces each version's single strategy text with Managed/Rebuilt/Both support and
-mode-specific texts. Existing versions are classified from their portfolios' current modes; text is
-copied into both fields only for prompts used by both modes or by no portfolio.
-
-Migration `0019` moves position-sizing limits from prompt versions into global Managed and Rebuilt
-settings, installs 10–25% and 10–100% defaults respectively, and updates both default evaluation
-wrappers without modifying strategy text or portfolio history.
-
-Migration `0020` adds Long/Short/Both support to immutable prompt versions, classifies every existing
-version as Long only, and moves the existing whole-book direction rules into editable Long and Short
-settings inserted through `{{direction_instructions}}`. It does not modify strategy text or portfolio
-history.
-
-Migration `0021` replaces each version's per-mode text with four Managed/Rebuilt × Long/Short cells.
-Existing Long and Short versions keep their text in the corresponding direction; Both versions copy
-their former text into both directions so every supported cell remains complete.
-
-Migration `0022` adds immutable prompt context scope, atomic Meta portfolio families, and frozen daily
-Meta batches. Every existing prompt is classified as a normal `portfolio` prompt; no strategy text,
-portfolio history, allocation, signal, or evaluator audit record is rewritten.
-
-Migration `0023` adds optional labels for comparable Meta portfolio variants without changing any
-existing family or member identity.
-
-Migration `0024` adds reversible Agent archive state and limits execution-profile uniqueness to active
-Agents, allowing a clean active replacement while an older profile remains available to history.
-
-Migration `0025` replaces the shared daily Meta batch with one batch per session and Agent. Existing
-batches are split by recorded execution and source identities, preserving run history, frozen
-snapshot contents, and snapshot hashes. This intermediate schema is superseded by migration `0026`.
-
-Migration `0026` replaces Agent batch ownership with one batch per session and harness. Recorded run
-harnesses take precedence over live profile assignments when consolidating existing cohorts and frozen
-source packets. Source notes, decisions, run identities, and run results are retained; merged packets
-receive recomputed counts and hashes. Waiting cohorts continue under their combined harness barrier.
-Active Confluence Astra/Spark family labels become Confluence Codex/Muse. This migration cannot be
-downgraded into independent Agent batches.
+Cached prices are cleared once so the refresher rebuilds both opening and closing history. Results
+are recomputed without transaction costs. The migration is destructive and cannot be downgraded;
+rollback requires restoring the backup. Historical migrations remain in the repository for upgrading
+older installations.
 
 ## Development
 
@@ -416,7 +274,6 @@ Web app:
 
 | Variable                        | Default          | Purpose                                                            |
 | ------------------------------- | ---------------- | ------------------------------------------------------------------ |
-| `ARENA_DEFAULT_COST_BPS`        | `10`             | Default cost bps for new portfolios                                |
 | `ARENA_DB_CONNECT_RETRIES`      | `30`             | Retries before failing startup                                     |
 | `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`            | Seconds between retries                                            |
 | `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`           | Seconds before a price refresh is due                              |
@@ -429,5 +286,5 @@ Web app:
 
 No broker integration, OpenAI Platform API execution, mixed long/short or market-neutral books,
 leverage, broker-native borrow availability, margin, borrow or financing fees, options/futures,
-intraday prices, cash positions, OpenCode automation, application-managed user accounts, external
-notifications, or historical backtesting.
+intraday quotes beyond opening/closing boundaries, cash positions, OpenCode automation,
+application-managed user accounts, external notifications, or historical backtesting.

@@ -3,8 +3,8 @@
 
   import type { BenchmarkArenaPortfolio, ManagedArenaPortfolio, ManagedArenaResponse } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
-  import { num, pct, pctPoints, pctSignClass } from "../format";
-  import { link } from "../stores/router.svelte";
+  import { fmtDate, num, pct, pctPoints, pctSignClass } from "../format";
+  import { link, versionHref } from "../stores/router.svelte";
   import EvidenceBadge from "./EvidenceBadge.svelte";
   import SelectField from "./ui/SelectField.svelte";
 
@@ -89,7 +89,7 @@
   }
 
   function detailHref(row: ManagedArenaPortfolio): string {
-    return portfolioAnalysisHref(row.slug, "managed", row.direction);
+    return portfolioAnalysisHref(row.slug, "managed", row.direction, row.version_id);
   }
 </script>
 
@@ -119,9 +119,12 @@
   <span class="badges">
     <span class="badge">{row.direction}</span>
     <EvidenceBadge state={row.evidence} compact />
-    {#if row.status === "archived"}<span class="badge">archived</span>{/if}
+    <span class="badge">{row.execution_boundary === "open" ? "Open" : "Close"}</span>
     {#if row.is_liquidated}
-      <span class="badge neg" title={row.liquidated_at ? `Liquidated ${row.liquidated_at}` : "Liquidated"}>
+      <span
+        class="badge neg"
+        title={row.liquidated_at ? `Liquidated ${fmtDate(row.liquidated_at)}` : "Liquidated"}
+      >
         liquidated
       </span>
     {/if}
@@ -204,13 +207,16 @@
             <td class="rank-col num">{row.rank ?? "—"}</td>
             <th class="portfolio-col" scope="row">{@render portfolioIdentity(row)}</th>
             <td>
-              <a href="/agent/{row.agent.slug}" onclick={(event) => link(event, `/agent/${row.agent.slug}`)}>
+              <a
+                href={versionHref(`/agent/${row.agent.slug}`)}
+                onclick={(event) => link(event, `/agent/${row.agent.slug}`)}
+              >
                 {row.agent.name}
               </a>
             </td>
             <td>
               <a
-                href="/prompt/{row.prompt.slug}"
+                href={versionHref(`/prompt/${row.prompt.slug}`)}
                 onclick={(event) => link(event, `/prompt/${row.prompt.slug}`)}
               >
                 {row.prompt.name}

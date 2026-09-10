@@ -1,10 +1,10 @@
 """Idempotent seeding of application settings on every start."""
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from .config import get_settings
-from .models import EvaluatorSettings, Setting
+from .models import ArenaVersion, EvaluatorSettings, Setting
 from .services.prompt_policy import (
     DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
@@ -12,7 +12,6 @@ from .services.prompt_policy import (
     DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
 )
 
-DEFAULT_COST_BPS_KEY = "default_cost_bps"
 MANAGED_WRAPPER_PROMPT_KEY = "managed_wrapper_prompt"
 REBUILT_WRAPPER_PROMPT_KEY = "rebuilt_wrapper_prompt"
 LONG_DIRECTION_INSTRUCTIONS_KEY = "long_direction_instructions"
@@ -25,7 +24,6 @@ REBUILT_MAX_POSITION_WEIGHT_PCT_KEY = "rebuilt_max_position_weight_pct"
 
 def seed_settings(session: Session) -> None:
     defaults = {
-        DEFAULT_COST_BPS_KEY: str(get_settings().default_cost_bps),
         MANAGED_WRAPPER_PROMPT_KEY: DEFAULT_MANAGED_WRAPPER_PROMPT,
         REBUILT_WRAPPER_PROMPT_KEY: DEFAULT_REBUILT_WRAPPER_PROMPT,
         LONG_DIRECTION_INSTRUCTIONS_KEY: DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
@@ -45,3 +43,6 @@ def seed_settings(session: Session) -> None:
 
 def run_seed(session: Session) -> None:
     seed_settings(session)
+    if session.scalar(select(ArenaVersion.id).limit(1)) is None:
+        session.add(ArenaVersion(name="v1", evaluation_enabled=False))
+        session.commit()

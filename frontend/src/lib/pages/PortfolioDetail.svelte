@@ -8,7 +8,6 @@
   import EvidenceBadge from "../components/EvidenceBadge.svelte";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
-  import PolicyMatrix from "../components/PolicyMatrix.svelte";
   import SignalHistory from "../components/SignalHistory.svelte";
   import SignalMatrix from "../components/SignalMatrix.svelte";
   import { parseDirection } from "../arena";
@@ -22,7 +21,7 @@
     pctPointsSignClass,
     pctSignClass,
   } from "../format";
-  import { link } from "../stores/router.svelte";
+  import { link, versionHref } from "../stores/router.svelte";
 
   interface Props {
     slug: string;
@@ -41,12 +40,6 @@
     }
 
     query.set("track", track);
-    if (track === "rebuilt") {
-      for (const key of ["view", "objective", "cost_basis", "horizon"]) {
-        const value = source.get(key);
-        if (value) query.set(key, value);
-      }
-    }
     return `/api/portfolios/${portfolioSlug}?${query.toString()}`;
   }
 
@@ -70,10 +63,10 @@
   function markersFor(data: PortfolioAnalysisResponse): string[] {
     if (data.track === "managed") {
       return data.portfolio.allocations
-        .map((allocation) => allocation.applied_date)
+        .map((allocation) => allocation.applied_at?.timestamp ?? null)
         .filter((date): date is string => date !== null);
     }
-    return data.portfolio.signals.map((signal) => signal.effective_date);
+    return data.portfolio.signals.map((signal) => signal.effective_at.timestamp);
   }
 
   async function copyPrompt(executionPrompt: string | null): Promise<void> {
@@ -112,11 +105,11 @@
         <details>
           <summary>
             <span class="disclosure-primary">
-              <strong class="num">{fmtDate(allocation.effective_date)}</strong>
+              <strong class="num">{fmtDate(allocation.effective_at)}</strong>
               <span>{allocationTitle(index, portfolio.allocations.length)}</span>
             </span>
             <span class="disclosure-meta">
-              {#if !allocation.applied_date}
+              {#if !allocation.applied_at}
                 Pending
               {:else if allocation.turnover_pct !== null}
                 {pctPoints(allocation.turnover_pct)} turnover
@@ -131,7 +124,7 @@
             <div class="table-scroll">
               <table class="data-table">
                 <caption class="visually-hidden">
-                  Positions for the allocation effective {fmtDate(allocation.effective_date)}
+                  Positions for the allocation effective {fmtDate(allocation.effective_at)}
                 </caption>
                 <thead><tr><th scope="col">Symbol</th><th scope="col" class="right">Weight</th></tr></thead>
                 <tbody>
@@ -163,39 +156,35 @@
     {@const portfolio = data.portfolio}
     {@const managedPortfolio = data.track === "managed" ? (data.portfolio as ManagedPortfolioDetail) : null}
     {@const rebuiltPortfolio = data.track === "rebuilt" ? (data.portfolio as RebuiltPortfolioDetail) : null}
-    {@const rebuiltContext = data.track === "rebuilt" ? data.context : null}
     {@const benchmarkName = portfolio.direction === "short" ? "Short SPY" : "SPY"}
-    {@const isMeta = portfolio.prompt.context_scope === "arena"}
-    {@const arenaHref = `${isMeta ? "/meta" : "/"}?direction=${portfolio.direction}`}
+    {@const arenaHref = `/?version=${portfolio.version_id}&direction=${portfolio.direction}&track=${portfolio.prompt_mode}`}
     {@const series = chartSeries(portfolio)}
     {@const markers = markersFor(data)}
     <article class="portfolio-detail">
       <header class="detail-head split">
         <div>
           <nav class="crumbs" aria-label="Breadcrumb">
-            <a href={arenaHref} onclick={(event) => link(event, arenaHref)}
-              >{isMeta ? "Meta Arena" : "Portfolio Arena"}</a
-            >
+            <a href={arenaHref} onclick={(event) => link(event, arenaHref)}>Portfolio Arena</a>
             <span aria-hidden="true">/</span>
             <span>{data.track === "rebuilt" ? "Rebuilt" : "Managed"}</span>
           </nav>
           <h1>{portfolio.name}</h1>
           <p class="identity">
             <a
-              href="/agent/{portfolio.agent.slug}"
+              href={versionHref(`/agent/${portfolio.agent.slug}`)}
               onclick={(event) => link(event, `/agent/${portfolio.agent.slug}`)}
             >
               {portfolio.agent.name}
             </a>
             · prompt
             <a
-              href="/prompt/{portfolio.prompt.slug}"
+              href={versionHref(`/prompt/${portfolio.prompt.slug}`)}
               onclick={(event) => link(event, `/prompt/${portfolio.prompt.slug}`)}
             >
               {portfolio.prompt.name}
             </a>
             · {portfolio.direction} · {data.track}
-            {#if data.as_of}· as of <span class="num">{data.as_of}</span>{/if}
+            {#if data.as_of}· as of <span class="num">{fmtDate(data.as_of)}</span>{/if}
           </p>
           {#if portfolio.execution_context_notice}
             <p class="context-notice">{portfolio.execution_context_notice}</p>
@@ -216,13 +205,9 @@
         <div class="head-badges">
           <span class="badge">{portfolio.direction}</span>
           <span class="badge">{data.track}</span>
+          <span class="badge">{portfolio.execution_boundary === "open" ? "Open" : "Close"}</span>
+          <span class="badge">{portfolio.version.name}</span>
           <EvidenceBadge state={portfolio.evidence} />
-          {#if portfolio.status === "archived"}<span class="badge">archived</span>{/if}
-          {#if rebuiltPortfolio && rebuiltContext?.view === "common" && !rebuiltPortfolio.common_admitted && rebuiltPortfolio.status === "active" && !rebuiltPortfolio.founding_v2 && !rebuiltPortfolio.error}
-            <span class="badge warn" title="Not yet admitted to the Common-policy meta-portfolio">
-              H20 incubation
-            </span>
-          {/if}
           {#if portfolio.stale_data}<span class="badge warn">stale data</span>{/if}
           {#if portfolio.frozen_symbols.length}
             <span class="badge neg">{portfolio.frozen_symbols.length} frozen</span>
@@ -233,7 +218,11 @@
         </div>
       </header>
 
-      <MarketDataWarning status={data.market_data_status} asOf={data.as_of} />
+      <MarketDataWarning
+        versionId={portfolio.version_id}
+        status={data.market_data_status}
+        asOf={data.as_of}
+      />
 
       {#if portfolio.error}
         <div class="error-box" role="alert">Analysis failed: {portfolio.error}</div>
@@ -259,43 +248,24 @@
         </div>
       {/if}
 
-      {#if rebuiltPortfolio && rebuiltContext}
-        <section class="policy-context" aria-label="Selected rebuilt policy">
+      {#if rebuiltPortfolio}
+        <section class="policy-context" aria-label="Selected holding horizon">
           <div>
-            <span>Analysis mode</span>
-            <strong
-              >{rebuiltContext.view === "common"
-                ? "Common policy"
-                : rebuiltContext.view === "tuned"
-                  ? "Portfolio tuned"
-                  : "Signal Alpha"}</strong
+            <span>Portfolio tuned</span><strong
+              >{rebuiltPortfolio.selected_policy
+                ? `H${rebuiltPortfolio.selected_policy.horizon}`
+                : "Pending evidence"}</strong
             >
           </div>
           <div>
-            <span>Aggregate book</span>
-            <strong class="num">
-              {rebuiltPortfolio.aggregate_policy
-                ? `H${rebuiltPortfolio.aggregate_policy.horizon} · ${pctPoints(rebuiltPortfolio.aggregate_policy.exposure_pct, 0)} exposure${rebuiltPortfolio.aggregate_policy.provisional ? " · provisional" : ""}`
-                : "Pending"}
-            </strong>
-          </div>
-          <div>
-            <span
-              >{rebuiltPortfolio.aggregate_policy
-                ? `H${rebuiltPortfolio.aggregate_policy.horizon}`
-                : "Selected H"} completed / open</span
-            >
-            <strong class="num"
+            <span>Completed / open signals</span><strong class="num"
               >{rebuiltPortfolio.completion.complete_count} / {rebuiltPortfolio.completion.open_count}</strong
             >
           </div>
           <div>
-            <span
-              >{rebuiltPortfolio.aggregate_policy
-                ? `H${rebuiltPortfolio.aggregate_policy.horizon}`
-                : "Selected H"} completion</span
+            <span>Completion</span><strong class="num"
+              >{pct(rebuiltPortfolio.completion.completion_ratio, 0)}</strong
             >
-            <strong class="num">{pct(rebuiltPortfolio.completion.completion_ratio, 0)}</strong>
           </div>
         </section>
       {/if}
@@ -323,7 +293,6 @@
           {@render metricTile("Max drawdown", pct(portfolio.metrics.max_drawdown))}
           {@render metricTile("Ann. volatility", pct(portfolio.metrics.ann_volatility))}
           {@render metricTile("Turnover", pctPoints(portfolio.metrics.turnover_pct, 0))}
-          {@render metricTile("Cost drag", pctPoints(portfolio.metrics.cost_drag_pct, 2))}
           {#if managedPortfolio}
             {@render metricTile(
               "ITD return",
@@ -339,7 +308,7 @@
           <p>
             {data.track === "rebuilt"
               ? "Daily signals will populate this policy as their holding periods complete."
-              : "The first allocation has not produced a valued close yet."}
+              : "The first allocation has not produced a valued market boundary yet."}
           </p>
         </div>
       {/if}
@@ -349,12 +318,13 @@
           <header class="section-head">
             <div>
               <h2>NAV vs {benchmarkName}</h2>
-              <p>Base 100, total return{rebuiltContext ? ` · ${rebuiltContext.cost_basis}` : ""}.</p>
+              <p>Base 100, total return.</p>
             </div>
           </header>
           <LineChart {series} {markers} ariaLabel="{portfolio.name} NAV versus {benchmarkName}" />
           <p class="chart-note">
-            Dotted vertical lines mark {data.track === "managed" ? "allocation" : "signal"} effective sessions.
+            Dotted vertical lines mark {data.track === "managed" ? "allocation" : "signal"} effective open or close
+            boundaries.
           </p>
         </section>
       {/if}
@@ -410,22 +380,15 @@
           </div>
         </section>
         {@render allocationHistory(managedPortfolio)}
-      {:else if rebuiltPortfolio && rebuiltContext}
+      {:else if rebuiltPortfolio}
         <section class="data-section" aria-labelledby="aggregate-holdings-title">
           <header class="section-head">
             <div>
               <h2 id="aggregate-holdings-title">Aggregate holdings</h2>
-              {#if rebuiltPortfolio.aggregate_policy?.provisional}
-                <p>
-                  Live H20 incubation book. Each active signal contributes 1/20 of the exposure; the remainder
-                  stays in {benchmarkName}.
-                </p>
-              {:else}
-                <p>
-                  Overlapping active {rebuiltPortfolio.direction} cohorts plus the unallocated
-                  {benchmarkName} sleeve.
-                </p>
-              {/if}
+              <p>
+                Overlapping active {rebuiltPortfolio.direction} cohorts plus the unallocated
+                {benchmarkName} sleeve.
+              </p>
             </div>
           </header>
           <div class="table-scroll">
@@ -450,10 +413,7 @@
           <header class="section-head">
             <div>
               <h2 id="active-cohorts-title">Active cohorts</h2>
-              <p>
-                Signals that are still contributing to the
-                {rebuiltPortfolio.aggregate_policy?.provisional ? "incubation" : "selected"} aggregate policy.
-              </p>
+              <p>Signals that are still contributing to the selected holding horizon.</p>
             </div>
             <span class="num">{rebuiltPortfolio.active_cohorts.length}</span>
           </header>
@@ -462,18 +422,18 @@
               <details>
                 <summary>
                   <span class="disclosure-primary">
-                    <strong class="num">{fmtDate(cohort.start_date)}</strong>
+                    <strong class="num">{fmtDate(cohort.start_at)}</strong>
                     <span>Signal #{cohort.signal_id}</span>
                   </span>
                   <span class="disclosure-meta">
-                    {cohort.age_sessions} sessions · ends {fmtDate(cohort.end_date)}
+                    {cohort.age_sessions} sessions · ends {fmtDate(cohort.end_at)}
                   </span>
                 </summary>
                 <div class="disclosure-body">
                   <div class="table-scroll">
                     <table class="data-table">
                       <caption class="visually-hidden">
-                        Positions for signal {cohort.signal_id}, effective {fmtDate(cohort.start_date)}
+                        Positions for signal {cohort.signal_id}, effective {fmtDate(cohort.start_at)}
                       </caption>
                       <thead
                         ><tr><th scope="col">Symbol</th><th scope="col" class="right">Signal weight</th></tr
@@ -503,13 +463,7 @@
           initialSignals={rebuiltPortfolio.signals}
           initialNextCursor={rebuiltPortfolio.signals_next_cursor}
         />
-        <SignalMatrix
-          rows={[rebuiltPortfolio]}
-          selectedHorizon={rebuiltContext.horizon ?? rebuiltPortfolio.selected_policy?.horizon ?? 1}
-          context={rebuiltContext}
-          {benchmarkName}
-        />
-        <PolicyMatrix cells={rebuiltPortfolio.policy_matrix} selected={rebuiltPortfolio.selected_policy} />
+        <SignalMatrix rows={[rebuiltPortfolio]} {benchmarkName} />
       {/if}
     </article>
   {:catch error}
@@ -558,7 +512,7 @@
 
   .policy-context {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 1px;
     background: var(--border-subtle);
   }
@@ -592,7 +546,7 @@
     display: grid;
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 1px;
-    background: var(--border-subtle);
+    background: var(--bg-base);
   }
 
   .metric {

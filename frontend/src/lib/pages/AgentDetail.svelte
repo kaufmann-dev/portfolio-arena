@@ -2,7 +2,7 @@
   import { apiJson } from "../api/client";
   import type { AgentOut, PortfolioRefOut } from "../api/types";
   import PortfolioRefTable from "../components/PortfolioRefTable.svelte";
-  import { link } from "../stores/router.svelte";
+  import { link, versionHref } from "../stores/router.svelte";
 
   interface Props {
     slug: string;
@@ -28,13 +28,12 @@
     <article class="detail-page">
       <header class="detail-head">
         <nav class="crumbs" aria-label="Breadcrumb">
-          <a href="/" onclick={(event) => link(event, "/")}>Leaderboard</a>
+          <a href={versionHref("/")} onclick={(event) => link(event, "/")}>Leaderboard</a>
           <span aria-hidden="true">/</span>
           <span>Agent</span>
         </nav>
         <h1>
           {data.agent.name}
-          {#if data.agent.status === "archived"}<span class="badge warn">archived</span>{/if}
         </h1>
         {#if data.agent.notes}
           <p class="muted notes">{data.agent.notes}</p>

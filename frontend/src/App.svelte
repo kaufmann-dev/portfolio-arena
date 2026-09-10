@@ -8,18 +8,16 @@
   import Admin from "./lib/pages/Admin.svelte";
   import AgentDetail from "./lib/pages/AgentDetail.svelte";
   import Leaderboard from "./lib/pages/Leaderboard.svelte";
-  import MetaArena from "./lib/pages/MetaArena.svelte";
   import PortfolioDetail from "./lib/pages/PortfolioDetail.svelte";
   import PromptDetail from "./lib/pages/PromptDetail.svelte";
   import { auth } from "./lib/stores/auth.svelte";
-  import { link, router } from "./lib/stores/router.svelte";
+  import { link, router, versionHref } from "./lib/stores/router.svelte";
   import { theme } from "./lib/stores/theme.svelte";
 
   const ACTIVITY_INTERVAL_MS = 5 * 60 * 1000;
   const ACTIVITY_EVENT_TYPES = new Set(["pointerdown", "keydown", "click"]);
   const navItems = [
     { href: "/", label: "Arena", route: "home" },
-    { href: "/meta", label: "Meta", route: "meta" },
     { href: "/about", label: "About", route: "about" },
     { href: "/admin", label: "Admin", route: "admin" },
   ] as const;
@@ -32,8 +30,6 @@
     switch (router.route.name) {
       case "home":
         return "Arena";
-      case "meta":
-        return "Meta Arena";
       case "portfolio":
         return `${router.route.params.slug} portfolio`;
       case "prompt":
@@ -92,7 +88,7 @@
   <div class="shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <a href="/" class="brand" onclick={(event) => link(event, "/")}>
+        <a href={versionHref("/")} class="brand" onclick={(event) => link(event, "/")}>
           <span class="brand-mark" aria-hidden="true"><Landmark size={19} strokeWidth={1.8} /></span>
           <span class="brand-name">Portfolio Arena</span>
         </a>
@@ -100,7 +96,7 @@
         <nav class="desktop-nav" aria-label="Main navigation">
           {#each navItems as item (item.href)}
             <a
-              href={item.href}
+              href={versionHref(item.href)}
               class={{ active: router.route.name === item.route }}
               aria-current={router.route.name === item.route ? "page" : undefined}
               onclick={(event) => link(event, item.href)}
@@ -212,7 +208,7 @@
                 <nav class="mobile-nav-links" aria-label="Mobile navigation">
                   {#each navItems as item (item.href)}
                     <a
-                      href={item.href}
+                      href={versionHref(item.href)}
                       class={{ active: router.route.name === item.route }}
                       aria-current={router.route.name === item.route ? "page" : undefined}
                       onclick={(event) => navigateFromMobile(event, item.href)}
@@ -248,12 +244,10 @@
 
     <div class="route-announcer" aria-live="polite" aria-atomic="true">{routeLabel}</div>
 
-    {#key pageTitle}
+    {#key `${pageTitle}:${router.navigation}`}
       <main id="main-content" tabindex="-1" {@attach focusRoute}>
         {#if router.route.name === "home"}
           <Leaderboard />
-        {:else if router.route.name === "meta"}
-          <MetaArena />
         {:else if router.route.name === "portfolio"}
           <PortfolioDetail slug={router.route.params.slug} />
         {:else if router.route.name === "prompt"}

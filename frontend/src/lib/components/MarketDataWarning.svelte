@@ -2,18 +2,19 @@
   import { onMount } from "svelte";
 
   import { apiJson } from "../api/client";
-  import type { MarketDataSnapshot, MarketDataStatus } from "../api/types";
+  import type { Boundary, MarketDataSnapshot, MarketDataStatus } from "../api/types";
   import { marketDataWarning } from "../marketData";
 
   interface Props {
     status: MarketDataStatus;
-    asOf: string | null;
+    asOf: Boundary | null;
+    versionId: number;
     onReady?: () => void | Promise<void>;
   }
 
-  const { status, asOf, onReady }: Props = $props();
+  const { status, asOf, versionId, onReady }: Props = $props();
   let liveStatus = $state<MarketDataStatus | null>(null);
-  let targetAsOf = $state<string | null>(null);
+  let targetAsOf = $state<Boundary | null>(null);
   const displayedStatus = $derived(liveStatus ?? status);
   const warning = $derived(marketDataWarning(displayedStatus, asOf, targetAsOf));
 
@@ -25,7 +26,7 @@
 
     async function poll(): Promise<void> {
       try {
-        const snapshot = await apiJson<MarketDataSnapshot>("/api/market-data");
+        const snapshot = await apiJson<MarketDataSnapshot>(`/api/market-data?version_id=${versionId}`);
         if (stopped) return;
         liveStatus = snapshot.market_data_status;
         targetAsOf = snapshot.target_as_of;

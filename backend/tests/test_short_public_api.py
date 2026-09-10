@@ -1,7 +1,6 @@
 """Direction isolation contracts for public arena and comparison endpoints."""
 
 import json
-from datetime import UTC, date, datetime, timedelta
 
 MCP_URL = "/mcp/"
 
@@ -55,6 +54,7 @@ def _create_portfolio(
         "/api/portfolios",
         json={
             "name": name,
+            "version_id": 1,
             "agent_id": sample_agent["id"],
             "prompt_id": prompt["id"],
             "prompt_mode": prompt_mode,
@@ -64,63 +64,6 @@ def _create_portfolio(
     )
     assert response.status_code == 201, response.text
     return response.json()
-
-
-def _trading_days(start: date, count: int) -> list[date]:
-    from app.services.trading_calendar import is_trading_day
-
-    days = []
-    day = start
-    while len(days) < count:
-        if is_trading_day(day):
-            days.append(day)
-        day += timedelta(days=1)
-    return days
-
-
-def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str) -> None:
-    from app.db import session_factory
-    from app.models import Signal, SignalPosition
-
-    with session_factory()() as session:
-        for index, effective_date in enumerate(effective_dates):
-            signal = Signal(
-                portfolio_id=portfolio_id,
-                entered_at=datetime.combine(
-                    effective_date - timedelta(days=1),
-                    datetime.min.time(),
-                    tzinfo=UTC,
-                ),
-                effective_date=effective_date,
-                note=f"signal {index}",
-                provenance="integrated",
-            )
-            signal.positions.append(
-                SignalPosition(
-                    symbol=symbol,
-                    weight_pct=100,
-                    note="private rationale",
-                )
-            )
-            session.add(signal)
-        session.commit()
-    from app.services.market_refresh import refresh_market_data_once
-
-    refresh_market_data_once()
-
-
-def _set_founding(*portfolio_ids: int) -> None:
-    from app.db import session_factory
-    from app.models import Portfolio
-
-    with session_factory()() as session:
-        for portfolio_id in portfolio_ids:
-            session.get(Portfolio, portfolio_id).founding_v2 = True
-        session.commit()
-
-
-def _portfolio_row(payload: dict, slug: str) -> dict:
-    return next(row for row in payload["portfolios"] if row["slug"] == slug)
 
 
 def _contestant_slugs(payload: dict) -> set[str]:
@@ -152,8 +95,8 @@ def test_managed_arenas_filter_directions_and_expose_direction_fields(
         direction="short",
     )
 
-    long_payload = client.get("/api/arena/managed?direction=long").json()
-    short_response = client.get("/api/arena/managed?direction=short")
+    long_payload = client.get("/api/arena/managed?version_id=1&direction=long").json()
+    short_response = client.get("/api/arena/managed?version_id=1&direction=short")
     assert short_response.status_code == 200, short_response.text
     short_payload = short_response.json()
 
@@ -223,6 +166,7 @@ def test_compare_rejects_a_portfolio_from_the_other_direction(
     response = client.get(
         "/api/compare",
         params={
+            "version_id": 1,
             "track": "managed",
             "direction": "long",
             "slugs": f"{long['slug']},{short['slug']}",
@@ -230,8 +174,7 @@ def test_compare_rejects_a_portfolio_from_the_other_direction(
     )
 
     assert response.status_code == 422
-    assert short["slug"] in response.json()["detail"]
-    assert "other direction" in response.json()["detail"]
+    assert "track and direction" in response.json()["detail"]
 
 
 def test_mcp_arena_reads_filter_short_rows_and_use_short_benchmarks(
@@ -259,7 +202,7 @@ def test_mcp_arena_reads_filter_short_rows_and_use_short_benchmarks(
         client,
         mcp_headers,
         "get_arena_overview",
-        {"direction": "short"},
+        {"version_id": 1, "direction": "short"},
     )
 
     assert overview["direction"] == "short"
@@ -274,77 +217,8 @@ def test_mcp_arena_reads_filter_short_rows_and_use_short_benchmarks(
         client,
         mcp_headers,
         "get_rebuilt_analysis",
-        {"direction": "short"},
+        {"version_id": 1, "direction": "short"},
     )
     assert rebuilt["direction"] == "short"
     assert rebuilt["portfolios"][0]["name"] == "Short SPY"
     assert _contestant_slugs(rebuilt) == {portfolios[("rebuilt", "short")]["slug"]}
-
-
-def test_short_rebuilt_common_is_isolated_and_requires_horizon_twenty(
-    client,
-    admin_headers,
-    sample_agent,
-):
-    from .util import past_trading_day
-
-    prompt = _create_prompt(client, admin_headers, "Direction Rebuilt")
-    long = _create_portfolio(
-        client,
-        admin_headers,
-        sample_agent,
-        prompt,
-        name="Founding Long Rebuilt",
-        prompt_mode="rebuilt",
-        direction="long",
-    )
-    short = _create_portfolio(
-        client,
-        admin_headers,
-        sample_agent,
-        prompt,
-        name="Founding Short Rebuilt",
-        prompt_mode="rebuilt",
-        direction="short",
-    )
-    _set_founding(long["id"], short["id"])
-    recent_dates = _trading_days(past_trading_day(14), 5)
-    _insert_signals(long["id"], recent_dates, "AAPL")
-    _insert_signals(short["id"], recent_dates, "MSFT")
-
-    short_signal_response = client.get(
-        "/api/arena/rebuilt",
-        params={
-            "direction": "short",
-            "view": "signal",
-            "horizon": 1,
-            "cost_basis": "gross",
-        },
-    )
-    assert short_signal_response.status_code == 200, short_signal_response.text
-    short_signal = short_signal_response.json()
-    short_signal_row = _portfolio_row(short_signal, short["slug"])
-    assert short_signal_row["metrics"]["eligible"] is True
-    assert short_signal_row["direction"] == "short"
-    assert short_signal["portfolios"][0]["name"] == "Short SPY"
-    assert short_signal["portfolios"][0]["direction"] == "short"
-
-    long_common_response = client.get("/api/arena/rebuilt?direction=long")
-    short_common_response = client.get("/api/arena/rebuilt?direction=short")
-    assert long_common_response.status_code == 200, long_common_response.text
-    assert short_common_response.status_code == 200, short_common_response.text
-    long_common = long_common_response.json()
-    short_common = short_common_response.json()
-
-    assert _contestant_slugs(long_common) == {long["slug"]}
-    assert _contestant_slugs(short_common) == {short["slug"]}
-    assert long_common["common_policy"] is not None
-    assert _portfolio_row(long_common, long["slug"])["common_admitted"] is True
-
-    short_common_row = _portfolio_row(short_common, short["slug"])
-    assert short_common["common_policy"] is None
-    assert short_common_row["founding_v2"] is True
-    assert short_common_row["common_admitted"] is False
-    assert short_common_row["selected_policy"] is None
-    assert short_common_row["direction"] == "short"
-    assert short_common["portfolios"][0]["name"] == "Short SPY"

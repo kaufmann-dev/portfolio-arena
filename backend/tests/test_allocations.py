@@ -21,6 +21,7 @@ class TestCreation:
         created = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Empty Weekly",
                 "agent_id": sample_agent["id"],
                 "prompt_id": sample_prompt["id"],
@@ -34,7 +35,7 @@ class TestCreation:
         assert "allocation" not in portfolio
 
         # It shows up in the managed arena with no track record yet.
-        rows = client.get("/api/arena/managed?direction=long").json()["portfolios"]
+        rows = client.get("/api/arena/managed?version_id=1&direction=long").json()["portfolios"]
         row = next(p for p in rows if p["id"] == portfolio["id"])
         assert row["allocation_count"] == 0
         assert row["metrics"]["has_data"] is False
@@ -50,13 +51,10 @@ class TestCreation:
 
     def test_portfolio_with_first_allocation(self, sample_portfolio):
         allocation = sample_portfolio["allocation"]
-        assert allocation["effective_date"] >= datetime.now(UTC).date().isoformat()
+        assert allocation["effective_at"]["timestamp"][:10] >= datetime.now(UTC).date().isoformat()
         assert not allocation["locked"]
         assert {position["symbol"] for position in allocation["positions"]} == {"AAPL", "MSFT"}
         assert all("instrument" not in position for position in allocation["positions"])
-
-    def test_default_cost_bps_from_settings(self, sample_portfolio):
-        assert sample_portfolio["cost_bps"] == 10
 
     def test_weights_must_sum_to_100(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(
@@ -173,6 +171,7 @@ class TestCreation:
         portfolio = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Policy Test",
                 "agent_id": sample_agent["id"],
                 "prompt_id": prompt["id"],
@@ -218,6 +217,7 @@ class TestCreation:
             response = client.post(
                 "/api/portfolios",
                 json={
+                    "version_id": 1,
                     "name": name,
                     "agent_id": sample_agent["id"],
                     "prompt_id": prompt["id"],
@@ -270,22 +270,6 @@ class TestCreation:
         assert response.status_code == 409
         assert "edit it instead" in response.json()["detail"]
 
-    def test_archived_portfolio_rejects_allocations(
-        self, client, admin_headers, sample_portfolio, sample_prompt
-    ):
-        backdate_allocation(sample_portfolio["allocation"]["id"])
-        client.patch(
-            f"/api/portfolios/{sample_portfolio['id']}",
-            json={"status": "archived"},
-            headers=admin_headers,
-        )
-        response = client.post(
-            f"/api/portfolios/{sample_portfolio['id']}/allocations",
-            json=make_allocation_body(),
-            headers=admin_headers,
-        )
-        assert response.status_code == 409
-
 
 class TestLockEnforcement:
     def test_unlocked_positions_editable(self, client, admin_headers, sample_portfolio):
@@ -336,7 +320,7 @@ class TestLockEnforcement:
         )
         assert response.status_code == 200, response.text
 
-        rows = client.get("/api/arena/managed?direction=long").json()["portfolios"]
+        rows = client.get("/api/arena/managed?version_id=1&direction=long").json()["portfolios"]
         portfolio = next(row for row in rows if row["id"] == sample_portfolio["id"])
         spy = next(row for row in rows if row["kind"] == "benchmark")
         assert portfolio["allocation_count"] == 0
@@ -378,7 +362,9 @@ class TestSymbolEndpoint:
     def test_requires_admin(self, client):
         assert client.get("/api/symbols/AAPL").status_code == 401
 
-    def test_effective_date_preview(self, client, admin_headers):
-        response = client.get("/api/effective-date", headers=admin_headers)
+    def test_effective_date_preview(self, client, admin_headers, sample_portfolio):
+        response = client.get(
+            f"/api/effective-date?portfolio_id={sample_portfolio['id']}", headers=admin_headers
+        )
         assert response.status_code == 200
-        assert response.json()["effective_date"] >= datetime.now(UTC).date().isoformat()
+        assert response.json()["effective_at"]["timestamp"][:10] >= datetime.now(UTC).date().isoformat()

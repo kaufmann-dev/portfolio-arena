@@ -19,7 +19,7 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
 ## Project Structure
 
 - `backend/app/services/valuation.py` is the deterministic correctness core: pure functions,
-  no wall-clock reads (callers pass every date), same inputs → identical output. NAVs are
+  no wall-clock reads (callers pass every boundary), same inputs → identical output. NAVs are
   never stored; every request recomputes from allocations + cached price series. Keep it pure.
 - API routers: `backend/app/api/public.py` (read-only, no auth, rate-limited),
   `backend/app/api/admin.py` (writes, guarded by `Depends(require_admin)`), `auth.py`,
@@ -40,10 +40,17 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   control evaluator settings and actions but never execute worker leases.
 - MCP server: `backend/app/mcp_server/` (FastMCP, mounted at `/mcp` in `main.py`). It exposes
   the operational app surface as API-key-authenticated tools (`Authorization: Bearer <key>` or
-  `X-API-Key`, no anonymous access). API-key management and archived prompt content, version
-  history, unarchive, and restore remain browser-admin-only. MCP may archive an active unused
-  prompt. Other tools serialize with `admin=True` since the endpoint is key-gated. Keys are stored
+  `X-API-Key`, no anonymous access). API-key management and prompt revision history/restore
+  remain browser-admin-only. Unused prompts may be deleted unless a recorded run references a revision.
+  Other tools serialize with `admin=True` since the endpoint is key-gated. Keys are stored
   as SHA-256 hashes in the `api_keys` table (`security.py` helpers).
+
+- `ArenaVersion` scopes comparisons and independently gates evaluation. Visibility and price refresh
+  do not depend on evaluation being enabled. Portfolios have an open/close execution boundary that
+  locks permanently at the first decision. API market boundaries are `{timestamp, phase}` values;
+  NAV points add `nav`. Keep ordinary audit timestamps as strings.
+- Rebuilt analytics use forty half-session horizons H0.5–H20 at 100% exposure with per-portfolio
+  tuning. There are no Meta, archive, transaction-cost, common-policy or alternate-objective paths.
 
 ## Database and Migrations
 
