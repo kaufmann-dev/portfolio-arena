@@ -81,7 +81,9 @@ The project measures cost-free paper performance for research.
   information ratio, Sharpe, mean daily alpha, or hit rate, breaking ties toward the shorter horizon.
   Column sorting only changes row order. The objective is preserved in the URL, comparisons, and
   portfolio details. The Signal Alpha matrix shows all forty horizons alongside rankings
-  and in portfolio details. Evidence remains pending until minimum sample requirements are met.
+  and in portfolio details. Cell backgrounds show alpha sign (red negative, green positive), with
+  intensity scaled by absolute mean daily alpha across all displayed rows and horizons; zero is neutral.
+  Evidence remains pending until minimum sample requirements are met.
 - **Statistics use full sessions.** Daily observations end at the latest published phase, using
   open-to-open or close-to-close returns and 252-session annualization. An incomplete initial
   interval contributes to total return but not inference. HAC lag is `ceil(H) - 1` and the
