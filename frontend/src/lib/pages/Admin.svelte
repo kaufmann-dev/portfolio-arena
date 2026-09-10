@@ -406,11 +406,12 @@
     const portfolioSlug = detail.slug;
     requestConfirmation({
       title: "Delete allocation?",
-      description: `The allocation effective ${fmtDate(allocation.effective_at)} will be permanently removed.`,
+      description: `The allocation effective ${fmtDate(allocation.effective_at)} and its evaluation record will be permanently removed. Performance will be recalculated from the remaining history.`,
       confirmLabel: "Delete allocation",
       action: async () => {
         try {
           await del(`/api/allocations/${allocation.id}`);
+          if (editingAllocation?.id === allocation.id) editingAllocation = null;
           flash("Allocation deleted.");
           await loadDetail(portfolioSlug);
           await loadAll();
@@ -445,11 +446,12 @@
     const portfolioSlug = detail.slug;
     requestConfirmation({
       title: "Delete signal?",
-      description: `The pending signal effective ${fmtDate(signal.effective_at)} will be permanently removed.`,
+      description: `The signal effective ${fmtDate(signal.effective_at)} and its evaluation record will be permanently removed. Performance will be recalculated from the remaining history.`,
       confirmLabel: "Delete signal",
       action: async () => {
         try {
           await del(`/api/signals/${signal.id}`);
+          if (editingSignal?.id === signal.id) editingSignal = null;
           flash("Signal deleted.");
           await loadDetail(portfolioSlug);
           await loadAll();
@@ -470,8 +472,8 @@
       title: `Reset ${portfolio.name}?`,
       description:
         `This permanently deletes its ${historyLabel}, all current holdings, and the complete ` +
-        "performance history. Queued or running evaluations will be cancelled, but the evaluator " +
-        "schedule settings will be preserved.",
+        "performance and evaluation history, including reports. Any running evaluation will stop. " +
+        "Portfolio settings and its evaluator schedule will be preserved.",
       confirmLabel: "Reset portfolio",
       action: async () => {
         try {
@@ -486,7 +488,9 @@
             portfolio.prompt_mode === "managed" ? result.deleted_allocations : result.deleted_signals;
           const noun = portfolio.prompt_mode === "managed" ? "allocation" : "signal";
           const deletedLabel = `${deletedCount} ${noun}${deletedCount === 1 ? "" : "s"}`;
-          flash(`Portfolio ${portfolio.name} reset; ${deletedLabel} deleted.`);
+          flash(
+            `Portfolio ${portfolio.name} reset; ${deletedLabel} and ${result.deleted_evaluation_runs} evaluation runs deleted.`,
+          );
           return true;
         } catch (e) {
           flash(e instanceof Error ? e.message : "Reset failed");
@@ -1475,11 +1479,9 @@
                               >Edit</button
                             >
                           {/if}
-                          {#if !allocation.locked && !managedDetail.is_liquidated}
-                            <button class="btn small danger" onclick={() => deleteAllocation(allocation)}>
-                              Delete
-                            </button>
-                          {/if}
+                          <button class="btn small danger" onclick={() => deleteAllocation(allocation)}>
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     {:else}
@@ -1628,10 +1630,9 @@
                         <td class="right actions">
                           {#if !signal.locked}
                             <button class="btn small" onclick={() => (editingSignal = signal)}>Edit</button>
-                            <button class="btn small danger" onclick={() => deleteSignal(signal)}
-                              >Delete</button
-                            >
                           {/if}
+                          <button class="btn small danger" onclick={() => deleteSignal(signal)}>Delete</button
+                          >
                         </td>
                       </tr>
                     {:else}
@@ -1687,7 +1688,17 @@
 
     <Tabs.Content value="automation" class="tab-panel">
       {#if tab === "automation"}
-        {#if versionId !== null}{#key versionId}<AutomationPanel {versionId} />{/key}{/if}
+        {#if versionId !== null}{#key versionId}<AutomationPanel
+              {versionId}
+              onHistoryChange={async () => {
+                await loadAll();
+                if (selectedSlug) {
+                  editingAllocation = null;
+                  editingSignal = null;
+                  await loadDetail(selectedSlug);
+                }
+              }}
+            />{/key}{/if}
       {/if}
     </Tabs.Content>
 

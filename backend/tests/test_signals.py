@@ -87,7 +87,7 @@ def test_managed_portfolio_rejects_signals(client, admin_headers, sample_portfol
     assert response.status_code == 409
 
 
-def test_effective_signal_is_completely_immutable(
+def test_effective_signal_cannot_be_edited_but_can_be_deleted(
     sample_agent,
     sample_prompt,
     client,
@@ -113,8 +113,7 @@ def test_effective_signal_is_completely_immutable(
                 note="must not change",
                 now=locked_at,
             )
-        with pytest.raises(AdminOpError, match="immutable"):
-            admin_ops.delete_signal(session, created["id"], now=locked_at)
+        assert admin_ops.delete_signal(session, created["id"]) == {"ok": True}
 
 
 def test_signal_reset_enables_mode_change_and_preserves_mode_separation(
@@ -202,26 +201,7 @@ def test_evaluation_work_requires_reset_before_mode_change(
         headers=admin_headers,
     )
     assert reset.status_code == 200, reset.text
-    if claim_run:
-        assert reset.json()["cancellation_requested_runs"] == 1
-        still_blocked = client.patch(
-            f"/api/portfolios/{portfolio['id']}",
-            headers=admin_headers,
-            json={"prompt_mode": "managed"},
-        )
-        assert still_blocked.status_code == 409
-        with session_factory()() as session:
-            evaluator.fail_run(
-                session,
-                run_id=run_id,
-                error="Cancelled after the portfolio reset.",
-                cancelled=True,
-                now=now,
-            )
-        expected_status = "cancelled"
-    else:
-        assert reset.json()["cancelled_queued_runs"] == 1
-        expected_status = "cancelled"
+    assert reset.json()["deleted_evaluation_runs"] == 1
 
     changed = client.patch(
         f"/api/portfolios/{portfolio['id']}",
@@ -230,7 +210,7 @@ def test_evaluation_work_requires_reset_before_mode_change(
     )
     assert changed.status_code == 200, changed.text
     with session_factory()() as session:
-        assert session.get(EvaluationRun, run_id).status == expected_status
+        assert session.get(EvaluationRun, run_id) is None
 
 
 def test_rebuilt_evaluator_forces_daily_schedule_and_routes_manual_result_to_signal(

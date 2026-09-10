@@ -51,10 +51,15 @@ The project measures cost-free paper performance for research.
   evaluations retain their scheduled session and boundary even if they finish late. NYSE holidays,
   daylight-saving changes and early closes are respected. Pending decisions can be corrected;
   decisions lock at their effective boundary. Managed allocation notes remain editable afterward.
-- **Portfolio resets preserve identity.** Reset removes the track's decisions, cancels queued work
-  and requests cancellation of running attempts, preserving schedules, timing lock and audit rows.
-  Track/direction changes require empty history and no live evaluations. Deleting a portfolio
-  removes its decisions, schedule and evaluation runs.
+- **Portfolio resets clear all history.** Reset permanently removes all allocations, signals and
+  evaluation runs, including reports, and stops active attempts. Identity, agent assignment,
+  schedules and timing lock remain. A former agent can be deleted once no portfolios or remaining
+  runs reference it. Track/direction changes require empty history and no live evaluations.
+  Deleting a portfolio also removes its schedule.
+- **Individual evaluations can be removed.** Delete an evaluation from Automation, or an allocation
+  or signal from Portfolio state, including locked decisions. The decision and its associated run
+  are deleted together; performance is recalculated from the remaining history. Later evaluations
+  remain intact. Deleted running evaluations cannot submit results afterward.
 - **Prompts are shared live strategies.** A prompt supports Managed/Rebuilt/Both and Long/Short/Both
   with text for each supported combination. Edits apply to every referencing version and append
   an immutable prompt revision. Workers record the revision used when claiming a run. Restoring
@@ -116,6 +121,9 @@ shown once and only SHA-256 hashes are stored.
 - Settings tools manage allocation policies, wrappers and direction instructions. Evaluator tools
   mirror dashboard, scheduling, queue, cancellation and retry controls. Inventory, dashboard and
   run history support optional version filters.
+- `delete_evaluation_run(run_id)` removes one run and its result. `delete_allocation(allocation_id)`
+  and `delete_signal(signal_id)` also remove the associated run, including for locked decisions.
+  `reset_portfolio(portfolio_id)` clears all decisions and runs for that portfolio.
 - Internal worker credentials can access only the small read-only portfolio research tool surface;
   queue claims and atomic submissions use private deployment routes.
 

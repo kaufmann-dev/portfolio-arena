@@ -605,6 +605,7 @@ def enqueue_manual_runs(
 
 def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> dict:
     current_time = now or datetime.now(UTC)
+    settings = get_settings(session, lock=True)
     source = _load_run(session, run_id)
     if source.status != "failed":
         raise AdminOpError(409, "Only failed evaluation runs can be retried")
@@ -613,7 +614,6 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
             409,
             "Reset this liquidated short portfolio before retrying evaluation.",
         )
-    settings = get_settings(session, lock=True)
     if not settings.enabled:
         raise AdminOpError(409, "The evaluator is paused")
     config = session.get(PortfolioEvaluatorConfig, source.portfolio_id)
@@ -634,6 +634,22 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
     session.add(run)
     session.commit()
     return {"action": "queued", "run": run_out(_load_run(session, run.id))}
+
+
+def delete_run(session: Session, *, run_id: int) -> dict:
+    """Permanently remove one run and its decision, including a locked result."""
+    portfolio_id = session.scalar(select(EvaluationRun.portfolio_id).where(EvaluationRun.id == run_id))
+    if portfolio_id is None:
+        raise AdminOpError(404, "Evaluation run not found")
+    admin_ops._lock_portfolio_lifecycle(session, portfolio_id)
+    run = _load_run(session, run_id)
+    result = run.allocation if run.allocation_id is not None else run.signal
+    session.delete(run)
+    session.flush()
+    if result is not None:
+        session.delete(result)
+    session.commit()
+    return {"ok": True}
 
 
 def cancel_run(session: Session, *, run_id: int, now: datetime | None = None) -> dict:

@@ -50,8 +50,7 @@ def test_reset_removes_locked_and_pending_history_and_allows_fresh_start(
         "ok": True,
         "deleted_allocations": 2,
         "deleted_signals": 0,
-        "cancelled_queued_runs": 0,
-        "cancellation_requested_runs": 0,
+        "deleted_evaluation_runs": 0,
     }
     detail = client.get(
         f"/api/portfolios/{sample_portfolio['id']}/detail",
@@ -94,7 +93,7 @@ def test_reset_is_idempotent_admin_only_and_rejects_missing_portfolio(
     assert client.post("/api/portfolios/999999/reset", headers=admin_headers).status_code == 404
 
 
-def test_reset_keeps_automation_enabled_and_cancels_queued_work(
+def test_reset_keeps_automation_enabled_and_deletes_queued_work(
     client,
     admin_headers,
     sample_portfolio,
@@ -118,14 +117,13 @@ def test_reset_keeps_automation_enabled_and_cancels_queued_work(
         headers=admin_headers,
     )
     assert response.status_code == 200, response.text
-    assert response.json()["cancelled_queued_runs"] == 1
+    assert response.json()["deleted_evaluation_runs"] == 1
 
     with session_factory()() as session:
         config = session.get(PortfolioEvaluatorConfig, sample_portfolio["id"])
         run = session.get(EvaluationRun, run_id)
         assert config.enabled is True
-        assert run.status == "cancelled"
-        assert run.error == "Cancelled because the portfolio was reset."
+        assert run is None
 
 
 def test_reset_stops_running_submission_from_recreating_an_allocation(
@@ -160,10 +158,10 @@ def test_reset_stops_running_submission_from_recreating_an_allocation(
         headers=admin_headers,
     )
     assert response.status_code == 200, response.text
-    assert response.json()["cancellation_requested_runs"] == 1
+    assert response.json()["deleted_evaluation_runs"] == 1
 
     with session_factory()() as session:
-        with pytest.raises(AdminOpError, match="cancelled"):
+        with pytest.raises(AdminOpError, match="not found"):
             evaluator.submit_run(
                 session,
                 run_id=run_id,
@@ -172,14 +170,14 @@ def test_reset_stops_running_submission_from_recreating_an_allocation(
                 report="must not land",
                 now=now + timedelta(minutes=5),
             )
-        assert session.get(EvaluationRun, run_id).status == "cancelled"
+        assert session.get(EvaluationRun, run_id) is None
         assert (
             session.scalars(select(Allocation).where(Allocation.portfolio_id == sample_portfolio["id"])).all()
             == []
         )
 
 
-def test_reset_preserves_succeeded_run_audit_with_empty_allocation_link(
+def test_reset_deletes_succeeded_run_and_report(
     client,
     admin_headers,
     sample_portfolio,
@@ -223,6 +221,5 @@ def test_reset_preserves_succeeded_run_audit_with_empty_allocation_link(
 
     with session_factory()() as session:
         run = session.get(EvaluationRun, run_id)
-        assert run.status == "succeeded"
-        assert run.allocation_id is None
-        assert run.report == "audit report"
+        assert run is None
+    assert response.json()["deleted_evaluation_runs"] == 1

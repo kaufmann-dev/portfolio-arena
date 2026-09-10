@@ -122,8 +122,7 @@ export interface PortfolioResetResult {
   ok: true;
   deleted_allocations: number;
   deleted_signals: number;
-  cancelled_queued_runs: number;
-  cancellation_requested_runs: number;
+  deleted_evaluation_runs: number;
 }
 
 export interface AdminPortfolio extends Ref {

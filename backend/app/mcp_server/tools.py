@@ -570,8 +570,8 @@ def delete_portfolio(portfolio_id: int) -> dict:
 
 @mcp.tool()
 def reset_portfolio(portfolio_id: int) -> dict:
-    """Delete the portfolio's mode-specific managed allocations or rebuilt
-    signals. Identity, evaluator configuration, and evaluator audit remain."""
+    """Permanently delete all allocations, signals, and evaluation runs, stopping active work.
+    Portfolio identity, agent assignment, timing, and evaluator configuration remain."""
     with _session() as session:
         return _guard(admin_ops.reset_portfolio, session, portfolio_id)
 
@@ -603,7 +603,8 @@ def update_allocation(
 
 @mcp.tool()
 def delete_allocation(allocation_id: int) -> dict:
-    """Delete a pending (unlocked) allocation. Locked allocations cannot be deleted."""
+    """Permanently delete an allocation and its evaluation run, even after its effective boundary.
+    Portfolio performance is recalculated from the remaining history."""
     with _session() as session:
         return _guard(admin_ops.delete_allocation, session, allocation_id)
 
@@ -633,7 +634,7 @@ def update_signal(
     positions: list[PositionIn] | None = None,
     note: str | None = None,
 ) -> dict:
-    """Edit a pending rebuilt signal. A signal is wholly immutable after its
+    """Edit a pending rebuilt signal. A signal cannot be edited after its
     effective boundary."""
     with _session() as session:
         pos = _positions(positions) if positions is not None else None
@@ -642,7 +643,8 @@ def update_signal(
 
 @mcp.tool()
 def delete_signal(signal_id: int) -> dict:
-    """Delete a pending rebuilt signal. Locked signals cannot be deleted."""
+    """Permanently delete a rebuilt signal and its evaluation run, even after its effective boundary.
+    Portfolio performance is recalculated from the remaining history."""
     with _session() as session:
         return _guard(admin_ops.delete_signal, session, signal_id)
 
@@ -712,6 +714,14 @@ def cancel_evaluation_run(run_id: int) -> dict:
     """Cancel queued work or request cancellation of a running Codex process."""
     with _session() as session:
         return _guard(evaluator.cancel_run, session, run_id=run_id)
+
+
+@mcp.tool()
+def delete_evaluation_run(run_id: int) -> dict:
+    """Permanently delete one evaluation, its report and its allocation or signal.
+    Active work stops; later evaluations remain. Use list_evaluation_runs to find the run ID."""
+    with _session() as session:
+        return _guard(evaluator.delete_run, session, run_id=run_id)
 
 
 @mcp.tool()
