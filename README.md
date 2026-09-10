@@ -72,8 +72,10 @@ The project measures cost-free paper performance for research.
   exposure. One half-step advances to the next open/close: morning H0.5 expires that close, morning
   H1 at the next open; evening H0.5 at the next open and evening H1 at the next close. Each daily
   cohort gets `1 / ceil(H)` of the book; unused capacity stays in direction-matched SPY.
-  Select the horizon with the largest search-adjusted lower 95% confidence bound, breaking ties
-  toward the shorter horizon. The Signal Alpha matrix shows all forty horizons alongside rankings
+  “Optimize horizon by” selects each portfolio’s best horizon using adjusted lower 95% (default),
+  information ratio, Sharpe, mean daily alpha, or hit rate, breaking ties toward the shorter horizon.
+  Column sorting only changes row order. The objective is preserved in the URL, comparisons, and
+  portfolio details. The Signal Alpha matrix shows all forty horizons alongside rankings
   and in portfolio details. Evidence remains pending until minimum sample requirements are met.
 - **Statistics use full sessions.** Daily observations end at the latest published phase, using
   open-to-open or close-to-close returns and 252-session annualization. An incomplete initial
@@ -107,7 +109,8 @@ shown once and only SHA-256 hashes are stored.
   execution boundary and next effective boundary. `get_effective_date(portfolio_id)` previews
   manual timing. `create_allocation` submits Managed decisions; `create_signal` submits Rebuilt.
 - `get_arena_overview(direction, version_id)` and `get_rebuilt_analysis(direction, version_id)`
-  return scoped results. Rebuilt analysis includes the forty-column signal matrix.
+  return scoped results. Both accept optional `objective`: `ci_lower` (default), `information_ratio`,
+  `sharpe`, `mean_daily_alpha`, or `hit_rate`. Rebuilt analysis includes the forty-column signal matrix.
 - Model, agent, prompt and portfolio tools expose administration with reference-aware deletion.
   Prompt revision history/restore and API-key management remain browser-only.
 - Settings tools manage allocation policies, wrappers and direction instructions. Evaluator tools

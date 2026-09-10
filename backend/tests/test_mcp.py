@@ -325,8 +325,11 @@ class TestMcpTools:
             {
                 "version_id": 1,
                 "direction": "long",
+                "objective": "sharpe",
             },
         )
+        assert analysis["objective"] == "sharpe"
+        assert analysis["portfolios"][1]["optimization_objective"] == "sharpe"
         assert len(analysis["portfolios"][1]["signal_horizons"]) == 40
         assert analysis["portfolios"][0]["kind"] == "benchmark"
 

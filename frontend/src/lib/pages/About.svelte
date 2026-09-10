@@ -80,9 +80,11 @@
         </div>
         <h2>Portfolio tuned comparison</h2>
         <p>
-          The rebuilt Arena selects the horizon with the highest search-adjusted lower 95% confidence bound on
-          portfolio alpha. Ties choose the shorter horizon. The Signal Alpha matrix shows direct signal
-          evidence for all 40 horizons, with each portfolio’s selected horizon highlighted.
+          “Optimize horizon by” selects each portfolio’s horizon using Adjusted lower 95% (the default),
+          Information ratio, Sharpe, Mean daily alpha, or Hit rate. Ties choose the shorter eligible horizon.
+          Column sorting only changes row order. Comparisons and portfolio details use the chosen objective.
+          The Signal Alpha matrix shows direct signal evidence for all 40 horizons, with each portfolio’s
+          selected horizon highlighted.
         </p>
         <p>
           Long and short portfolios are ranked separately. Long results compare with buy-and-hold SPY; short

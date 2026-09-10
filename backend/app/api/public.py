@@ -16,6 +16,7 @@ from ..services.arena import compute_rebuilt_arena, compute_valuations, load_por
 from ..services.market_refresh import market_snapshot
 from ..services.model_catalog import agent_out
 from ..services.prompt_policy import allocation_policies_out, allocation_policy_out
+from ..services.rebuilt import HorizonObjective
 from ..services.serialize import (
     rank_rows,
     serialize_detail,
@@ -115,7 +116,11 @@ def managed_arena(
 @router.get("/arena/rebuilt")
 @limiter.limit("30/minute")
 def rebuilt_arena(
-    request: Request, version_id: int, direction: Direction, session: Session = Depends(get_session)
+    request: Request,
+    version_id: int,
+    direction: Direction,
+    objective: HorizonObjective = "ci_lower",
+    session: Session = Depends(get_session),
 ):
     _version(session, version_id)
     portfolios = [
@@ -123,7 +128,7 @@ def rebuilt_arena(
         for portfolio in load_portfolios(session, version_id)
         if portfolio.prompt_mode == "rebuilt" and portfolio.direction == direction
     ]
-    arena = compute_rebuilt_arena(session, portfolios)
+    arena = compute_rebuilt_arena(session, portfolios, objective=objective)
     allocation_policy = allocation_policy_out(admin_ops.get_app_settings(session), "rebuilt")
     rows = [
         serialize_rebuilt_summary(arena.by_portfolio_id[portfolio.id], arena, allocation_policy)
@@ -138,6 +143,7 @@ def rebuilt_arena(
     return {
         "version_id": version_id,
         "track": "rebuilt",
+        "objective": objective,
         "direction": direction,
         "as_of": arena.as_of,
         "market_data_status": arena.market_data_status,
@@ -156,7 +162,12 @@ def rebuilt_arena(
 
 @router.get("/portfolios/{slug}")
 @limiter.limit("60/minute")
-def portfolio_detail(slug: str, request: Request, session: Session = Depends(get_session)):
+def portfolio_detail(
+    slug: str,
+    request: Request,
+    objective: HorizonObjective = "ci_lower",
+    session: Session = Depends(get_session),
+):
     record = session.scalar(select(Portfolio).where(Portfolio.slug == slug))
     if record is None:
         raise HTTPException(404, "Portfolio not found")
@@ -173,7 +184,7 @@ def portfolio_detail(slug: str, request: Request, session: Session = Depends(get
             arena.by_portfolio_id[match.id], arena, policy, direction_instructions, wrapper_prompt=wrapper
         )
     else:
-        arena = compute_rebuilt_arena(session, [match])
+        arena = compute_rebuilt_arena(session, [match], objective=objective)
         detail = serialize_rebuilt_detail(
             arena.by_portfolio_id[match.id], arena, policy, direction_instructions, wrapper_prompt=wrapper
         )
@@ -223,6 +234,7 @@ def compare(
     version_id: int,
     track: Track,
     direction: Direction,
+    objective: HorizonObjective = "ci_lower",
     session: Session = Depends(get_session),
 ):
     _version(session, version_id)
@@ -239,10 +251,11 @@ def compare(
         arena = compute_valuations(session, selected)
         results = [(portfolio, arena.by_portfolio_id[portfolio.id].result) for portfolio in selected]
     else:
-        arena = compute_rebuilt_arena(session, selected)
+        arena = compute_rebuilt_arena(session, selected, objective=objective)
         results = [(portfolio, arena.by_portfolio_id[portfolio.id].selected) for portfolio in selected]
     output = [(portfolio, result.series) for portfolio, result in results if result and result.series]
     payload = {
+        **({"objective": objective} if track == "rebuilt" else {}),
         "version_id": version_id,
         "track": track,
         "direction": direction,

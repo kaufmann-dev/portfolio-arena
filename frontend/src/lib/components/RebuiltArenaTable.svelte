@@ -86,7 +86,13 @@
   }
 
   function detailHref(row: RebuiltArenaPortfolio): string {
-    return portfolioAnalysisHref(row.slug, "rebuilt", row.direction, row.version_id);
+    return portfolioAnalysisHref(
+      row.slug,
+      "rebuilt",
+      row.direction,
+      row.version_id,
+      row.optimization_objective,
+    );
   }
 </script>
 

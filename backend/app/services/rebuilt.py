@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from statistics import NormalDist, median
-from typing import Literal
+from typing import Literal, get_args
 
 from .trading_calendar import boundary_value, is_trading_day
 from .valuation import (
@@ -30,6 +30,7 @@ from .valuation import (
 HORIZONS = tuple(step / 2 for step in range(1, 41))
 DIRECT_SEARCH_FAMILY_SIZE = len(HORIZONS)
 Evidence = Literal["pending", "inconclusive", "positive", "negative"]
+HorizonObjective = Literal["ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"]
 
 
 @dataclass(frozen=True)
@@ -468,14 +469,21 @@ def policy_metrics(
     return metrics
 
 
-def select_policy(candidates: list[PolicyResult]) -> PolicyResult | None:
+def select_policy(
+    candidates: list[PolicyResult], objective: HorizonObjective = "ci_lower"
+) -> PolicyResult | None:
+    if objective not in get_args(HorizonObjective):
+        raise ValueError("Unknown horizon optimization objective")
     eligible = [
         candidate
         for candidate in candidates
-        if candidate.metrics.get("eligible") and candidate.metrics.get("ci_lower") is not None
+        if candidate.metrics.get("eligible")
+        and candidate.metrics.get("ci_lower") is not None
+        and (score := candidate.metrics.get(objective)) is not None
+        and math.isfinite(score)
     ]
     return max(
-        eligible, key=lambda candidate: (candidate.metrics["ci_lower"], -candidate.horizon), default=None
+        eligible, key=lambda candidate: (candidate.metrics[objective], -candidate.horizon), default=None
     )
 
 
@@ -487,7 +495,7 @@ def evaluate_policy_grid(
     execution_boundary: Phase = "close",
     *,
     prepared_market: PreparedMarket | None = None,
-) -> tuple[list[dict], list[PolicyResult], PolicyResult | None]:
+) -> tuple[list[dict], list[PolicyResult]]:
     market = prepared_market or prepare_market(prices, calendar)
     statistics = [
         signal_horizon_statistics(
@@ -508,4 +516,4 @@ def evaluate_policy_grid(
         )
         policy.metrics = policy_metrics(policy, completion)
         policies.append(policy)
-    return statistics, policies, select_policy(policies)
+    return statistics, policies

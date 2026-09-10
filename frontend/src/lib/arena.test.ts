@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseDirection, portfolioAnalysisHref, selectedVersion } from "./arena";
+import {
+  HORIZON_OBJECTIVES,
+  parseDirection,
+  parseHorizonObjective,
+  portfolioAnalysisHref,
+  selectedVersion,
+} from "./arena";
 const versions = [
   { id: 1, name: "v1", evaluation_enabled: false, created_at: "2026-07-01T00:00:00Z" },
   { id: 2, name: "v2", evaluation_enabled: true, created_at: "2026-08-01T00:00:00Z" },
@@ -17,8 +23,21 @@ describe("Arena version navigation", () => {
   });
   it("preserves track, direction and version in portfolio links", () => {
     expect(portfolioAnalysisHref("sample", "rebuilt", "short", 1)).toBe(
-      "/p/sample?track=rebuilt&direction=short&version=1",
+      "/p/sample?track=rebuilt&direction=short&version=1&objective=ci_lower",
     );
+  });
+  it("preserves the optimization objective only for rebuilt portfolio links", () => {
+    expect(portfolioAnalysisHref("sample", "rebuilt", "long", 2, "sharpe")).toBe(
+      "/p/sample?track=rebuilt&direction=long&version=2&objective=sharpe",
+    );
+    expect(portfolioAnalysisHref("sample", "managed", "long", 2, "sharpe")).toBe(
+      "/p/sample?track=managed&direction=long&version=2",
+    );
+  });
+  it("accepts the five objectives and defaults invalid URLs to adjusted lower 95%", () => {
+    for (const { value } of HORIZON_OBJECTIVES) expect(parseHorizonObjective(value)).toBe(value);
+    expect(parseHorizonObjective(null)).toBe("ci_lower");
+    expect(parseHorizonObjective("unknown")).toBe("ci_lower");
   });
   it("defaults unknown directions to long", () => {
     expect(parseDirection("short")).toBe("short");

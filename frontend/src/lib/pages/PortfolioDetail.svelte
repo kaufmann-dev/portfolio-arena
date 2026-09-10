@@ -10,7 +10,7 @@
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import SignalHistory from "../components/SignalHistory.svelte";
   import SignalMatrix from "../components/SignalMatrix.svelte";
-  import { parseDirection } from "../arena";
+  import { horizonObjectiveLabel, parseDirection, parseHorizonObjective } from "../arena";
   import {
     ageLabel,
     fmtDate,
@@ -34,7 +34,10 @@
     const source = new URLSearchParams(window.location.search);
     const track = source.get("track");
     const direction = parseDirection(source.get("direction"));
-    const query = new URLSearchParams({ direction });
+    const query = new URLSearchParams({
+      direction,
+      objective: parseHorizonObjective(source.get("objective")),
+    });
     if (track !== "managed" && track !== "rebuilt") {
       return `/api/portfolios/${portfolioSlug}?${query.toString()}`;
     }
@@ -157,7 +160,7 @@
     {@const managedPortfolio = data.track === "managed" ? (data.portfolio as ManagedPortfolioDetail) : null}
     {@const rebuiltPortfolio = data.track === "rebuilt" ? (data.portfolio as RebuiltPortfolioDetail) : null}
     {@const benchmarkName = portfolio.direction === "short" ? "Short SPY" : "SPY"}
-    {@const arenaHref = `/?version=${portfolio.version_id}&direction=${portfolio.direction}&track=${portfolio.prompt_mode}`}
+    {@const arenaHref = `/?version=${portfolio.version_id}&direction=${portfolio.direction}&track=${portfolio.prompt_mode}${rebuiltPortfolio ? `&objective=${rebuiltPortfolio.optimization_objective}` : ""}`}
     {@const series = chartSeries(portfolio)}
     {@const markers = markersFor(data)}
     <article class="portfolio-detail">
@@ -250,6 +253,11 @@
 
       {#if rebuiltPortfolio}
         <section class="policy-context" aria-label="Selected holding horizon">
+          <div>
+            <span>Optimize horizon by</span><strong
+              >{horizonObjectiveLabel(rebuiltPortfolio.optimization_objective)}</strong
+            >
+          </div>
           <div>
             <span>Portfolio tuned</span><strong
               >{rebuiltPortfolio.selected_policy

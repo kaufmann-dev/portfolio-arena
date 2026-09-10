@@ -19,10 +19,12 @@ from . import price_cache
 from .analysis_cache import SingleFlightLru, fingerprint
 from .rebuilt import (
     HORIZONS,
+    HorizonObjective,
     PolicyResult,
     SignalInput,
     evaluate_policy_grid,
     prepare_market,
+    select_policy,
     signal_horizon_statistics,
 )
 from .trading_calendar import NY, boundary_at, boundary_value, is_trading_day
@@ -90,6 +92,7 @@ class RebuiltArena:
     spy_series: Series
     calendar: list[Boundary]
     by_portfolio_id: dict[int, RebuiltPortfolioAnalysis] = field(default_factory=dict)
+    objective: HorizonObjective = "ci_lower"
 
 
 _managed_cache: SingleFlightLru[str, tuple] = SingleFlightLru(max_entries=256)
@@ -354,7 +357,11 @@ def compute_valuations(
 
 
 def compute_rebuilt_arena(
-    session: Session, portfolios: list[Portfolio], now: datetime | None = None
+    session: Session,
+    portfolios: list[Portfolio],
+    now: datetime | None = None,
+    *,
+    objective: HorizonObjective = "ci_lower",
 ) -> RebuiltArena:
     portfolios = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "rebuilt"]
     now = now or datetime.now(UTC)
@@ -370,7 +377,7 @@ def compute_rebuilt_arena(
     )
     spy = loaded.series.get(SPY_SYMBOL, [])
     calendar = build_calendar(spy, loaded.as_of) if loaded.as_of else []
-    arena = RebuiltArena(loaded.as_of, loaded.status, spy, calendar)
+    arena = RebuiltArena(loaded.as_of, loaded.status, spy, calendar, objective=objective)
     market = prepare_market(loaded.series, calendar)
     for portfolio in portfolios:
         if not loaded.as_of:
@@ -387,7 +394,7 @@ def compute_rebuilt_arena(
                     SignalInput(item.id, **payload)
                     for item, payload in zip(portfolio.signals, _inputs(portfolio.signals), strict=True)
                 ]
-                horizons, policies, selected = evaluate_policy_grid(
+                horizons, policies = evaluate_policy_grid(
                     inputs,
                     loaded.series,
                     calendar,
@@ -395,13 +402,14 @@ def compute_rebuilt_arena(
                     portfolio.execution_boundary,
                     prepared_market=market,
                 )
-                return horizons, {policy.horizon: policy for policy in policies}, selected, None
+                return horizons, {policy.horizon: policy for policy in policies}, None
             except ValuationError as exc:
-                return [], {}, None, str(exc)
+                return [], {}, str(exc)
 
-        horizons, policies, selected, error = _rebuilt_cache.get_or_compute(
+        horizons, policies, error = _rebuilt_cache.get_or_compute(
             _cache_key(portfolio, portfolio.signals, loaded.series, calendar, loaded.as_of), build
         )
+        selected = select_policy(list(policies.values()), objective)
         arena.by_portfolio_id[portfolio.id] = RebuiltPortfolioAnalysis(
             portfolio, horizons, policies, selected, error, loaded.status == "stale"
         )

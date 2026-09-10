@@ -50,7 +50,8 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   locks permanently at the first decision. API market boundaries are `{timestamp, phase}` values;
   NAV points add `nav`. Keep ordinary audit timestamps as strings.
 - Rebuilt analytics use forty half-session horizons H0.5–H20 at 100% exposure with per-portfolio
-  tuning. There are no Meta, archive, transaction-cost, common-policy or alternate-objective paths.
+  tuning. The explicit optimization objective selects from the cached policy grid independently of
+  table sorting. There are no Meta, archive, transaction-cost or common-policy paths.
 
 ## Database and Migrations
 
