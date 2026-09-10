@@ -1139,21 +1139,6 @@ th.sortable {
   font-weight: 650;
 }
 
-.matrix-table td.positive {
-  color: var(--pos);
-  background: color-mix(in srgb, var(--pos) 9%, transparent);
-}
-
-.matrix-table td.negative {
-  color: var(--neg);
-  background: color-mix(in srgb, var(--neg) 9%, transparent);
-}
-
-.matrix-table td.inconclusive {
-  color: var(--warn);
-  background: var(--warn-bg);
-}
-
 .matrix-table td.pending {
   color: var(--text-tertiary);
   font-family: var(--font-sans);

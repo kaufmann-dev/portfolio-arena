@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { RebuiltArenaPortfolio, SignalHorizon } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
-  import { pct } from "../format";
+  import { pct, pctSignClass } from "../format";
   import { link } from "../stores/router.svelte";
 
   interface Props {
@@ -11,14 +11,35 @@
 
   const { rows, benchmarkName }: Props = $props();
   const horizons = Array.from({ length: 40 }, (_, index) => (index + 1) / 2);
+  const maxMagnitude = $derived.by(() => {
+    let maximum = 0;
+    for (const row of rows) {
+      for (const cell of row.signal_horizons) {
+        maximum = Math.max(maximum, Math.abs(cellValue(cell) ?? 0));
+      }
+    }
+    return maximum;
+  });
+
+  function cellValue(cell: SignalHorizon | undefined): number | null {
+    const value = cell?.mean_daily_alpha;
+    if (cell?.evidence === "pending" || value == null || !Number.isFinite(value)) return null;
+    // Match the displayed precision so rounded zero stays neutral.
+    return Number((value * 100).toFixed(2)) / 100;
+  }
+
+  function cellIntensity(value: number | null): string {
+    if (value === null || value === 0 || maxMagnitude === 0) return "0%";
+    return `${4 + (Math.abs(value) / maxMagnitude) * 36}%`;
+  }
 
   function cellFor(row: RebuiltArenaPortfolio, horizon: number): SignalHorizon | undefined {
     return row.signal_horizons.find((cell) => cell.horizon === horizon);
   }
 
   function cellText(cell: SignalHorizon | undefined): string {
-    if (!cell || cell.evidence === "pending") return "Pending";
-    return pct(cell.mean_daily_alpha, 2);
+    const value = cellValue(cell);
+    return value === null ? "Pending" : pct(value, 2);
   }
 
   function cellTitle(row: RebuiltArenaPortfolio, cell: SignalHorizon | undefined, horizon: number): string {
@@ -44,7 +65,9 @@
     <div>
       <h2 id="signal-matrix-title">Signal Alpha matrix</h2>
       <p>
-        Direct signal evidence at half-session holding periods. Each portfolio’s selected horizon is outlined.
+        Mean daily alpha at half-session holding periods. Red is negative; green is positive. Stronger color
+        means larger magnitude on one shared scale across all cells in this matrix. Zero is neutral. Each
+        portfolio’s selected horizon is outlined.
       </p>
     </div>
   </header>
@@ -83,8 +106,13 @@
             </th>
             {#each horizons as horizon (horizon)}
               {@const cell = cellFor(row, horizon)}
+              {@const value = cellValue(cell)}
               <td
-                class={[cell?.evidence ?? "pending", horizon === row.selected_policy?.horizon && "selected"]}
+                class={[
+                  value === null ? "pending" : pctSignClass(value, 2),
+                  horizon === row.selected_policy?.horizon && "selected",
+                ]}
+                style:--alpha-intensity={cellIntensity(value)}
                 title={cellTitle(row, cell, horizon)}
               >
                 {cellText(cell)}
@@ -125,6 +153,20 @@
     font-weight: 650;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .matrix-table td.pos,
+  .matrix-table td.neg {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--alpha-color) var(--alpha-intensity), var(--bg-surface));
+  }
+
+  .matrix-table td.pos {
+    --alpha-color: var(--pos);
+  }
+
+  .matrix-table td.neg {
+    --alpha-color: var(--neg);
   }
 
   .selected {

@@ -83,8 +83,9 @@
           “Optimize horizon by” selects each portfolio’s horizon using Adjusted lower 95% (the default),
           Information ratio, Sharpe, Mean daily alpha, or Hit rate. Ties choose the shorter eligible horizon.
           Column sorting only changes row order. Comparisons and portfolio details use the chosen objective.
-          The Signal Alpha matrix shows direct signal evidence for all 40 horizons, with each portfolio’s
-          selected horizon highlighted.
+          The Signal Alpha matrix shows mean daily alpha for all 40 horizons, with each portfolio’s selected
+          horizon highlighted. Backgrounds are red for negative alpha and green for positive alpha, with
+          intensity scaled by magnitude across all cells in the matrix. Zero is neutral.
         </p>
         <p>
           Long and short portfolios are ranked separately. Long results compare with buy-and-hold SPY; short
