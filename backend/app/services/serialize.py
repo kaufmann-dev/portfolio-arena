@@ -222,6 +222,7 @@ def synthetic_spy_row(
     metrics.update(
         {
             "mean_daily_alpha": 0.0 if len(series) > 1 else None,
+            "signal_mean_daily_alpha": 0.0 if len(series) > 1 else None,
             "ci_lower": 0.0 if len(series) > 1 else None,
             "ci_upper": 0.0 if len(series) > 1 else None,
             "evidence": "inconclusive" if len(series) > 1 else "pending",

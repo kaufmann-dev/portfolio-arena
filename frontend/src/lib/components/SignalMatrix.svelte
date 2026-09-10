@@ -65,9 +65,8 @@
     <div>
       <h2 id="signal-matrix-title">Signal Alpha matrix</h2>
       <p>
-        Mean daily alpha at half-session holding periods. Red is negative; green is positive. Stronger color
-        means larger magnitude on one shared scale across all cells in this matrix. Zero is neutral. Each
-        portfolio’s selected horizon is outlined.
+        Signal α/day at half-session holding periods. Red is negative; green is positive. Stronger color means
+        larger magnitude on one shared scale across all cells in this matrix. Zero is neutral.
       </p>
     </div>
   </header>
@@ -108,10 +107,7 @@
               {@const cell = cellFor(row, horizon)}
               {@const value = cellValue(cell)}
               <td
-                class={[
-                  value === null ? "pending" : pctSignClass(value, 2),
-                  horizon === row.selected_policy?.horizon && "selected",
-                ]}
+                class={value === null ? "pending" : pctSignClass(value, 2)}
                 style:--alpha-intensity={cellIntensity(value)}
                 title={cellTitle(row, cell, horizon)}
               >
@@ -167,15 +163,6 @@
 
   .matrix-table td.neg {
     --alpha-color: var(--neg);
-  }
-
-  .selected {
-    border-right: 2px solid var(--accent);
-    border-left: 2px solid var(--accent);
-  }
-
-  .matrix-table tbody tr:last-child .selected {
-    border-bottom: 2px solid var(--accent);
   }
 
   .matrix-table .benchmark th,

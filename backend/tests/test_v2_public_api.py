@@ -95,9 +95,28 @@ def test_horizon_objective_is_consistent_across_rankings_detail_and_comparison(
 
     arena_url = "/api/arena/rebuilt?version_id=1&direction=long"
     default = _row(client.get(arena_url).json(), portfolio["slug"])
+    assert default["optimization_objective"] == "signal_mean_daily_alpha"
+    assert (
+        client.get(f"/api/portfolios/{portfolio['slug']}").json()["portfolio"]
+        == client.get(f"/api/portfolios/{portfolio['slug']}?objective=signal_mean_daily_alpha").json()[
+            "portfolio"
+        ]
+    )
+    compare_url = f"/api/compare?version_id=1&direction=long&track=rebuilt&slugs={portfolio['slug']}"
+    assert (
+        client.get(compare_url).json()
+        == client.get(f"{compare_url}&objective=signal_mean_daily_alpha").json()
+    )
     horizons = set()
     paths = []
-    for objective in ("ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"):
+    for objective in (
+        "signal_mean_daily_alpha",
+        "ci_lower",
+        "information_ratio",
+        "sharpe",
+        "mean_daily_alpha",
+        "hit_rate",
+    ):
         ranked = client.get(f"{arena_url}&objective={objective}")
         assert ranked.status_code == 200, ranked.text
         assert ranked.json()["objective"] == objective
@@ -109,6 +128,11 @@ def test_horizon_objective_is_consistent_across_rankings_detail_and_comparison(
         assert row["selected_policy"] == detail["selected_policy"]
         assert row["metrics"] == detail["metrics"]
         assert len(row["signal_horizons"]) == 40
+        selected_signal = next(
+            item for item in row["signal_horizons"] if item["horizon"] == row["selected_policy"]["horizon"]
+        )
+        assert row["metrics"]["signal_mean_daily_alpha"] == selected_signal["mean_daily_alpha"]
+        assert ranked.json()["portfolios"][0]["metrics"]["signal_mean_daily_alpha"] == 0
         horizons.add(row["selected_policy"]["horizon"])
         compared = client.get(
             f"/api/compare?version_id=1&direction=long&track=rebuilt&slugs={portfolio['slug']}&objective={objective}"
@@ -121,7 +145,7 @@ def test_horizon_objective_is_consistent_across_rankings_detail_and_comparison(
             [point["nav"] for point in detail["series"]]
         )
         paths.append([point["nav"] for point in series])
-        if objective == "ci_lower":
+        if objective == "signal_mean_daily_alpha":
             assert row == default
 
     assert len(horizons) > 1

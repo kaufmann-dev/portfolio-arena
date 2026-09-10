@@ -1,5 +1,6 @@
 export type ExecutionBoundary = "open" | "close";
-export type HorizonObjective = "ci_lower" | "information_ratio" | "sharpe" | "mean_daily_alpha" | "hit_rate";
+export type HorizonObjective =
+  "signal_mean_daily_alpha" | "ci_lower" | "information_ratio" | "sharpe" | "mean_daily_alpha" | "hit_rate";
 export interface Boundary {
   timestamp: string;
   phase: ExecutionBoundary;
@@ -166,6 +167,7 @@ export interface AlphaMetrics {
   itd_return?: number | null;
   spy_return?: number | null;
   mean_daily_alpha?: number | null;
+  signal_mean_daily_alpha?: number | null;
   median_daily_alpha?: number | null;
   cumulative_excess?: number | null;
   hit_rate?: number | null;

@@ -119,7 +119,7 @@ def rebuilt_arena(
     request: Request,
     version_id: int,
     direction: Direction,
-    objective: HorizonObjective = "ci_lower",
+    objective: HorizonObjective = "signal_mean_daily_alpha",
     session: Session = Depends(get_session),
 ):
     _version(session, version_id)
@@ -165,7 +165,7 @@ def rebuilt_arena(
 def portfolio_detail(
     slug: str,
     request: Request,
-    objective: HorizonObjective = "ci_lower",
+    objective: HorizonObjective = "signal_mean_daily_alpha",
     session: Session = Depends(get_session),
 ):
     record = session.scalar(select(Portfolio).where(Portfolio.slug == slug))
@@ -234,7 +234,7 @@ def compare(
     version_id: int,
     track: Track,
     direction: Direction,
-    objective: HorizonObjective = "ci_lower",
+    objective: HorizonObjective = "signal_mean_daily_alpha",
     session: Session = Depends(get_session),
 ):
     _version(session, version_id)

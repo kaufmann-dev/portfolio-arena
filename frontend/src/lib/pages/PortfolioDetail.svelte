@@ -285,8 +285,15 @@
             pct(portfolio.rank_score, 2),
             pctSignClass(portfolio.rank_score, 2),
           )}
+          {#if rebuiltPortfolio}
+            {@render metricTile(
+              "Signal α/day",
+              pct(rebuiltPortfolio.metrics.signal_mean_daily_alpha, 2),
+              pctSignClass(rebuiltPortfolio.metrics.signal_mean_daily_alpha, 2),
+            )}
+          {/if}
           {@render metricTile(
-            "Mean α/day",
+            rebuiltPortfolio ? "Portfolio α/day" : "Mean α/day",
             pct(portfolio.metrics.mean_daily_alpha, 2),
             pctSignClass(portfolio.metrics.mean_daily_alpha, 2),
           )}

@@ -77,12 +77,18 @@ The project measures cost-free paper performance for research.
   exposure. One half-step advances to the next open/close: morning H0.5 expires that close, morning
   H1 at the next open; evening H0.5 at the next open and evening H1 at the next close. Each daily
   cohort gets `1 / ceil(H)` of the book; unused capacity stays in direction-matched SPY.
-  “Optimize horizon by” selects each portfolio’s best horizon using adjusted lower 95% (default),
-  information ratio, Sharpe, mean daily alpha, or hit rate, breaking ties toward the shorter horizon.
+  “Optimize horizon by” selects each portfolio’s best eligible horizon using Signal α/day (default),
+  adjusted lower 95%, information ratio, Sharpe, Portfolio α/day, or hit rate, breaking ties toward the
+  shorter horizon. Signal α/day averages completed baskets’ benchmark-relative growth normalized to
+  one session; Portfolio α/day averages the simulated portfolio’s full-session return minus SPY return.
+  The signal objective uses `signal_mean_daily_alpha`; portfolio alpha uses `mean_daily_alpha`.
+  Rank remains based on the adjusted lower confidence bound of portfolio alpha.
   Column sorting only changes row order. The objective is preserved in the URL, comparisons, and
   portfolio details. The Signal Alpha matrix shows all forty horizons alongside rankings
-  and in portfolio details. Cell backgrounds show alpha sign (red negative, green positive), with
-  intensity scaled by absolute mean daily alpha across all displayed rows and horizons; zero is neutral.
+  and in portfolio details; the table’s Signal α/day matches the selected horizon’s matrix cell.
+  Cell backgrounds show alpha sign (red negative, green positive), with
+  intensity scaled by absolute signal alpha across all displayed rows and horizons; zero is neutral.
+  About’s Metrics explained section covers the calculations and worked examples.
   Evidence remains pending until minimum sample requirements are met.
 - **Statistics use full sessions.** Daily observations end at the latest published phase, using
   open-to-open or close-to-close returns and 252-session annualization. An incomplete initial
