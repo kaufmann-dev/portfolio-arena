@@ -141,7 +141,8 @@ def test_missing_open_is_invalid_direct_evidence_and_unavailable_policy():
 def test_grid_has_exactly_forty_horizons_and_search_correction():
     days, data, calendar = market(45)
     signals = [signal(index, day) for index, day in enumerate(days[:10])]
-    statistics, policies, selected = evaluate_policy_grid(signals, data, calendar)
+    statistics, policies = evaluate_policy_grid(signals, data, calendar)
+    selected = select_policy(policies)
     assert len(statistics) == len(policies) == len(HORIZONS) == 40
     assert [policy.horizon for policy in policies] == list(HORIZONS)
     assert selected.horizon == 0.5
@@ -151,8 +152,8 @@ def test_grid_has_exactly_forty_horizons_and_search_correction():
 
 def test_pending_horizons_remain_unranked():
     days, data, calendar = market(2)
-    statistics, policies, selected = evaluate_policy_grid([signal(1, days[-1])], data, calendar)
-    assert selected is None
+    statistics, policies = evaluate_policy_grid([signal(1, days[-1])], data, calendar)
+    assert select_policy(policies) is None
     assert all(policy.metrics["ci_lower"] is None for policy in policies)
     assert all(item["open_count"] == 1 for item in statistics)
 
@@ -170,6 +171,48 @@ def test_selection_uses_lower_bound_then_shorter_horizon():
         return PolicyResult(horizon, [], [], [], [], [], 0, metrics={"eligible": True, "ci_lower": score})
 
     assert select_policy([candidate(5, 0.1), candidate(1, 0.1), candidate(0.5, 0)]).horizon == 1
+
+
+@pytest.mark.parametrize(
+    "objective", ["ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"]
+)
+def test_selection_maximizes_requested_metric_and_breaks_ties_with_shorter_horizon(objective):
+    def candidate(horizon, score, *, eligible=True):
+        return PolicyResult(
+            horizon,
+            [],
+            [],
+            [],
+            [],
+            [],
+            0,
+            metrics={"eligible": eligible, "ci_lower": 0.1, objective: score},
+        )
+
+    candidates = [
+        candidate(0.5, 1),
+        candidate(5, 2),
+        candidate(2, 2),
+        candidate(1, 3, eligible=False),
+        candidate(1.5, None),
+        candidate(3, float("nan")),
+        candidate(4, float("inf")),
+    ]
+    assert select_policy(candidates, objective).horizon == 2
+    assert select_policy([candidate(1, None), candidate(2, 3, eligible=False)], objective) is None
+
+
+def test_different_objectives_can_select_different_horizons_without_mutating_candidates():
+    lower_bound = PolicyResult(
+        1, [], [], [], [], [], 0, metrics={"eligible": True, "ci_lower": 0.2, "sharpe": 1}
+    )
+    sharpe = PolicyResult(5, [], [], [], [], [], 0, metrics={"eligible": True, "ci_lower": 0.1, "sharpe": 2})
+    candidates = [lower_bound, sharpe]
+    assert select_policy(candidates) is lower_bound
+    assert select_policy(candidates, "sharpe") is sharpe
+    assert select_policy(candidates) is lower_bound
+    with pytest.raises(ValueError, match="Unknown horizon optimization objective"):
+        select_policy(candidates, "unknown")
 
 
 def test_active_cohort_publishes_scheduled_future_expiry_across_weekend():

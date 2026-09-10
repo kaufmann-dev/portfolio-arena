@@ -9,12 +9,19 @@
     VersionsResponse,
     CompareResponse,
     Direction,
+    HorizonObjective,
     ManagedArenaPortfolio,
     ManagedArenaResponse,
     RebuiltArenaPortfolio,
     RebuiltArenaResponse,
   } from "../api/types";
-  import { parseDirection, selectedVersion } from "../arena";
+  import {
+    HORIZON_OBJECTIVES,
+    horizonObjectiveLabel,
+    parseDirection,
+    parseHorizonObjective,
+    selectedVersion,
+  } from "../arena";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import ManagedArenaTable from "../components/ManagedArenaTable.svelte";
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
@@ -58,6 +65,9 @@
     new URLSearchParams(window.location.search).get("track") === "managed" ? "managed" : "rebuilt",
   );
   let versions = $state.raw<ArenaVersion[]>([]);
+  let objective = $state<HorizonObjective>(
+    parseHorizonObjective(new URLSearchParams(window.location.search).get("objective")),
+  );
   let versionId = $state<number | null>(null);
   const version = $derived(versions.find((item) => item.id === versionId));
   let agentFilter = $state("all");
@@ -154,6 +164,8 @@
     const url = new URL(window.location.href);
     url.searchParams.set("direction", next);
     url.searchParams.set("track", track);
+    if (track === "rebuilt") url.searchParams.set("objective", objective);
+    else url.searchParams.delete("objective");
     if (versionId !== null) url.searchParams.set("version", String(versionId));
     window.history.replaceState(window.history.state, "", url);
     router.syncVersion();
@@ -172,7 +184,7 @@
         if (sequence === requestSequence) managedData = payload;
       } else {
         const payload = await apiJson<RebuiltArenaResponse>(
-          `/api/arena/rebuilt?direction=${direction}&version_id=${versionId}`,
+          `/api/arena/rebuilt?direction=${direction}&version_id=${versionId}&objective=${objective}`,
         );
         if (sequence === requestSequence) rebuiltData = payload;
       }
@@ -188,6 +200,16 @@
   function resetFilters(): void {
     agentFilter = "all";
     promptFilter = "all";
+  }
+
+  function changeObjective(value: string): void {
+    const next = parseHorizonObjective(value);
+    if (next === objective) return;
+    objective = next;
+    writeDirectionUrl(direction);
+    compareData = null;
+    void loadArena();
+    void loadComparison();
   }
 
   function changeDirection(next: Direction): void {
@@ -245,6 +267,7 @@
       direction,
       version_id: String(versionId),
     });
+    if (track === "rebuilt") query.set("objective", objective);
 
     compareLoading = true;
     try {
@@ -349,6 +372,30 @@
   </nav>
   <p class="track-description">{activeTrackDescription}</p>
 
+  {#if track === "rebuilt"}
+    <section class="horizon-control" aria-label="Horizon optimization">
+      <SelectField
+        id="arena-objective"
+        label="Optimize horizon by"
+        options={HORIZON_OBJECTIVES}
+        value={objective}
+        onValueChange={changeObjective}
+      />
+      <p class="muted">
+        Selects each portfolio’s H and updates its metrics and charts. Column sorting only changes row order.
+      </p>
+      {#if loading && rebuiltData}
+        <p role="status">
+          Updating horizons… Showing {horizonObjectiveLabel(rebuiltData.objective)} results until ready.
+        </p>
+      {:else if rebuiltData && rebuiltData.objective !== objective}
+        <p role="status">
+          Showing {horizonObjectiveLabel(rebuiltData.objective)} results. Retry to apply the new selection.
+        </p>
+      {/if}
+    </section>
+  {/if}
+
   {#if currentData}
     {#key `${displayedMarketData.status}:${displayedMarketData.asOf}`}
       <MarketDataWarning
@@ -439,6 +486,15 @@
 </section>
 
 <style>
+  .horizon-control {
+    display: grid;
+    gap: 8px;
+  }
+
+  .horizon-control :global(.select-field) {
+    max-width: 320px;
+  }
+
   .leaderboard-page {
     min-width: 0;
     display: grid;

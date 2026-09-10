@@ -23,6 +23,7 @@ from ..services.admin_ops import AdminOpError
 from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
 from ..services.harnesses import harnesses_out
 from ..services.model_catalog import agent_out
+from ..services.rebuilt import HorizonObjective
 from ..services.serialize import (
     rank_rows,
     serialize_rebuilt_summary,
@@ -162,7 +163,7 @@ def get_portfolio(slug_or_id: str) -> dict:
 
 
 @mcp.tool()
-def get_arena_overview(direction: str, version_id: int) -> dict:
+def get_arena_overview(direction: str, version_id: int, objective: HorizonObjective = "ci_lower") -> dict:
     """Managed and portfolio-tuned rebuilt summaries within one Arena version and direction."""
     selected_direction = _direction(direction)
     with _session() as session:
@@ -177,7 +178,7 @@ def get_arena_overview(direction: str, version_id: int) -> dict:
             for v in valuations.by_portfolio_id.values()
         ]
         rank_rows(managed_rows)
-        rebuilt = compute_rebuilt_arena(session, selected)
+        rebuilt = compute_rebuilt_arena(session, selected, objective=objective)
         rebuilt_rows = [
             serialize_rebuilt_summary(a, rebuilt, settings["rebuilt_allocation_policy"])
             for a in rebuilt.by_portfolio_id.values()
@@ -197,6 +198,7 @@ def get_arena_overview(direction: str, version_id: int) -> dict:
                 ],
             },
             "rebuilt": {
+                "objective": objective,
                 "as_of": rebuilt.as_of,
                 "market_data_status": rebuilt.market_data_status,
                 "portfolios": [
@@ -208,7 +210,7 @@ def get_arena_overview(direction: str, version_id: int) -> dict:
 
 
 @mcp.tool()
-def get_rebuilt_analysis(direction: str, version_id: int) -> dict:
+def get_rebuilt_analysis(direction: str, version_id: int, objective: HorizonObjective = "ci_lower") -> dict:
     """Portfolio-tuned rebuilt rankings and all H0.5–H20 signal alpha observations."""
     selected_direction = _direction(direction)
     with _session() as session:
@@ -217,12 +219,13 @@ def get_rebuilt_analysis(direction: str, version_id: int) -> dict:
         selected = [
             p for p in load_portfolios(session, version_id=version_id) if p.direction == selected_direction
         ]
-        arena = compute_rebuilt_arena(session, selected)
+        arena = compute_rebuilt_arena(session, selected, objective=objective)
         rows = [serialize_rebuilt_summary(a, arena, policy) for a in arena.by_portfolio_id.values()]
         rank_rows(rows)
         return {
             "version_id": version_id,
             "direction": selected_direction,
+            "objective": objective,
             "as_of": arena.as_of,
             "market_data_status": arena.market_data_status,
             "portfolios": [_benchmark(arena, rows, selected_direction), *rows],

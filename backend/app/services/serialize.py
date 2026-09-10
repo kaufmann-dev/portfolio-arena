@@ -271,6 +271,7 @@ def serialize_rebuilt_summary(
     return {
         **_identity(analysis.portfolio, allocation_policy),
         "kind": "rebuilt",
+        "optimization_objective": arena.objective,
         "rank": None,
         "evidence": metrics.get("evidence", "pending"),
         "rank_score": metrics.get("ci_lower") if metrics.get("eligible") else None,

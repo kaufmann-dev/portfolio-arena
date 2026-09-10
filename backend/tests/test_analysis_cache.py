@@ -110,6 +110,12 @@ def test_rebuilt_cache_reuses_analysis_and_invalidates_on_signal_change(
     url = "/api/arena/rebuilt?version_id=1&direction=long"
     assert client.get(url).status_code == 200
     assert client.get(url).status_code == 200
+    for objective in ("sharpe", "information_ratio", "mean_daily_alpha", "hit_rate", "ci_lower"):
+        response = client.get(f"{url}&objective={objective}")
+        assert response.status_code == 200, response.text
+        assert response.json()["objective"] == objective
+        row = next(row for row in response.json()["portfolios"] if row["kind"] == "rebuilt")
+        assert row["optimization_objective"] == objective
     assert calls == 1
 
     renamed = client.patch(

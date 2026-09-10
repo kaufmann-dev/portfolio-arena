@@ -2,6 +2,8 @@
 
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+
 
 def _create_rebuilt(client, admin_headers, sample_agent, sample_prompt, name):
     response = client.post(
@@ -59,6 +61,85 @@ def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str 
 
 def _row(payload: dict, slug: str) -> dict:
     return next(row for row in payload["portfolios"] if row["slug"] == slug)
+
+
+def test_horizon_objective_is_consistent_across_rankings_detail_and_comparison(
+    client,
+    admin_headers,
+    sample_agent,
+    sample_prompt,
+):
+    import random
+
+    from app.db import session_factory
+    from app.models import PriceCache
+
+    portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt, "Horizon Objective")
+    days = _weekdays(date(2026, 1, 5), 80)
+    _insert_signals(portfolio["id"], days[:50])
+    # Independent overnight/intraday moves create different risk/return tradeoffs across H.
+    rng = random.Random(42)
+    with session_factory()() as session:
+        for symbol in ("SPY", "AAPL"):
+            price = 100.0
+            series = []
+            for day in days:
+                price *= 1 + rng.uniform(-0.03, 0.035)
+                opening = price
+                price *= 1 + rng.uniform(-0.03, 0.035)
+                series.append({"date": day.isoformat(), "open": opening, "close": price})
+            row = session.get(PriceCache, symbol)
+            row.series = series
+            row.start_date, row.end_date = days[0], days[-1]
+        session.commit()
+
+    arena_url = "/api/arena/rebuilt?version_id=1&direction=long"
+    default = _row(client.get(arena_url).json(), portfolio["slug"])
+    horizons = set()
+    paths = []
+    for objective in ("ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"):
+        ranked = client.get(f"{arena_url}&objective={objective}")
+        assert ranked.status_code == 200, ranked.text
+        assert ranked.json()["objective"] == objective
+        row = _row(ranked.json(), portfolio["slug"])
+        detail = client.get(f"/api/portfolios/{portfolio['slug']}?objective={objective}")
+        assert detail.status_code == 200, detail.text
+        detail = detail.json()["portfolio"]
+        assert row["optimization_objective"] == detail["optimization_objective"] == objective
+        assert row["selected_policy"] == detail["selected_policy"]
+        assert row["metrics"] == detail["metrics"]
+        assert len(row["signal_horizons"]) == 40
+        horizons.add(row["selected_policy"]["horizon"])
+        compared = client.get(
+            f"/api/compare?version_id=1&direction=long&track=rebuilt&slugs={portfolio['slug']}&objective={objective}"
+        )
+        assert compared.status_code == 200, compared.text
+        assert compared.json()["objective"] == objective
+        series = compared.json()["series"][0]["series"]
+        assert [point["timestamp"] for point in series] == [point["timestamp"] for point in detail["series"]]
+        assert [point["nav"] for point in series] == pytest.approx(
+            [point["nav"] for point in detail["series"]]
+        )
+        paths.append([point["nav"] for point in series])
+        if objective == "ci_lower":
+            assert row == default
+
+    assert len(horizons) > 1
+    assert any(path != paths[0] for path in paths[1:])
+    # Requests for other objectives must not poison the shared policy-grid cache.
+    assert _row(client.get(arena_url).json(), portfolio["slug"]) == default
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/arena/rebuilt?version_id=1&direction=long",
+        "/api/portfolios/missing?",
+        "/api/compare?version_id=1&direction=long&track=rebuilt&slugs=missing",
+    ],
+)
+def test_public_analytics_reject_unknown_horizon_objectives(client, path):
+    assert client.get(f"{path}&objective=unknown").status_code == 422
 
 
 def test_rebuilt_detail_bounds_recent_signals_and_public_payload_hides_provenance(

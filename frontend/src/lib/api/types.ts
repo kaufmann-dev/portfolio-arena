@@ -1,4 +1,5 @@
 export type ExecutionBoundary = "open" | "close";
+export type HorizonObjective = "ci_lower" | "information_ratio" | "sharpe" | "mean_daily_alpha" | "hit_rate";
 export interface Boundary {
   timestamp: string;
   phase: ExecutionBoundary;
@@ -249,6 +250,7 @@ export interface RebuiltCompletion {
 }
 
 export interface RebuiltArenaPortfolio extends ArenaPortfolioBase {
+  optimization_objective: HorizonObjective;
   inception: Boundary | null;
   kind: "rebuilt";
   prompt_mode: "rebuilt";
@@ -290,6 +292,7 @@ export interface ManagedArenaResponse {
 }
 
 export interface RebuiltArenaResponse {
+  objective: HorizonObjective;
   track: "rebuilt";
   direction: Direction;
   as_of: Boundary | null;
@@ -505,6 +508,7 @@ export interface CompareEntry {
 
 export interface CompareResponse {
   track: ArenaTrack;
+  objective?: HorizonObjective;
   direction: Direction;
   as_of: Boundary | null;
   market_data_status: MarketDataStatus;
