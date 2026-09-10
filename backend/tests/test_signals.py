@@ -15,6 +15,7 @@ def _create_rebuilt(client, admin_headers, sample_agent, sample_prompt) -> dict:
         "/api/portfolios",
         headers=admin_headers,
         json={
+            "version_id": 1,
             "name": "Independent Daily Signals",
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
@@ -104,7 +105,7 @@ def test_effective_signal_is_completely_immutable(
             "mcp-created",
             now=entered_at,
         )
-        locked_at = close_at(date.fromisoformat(created["effective_date"]))
+        locked_at = close_at(date.fromisoformat(created["effective_at"]["timestamp"][:10]))
         with pytest.raises(AdminOpError, match="immutable"):
             admin_ops.update_signal(
                 session,
@@ -123,13 +124,7 @@ def test_signal_reset_enables_mode_change_and_preserves_mode_separation(
     sample_prompt,
 ):
     portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt)
-    from app.db import session_factory
-    from app.models import Portfolio
 
-    with session_factory()() as session:
-        row = session.get(Portfolio, portfolio["id"])
-        row.founding_v2 = True
-        session.commit()
     signal = client.post(
         f"/api/portfolios/{portfolio['id']}/signals",
         headers=admin_headers,
@@ -151,56 +146,12 @@ def test_signal_reset_enables_mode_change_and_preserves_mode_separation(
     assert reset.status_code == 200, reset.text
     assert reset.json()["deleted_allocations"] == 0
     assert reset.json()["deleted_signals"] == 1
-    with session_factory()() as session:
-        assert session.get(Portfolio, portfolio["id"]).founding_v2 is False
-
     changed = client.patch(
         f"/api/portfolios/{portfolio['id']}",
         headers=admin_headers,
         json={"prompt_mode": "managed"},
     )
     assert changed.status_code == 200, changed.text
-
-
-def test_empty_founding_portfolio_requires_reset_before_mode_change(
-    client,
-    admin_headers,
-    sample_agent,
-    sample_prompt,
-):
-    from app.db import session_factory
-    from app.models import Portfolio
-
-    portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt)
-    with session_factory()() as session:
-        row = session.get(Portfolio, portfolio["id"])
-        row.founding_v2 = True
-        session.commit()
-
-    blocked = client.patch(
-        f"/api/portfolios/{portfolio['id']}",
-        headers=admin_headers,
-        json={"prompt_mode": "managed"},
-    )
-    assert blocked.status_code == 409
-
-    reset = client.post(
-        f"/api/portfolios/{portfolio['id']}/reset",
-        headers=admin_headers,
-    )
-    assert reset.status_code == 200, reset.text
-    assert reset.json()["deleted_signals"] == 0
-
-    changed = client.patch(
-        f"/api/portfolios/{portfolio['id']}",
-        headers=admin_headers,
-        json={"prompt_mode": "managed"},
-    )
-    assert changed.status_code == 200, changed.text
-    with session_factory()() as session:
-        row = session.get(Portfolio, portfolio["id"])
-        assert row.prompt_mode == "managed"
-        assert row.founding_v2 is False
 
 
 @pytest.mark.parametrize("claim_run", [False, True], ids=["queued", "running"])

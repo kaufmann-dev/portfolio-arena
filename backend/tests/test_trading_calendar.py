@@ -96,3 +96,25 @@ class TestLocking:
         close = close_at(date(2026, 7, 8))
         assert close.tzinfo is UTC
         assert close == ny(2026, 7, 8, 16)
+
+
+class TestOpeningBoundary:
+    def test_opening_decision_uses_first_future_open(self):
+        assert effective_date_for(ny(2026, 7, 8, 9, 29), "open") == date(2026, 7, 8)
+        assert effective_date_for(ny(2026, 7, 8, 9, 30), "open") == date(2026, 7, 9)
+        assert effective_date_for(ny(2026, 7, 2, 10), "open") == date(2026, 7, 6)
+
+    def test_opening_lock_is_exact(self):
+        assert not is_locked(date(2026, 7, 8), ny(2026, 7, 8, 9, 29), "open")
+        assert is_locked(date(2026, 7, 8), ny(2026, 7, 8, 9, 30), "open")
+
+    def test_open_tracks_daylight_saving_and_early_close_does_not_move_it(self):
+        from app.services.trading_calendar import boundary_value, open_at
+
+        assert open_at(date(2026, 3, 6)).hour == 14
+        assert open_at(date(2026, 3, 9)).hour == 13
+        assert open_at(date(2026, 11, 27)).astimezone(NY).hour == 9
+        assert boundary_value(date(2026, 7, 8), "open") == {
+            "timestamp": "2026-07-08T13:30:00+00:00",
+            "phase": "open",
+        }

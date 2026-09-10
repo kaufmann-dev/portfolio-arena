@@ -17,40 +17,9 @@ def find(rows, slug):
 
 
 class TestLeaderboard:
-    def test_empty_arena(self, client):
-        payload = client.get("/api/arena/managed?direction=long").json()
-        assert payload["market_data_status"] == "fresh"
-        assert payload["portfolios"] == [
-            {
-                "kind": "benchmark",
-                "id": None,
-                "slug": "spy",
-                "name": "SPY",
-                "direction": "long",
-                "status": "reference",
-                "rank": None,
-                "evidence": "pending",
-                "rank_score": None,
-                "metrics": {
-                    "has_data": False,
-                    "itd_return": None,
-                    "spy_return": None,
-                    "cumulative_excess": None,
-                    "mean_daily_alpha": None,
-                    "ci_lower": None,
-                    "ci_upper": None,
-                    "evidence": "pending",
-                    "liquidated_at": None,
-                },
-                "sparkline": [],
-                "is_liquidated": False,
-                "liquidated_at": None,
-            }
-        ]
-
     def test_portfolio_with_history(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        payload = client.get("/api/arena/managed?direction=long").json()
+        payload = client.get("/api/arena/managed?version_id=1&direction=long").json()
 
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row is not None
@@ -66,10 +35,11 @@ class TestLeaderboard:
     def test_lightweight_market_data_snapshot(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
 
-        response = client.get("/api/market-data")
+        response = client.get("/api/market-data?version_id=1")
 
         assert response.status_code == 200
         assert response.json() == {
+            "version_id": 1,
             "as_of": response.json()["target_as_of"],
             "target_as_of": response.json()["target_as_of"],
             "market_data_status": "fresh",
@@ -81,14 +51,14 @@ class TestLeaderboard:
         sample_portfolio,
     ):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        payload = client.get("/api/arena/managed?direction=long").json()
+        payload = client.get("/api/arena/managed?version_id=1&direction=long").json()
 
         row = find(payload["portfolios"], sample_portfolio["slug"])
         spy = find(payload["portfolios"], "spy")
         assert spy["kind"] == "benchmark"
         assert spy["id"] is None
         assert spy["metrics"]["has_data"]
-        assert spy["metrics"]["start_date"] == row["inception"]
+        assert spy["metrics"]["start_at"] == row["inception"]
         assert spy["metrics"]["cumulative_excess"] == 0
 
         from sqlalchemy import func, select
@@ -100,7 +70,7 @@ class TestLeaderboard:
             assert session.scalar(select(func.count()).select_from(Portfolio)) == 1
 
     def test_pending_allocation_has_no_data(self, client, sample_portfolio):
-        payload = client.get("/api/arena/managed?direction=long").json()
+        payload = client.get("/api/arena/managed?version_id=1&direction=long").json()
         row = find(payload["portfolios"], sample_portfolio["slug"])
         assert row["metrics"]["has_data"] is False
 
@@ -120,7 +90,10 @@ class TestLeaderboard:
         from app.services import massive
 
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/arena/managed?direction=long").json()["market_data_status"] == "fresh"
+        assert (
+            client.get("/api/arena/managed?version_id=1&direction=long").json()["market_data_status"]
+            == "fresh"
+        )
         with session_factory()() as session:
             session.execute(update(PriceCache).values(fetched_at=datetime.now(UTC) - timedelta(hours=2)))
             session.commit()
@@ -131,9 +104,9 @@ class TestLeaderboard:
         )
 
         requests = [
-            ("/api/arena/managed?direction=long", {}),
+            ("/api/arena/managed?version_id=1&direction=long", {}),
             (f"/api/portfolios/{sample_portfolio['slug']}", {}),
-            (f"/api/compare?direction=long&track=managed&slugs={sample_portfolio['slug']}", {}),
+            (f"/api/compare?version_id=1&direction=long&track=managed&slugs={sample_portfolio['slug']}", {}),
             (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
         ]
         for url, headers in requests:
@@ -158,93 +131,15 @@ class TestLeaderboard:
             price_cache.clear_cache(session)
 
         requests = [
-            ("/api/arena/managed?direction=long", {}),
+            ("/api/arena/managed?version_id=1&direction=long", {}),
             (f"/api/portfolios/{sample_portfolio['slug']}", {}),
-            (f"/api/compare?direction=long&track=managed&slugs={sample_portfolio['slug']}", {}),
+            (f"/api/compare?version_id=1&direction=long&track=managed&slugs={sample_portfolio['slug']}", {}),
             (f"/api/portfolios/{sample_portfolio['id']}/detail", admin_headers),
         ]
         for url, headers in requests:
             payload = client.get(url, headers=headers).json()
             assert payload["market_data_status"] == "unavailable", url
             assert payload["as_of"] is None, url
-
-    def test_carried_forward_price_promotes_fresh_load_to_stale(
-        self,
-        client,
-        sample_portfolio,
-        monkeypatch,
-    ):
-        from sqlalchemy import select
-
-        from app.db import session_factory
-        from app.models import PriceCache
-        from app.services import arena
-
-        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/arena/managed?direction=long").json()["market_data_status"] == "fresh"
-        with session_factory()() as session:
-            cached = {
-                row.symbol: row.series
-                for row in session.scalars(select(PriceCache).order_by(PriceCache.symbol)).all()
-            }
-        aapl = cached["AAPL"]
-        missing_index = len(aapl) // 2
-        cached["AAPL"] = aapl[:missing_index] + aapl[missing_index + 1 :]
-        monkeypatch.setattr(
-            arena,
-            "load_price_series",
-            lambda *_args, **_kwargs: arena.PriceSeriesLoad(
-                series=cached,
-                status="fresh",
-                as_of=cached["SPY"][-1]["date"],
-                target_as_of=cached["SPY"][-1]["date"],
-            ),
-        )
-
-        payload = client.get("/api/arena/managed?direction=long").json()
-        row = find(payload["portfolios"], sample_portfolio["slug"])
-
-        assert payload["market_data_status"] == "stale"
-        assert row["stale_data"] is True
-
-    def test_missing_inception_price_promotes_fresh_load_to_unavailable(
-        self,
-        client,
-        sample_portfolio,
-        monkeypatch,
-    ):
-        from sqlalchemy import select
-
-        from app.db import session_factory
-        from app.models import PriceCache
-        from app.services import arena
-
-        backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        assert client.get("/api/arena/managed?direction=long").json()["market_data_status"] == "fresh"
-        with session_factory()() as session:
-            cached = {
-                row.symbol: row.series
-                for row in session.scalars(select(PriceCache).order_by(PriceCache.symbol)).all()
-            }
-        cached["AAPL"] = [cached["AAPL"][-1]]
-        monkeypatch.setattr(
-            arena,
-            "load_price_series",
-            lambda *_args, **_kwargs: arena.PriceSeriesLoad(
-                series=cached,
-                status="fresh",
-                as_of=cached["SPY"][-1]["date"],
-                target_as_of=cached["SPY"][-1]["date"],
-            ),
-        )
-
-        payload = client.get("/api/arena/managed?direction=long").json()
-        row = find(payload["portfolios"], sample_portfolio["slug"])
-
-        assert payload["market_data_status"] == "unavailable"
-        assert payload["as_of"] is not None
-        assert row["metrics"]["has_data"] is False
-        assert row["error"]
 
 
 class TestPortfolioDetail:
@@ -255,7 +150,7 @@ class TestPortfolioDetail:
         portfolio = payload["portfolio"]
         assert portfolio["series"], "expected a NAV series"
         assert portfolio["spy_series"][0]["nav"] == 100.0
-        assert portfolio["series"][0]["date"] == portfolio["spy_series"][0]["date"]
+        assert portfolio["series"][0]["timestamp"] == portfolio["spy_series"][0]["timestamp"]
 
         symbols = {holding["symbol"] for holding in portfolio["holdings"]}
         assert symbols == {"AAPL", "MSFT"}
@@ -278,7 +173,6 @@ class TestPortfolioDetail:
         assert execution_prompt.count("If the returned allocation history is empty") == 1
         assert "construct the portfolio's initial allocation" in execution_prompt
         assert "rather than rebuilding it without reference to its\nhistory" in execution_prompt
-        assert "prospective excess return after transaction\ncosts" in execution_prompt
         assert "automatic retention advantage" in execution_prompt
         assert "Do not target either low or high\nturnover" in execution_prompt
         assert "prefer retaining the existing allocation" not in execution_prompt
@@ -288,8 +182,8 @@ class TestPortfolioDetail:
 
         allocation = portfolio["allocations"][0]
         assert allocation["locked"] is True
-        assert allocation["applied_date"] is not None
-        assert allocation["cost"] is not None
+        assert allocation["applied_at"] is not None
+        assert "cost" not in allocation
 
     def test_404(self, client):
         assert client.get("/api/portfolios/nope").status_code == 404
@@ -359,17 +253,19 @@ class TestPortfolioDetail:
 class TestCompare:
     def test_overlay_rebased_to_common_start(self, client, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"], days_back=45)
-        response = client.get(f"/api/compare?direction=long&track=managed&slugs={sample_portfolio['slug']}")
+        response = client.get(
+            f"/api/compare?version_id=1&direction=long&track=managed&slugs={sample_portfolio['slug']}"
+        )
         payload = response.json()
         assert len(payload["series"]) == 1
         for entry in payload["series"]:
             assert entry["series"][0]["nav"] == 100.0
-            assert entry["series"][0]["date"] == payload["start"]
+            assert entry["series"][0]["timestamp"] == payload["start"]["timestamp"]
         assert payload["spy_series"][0]["nav"] == 100.0
-        assert payload["spy_series"][0]["date"] == payload["start"]
+        assert payload["spy_series"][0]["timestamp"] == payload["start"]["timestamp"]
 
     def test_bad_params(self, client):
-        assert client.get("/api/compare?direction=long&track=managed&slugs=").status_code == 422
+        assert client.get("/api/compare?version_id=1&direction=long&track=managed&slugs=").status_code == 422
 
 
 class TestPromptsAndAgents:
@@ -384,14 +280,15 @@ class TestPromptsAndAgents:
             for model in client.get("/api/models", headers=admin_headers).json()["models"]
         )
 
-        benchmark = find(client.get("/api/arena/managed?direction=long").json()["portfolios"], "spy")
+        benchmark = find(
+            client.get("/api/arena/managed?version_id=1&direction=long").json()["portfolios"], "spy"
+        )
         assert set(benchmark) == {
             "kind",
             "id",
             "slug",
             "name",
             "direction",
-            "status",
             "rank",
             "evidence",
             "rank_score",
@@ -453,7 +350,6 @@ class TestAdminMisc:
     def test_settings_roundtrip(self, client, admin_headers):
         original = client.get("/api/settings", headers=admin_headers).json()
         assert original == {
-            "default_cost_bps": 10,
             "managed_allocation_policy": {
                 "min_position_weight_pct": 10.0,
                 "max_position_weight_pct": 25.0,
@@ -479,7 +375,6 @@ class TestAdminMisc:
         response = client.put(
             "/api/settings",
             json={
-                "default_cost_bps": 25,
                 "managed_allocation_policy": {
                     "min_position_weight_pct": 5,
                     "max_position_weight_pct": 20,
@@ -497,7 +392,6 @@ class TestAdminMisc:
         )
         assert response.status_code == 200, response.text
         assert client.get("/api/settings", headers=admin_headers).json() == {
-            "default_cost_bps": 25,
             "managed_allocation_policy": {
                 "min_position_weight_pct": 5.0,
                 "max_position_weight_pct": 20.0,
@@ -525,7 +419,6 @@ class TestAdminMisc:
             response = client.put(
                 "/api/settings",
                 json={
-                    "default_cost_bps": 10,
                     "managed_allocation_policy": {
                         "min_position_weight_pct": 10,
                         "max_position_weight_pct": 25,
@@ -598,19 +491,10 @@ class TestAdminMisc:
 
     def test_clear_price_cache(self, client, admin_headers, sample_portfolio):
         backdate_allocation(sample_portfolio["allocation"]["id"])
-        client.get("/api/arena/managed?direction=long")  # populates the cache
+        client.get("/api/arena/managed?version_id=1&direction=long")  # populates the cache
         response = client.delete("/api/prices/cache", headers=admin_headers)
         assert response.status_code == 200
         assert response.json()["deleted"] >= 1
-
-    def test_portfolio_rename_and_archive(self, client, admin_headers, sample_portfolio):
-        response = client.patch(
-            f"/api/portfolios/{sample_portfolio['id']}",
-            json={"name": "Renamed", "status": "archived"},
-            headers=admin_headers,
-        )
-        assert response.json()["name"] == "Renamed"
-        assert response.json()["status"] == "archived"
 
     def test_symbol_search(self, client, admin_headers):
         response = client.get("/api/symbols/search?q=AAP", headers=admin_headers)

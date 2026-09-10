@@ -102,6 +102,8 @@ def create_app() -> FastAPI:
 
     @app.get("/{path:path}")
     def serve_static(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Not found")
         if not path or path == "/":
             return FileResponse(static_dir / "index.html", headers=static_cache_headers(path, spa=True))
 

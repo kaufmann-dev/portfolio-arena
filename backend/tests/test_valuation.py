@@ -1,377 +1,171 @@
-"""Valuation engine unit tests with synthetic price fixtures.
+"""Hand-calculated managed portfolios on opening and closing boundaries."""
 
-The engine is pure: same inputs must always produce identical output.
-NAV series are base-100 at the first effective close.
-"""
+from datetime import date
 
 import pytest
 
-from app.services.serialize import synthetic_spy_row
+from app.services.trading_calendar import boundary_value
 from app.services.valuation import (
     AllocationInput,
     PositionInput,
     ValuationError,
     build_calendar,
     compute_metrics,
+    point_boundary,
     rebase_series,
     value_portfolio,
 )
 
-
-def series(*points):
-    return [{"date": date, "close": close} for date, close in points]
+DAYS = ["2026-01-05", "2026-01-06", "2026-01-07"]
 
 
-def equity(symbol, weight):
-    return PositionInput(symbol=symbol, weight_pct=weight)
+def boundary(day, phase="close"):
+    return boundary_value(date.fromisoformat(day), phase)
 
 
-DAYS = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
-
-SPY = series(*((day, 100.0 + i) for i, day in enumerate(DAYS)))
-
-
-def calendar(as_of=DAYS[-1]):
-    return build_calendar(SPY, as_of)
-
-
-def test_initial_allocation_deducts_cost_first_then_buys():
-    prices = {"AAPL": series((DAYS[0], 50.0), (DAYS[1], 50.0))}
-    allocations = [AllocationInput(DAYS[0], (equity("AAPL", 100.0),))]
-
-    result = value_portfolio(allocations, cost_bps=10, prices=prices, calendar=calendar(), as_of=DAYS[1])
-
-    # cost = 100 * 100%/100 * 10/10000 = 0.1, then 99.9 buys shares
-    assert result.allocations[0].cost == pytest.approx(0.1)
-    assert result.allocations[0].nav_after == pytest.approx(99.9)
-    assert result.series[0]["nav"] == pytest.approx(99.9)
-    assert result.cumulative_cost == pytest.approx(0.1)
-
-
-def test_nav_drifts_with_prices():
-    prices = {
-        "AAA": series((DAYS[0], 10.0), (DAYS[1], 11.0), (DAYS[2], 12.0)),
-        "BBB": series((DAYS[0], 20.0), (DAYS[1], 20.0), (DAYS[2], 18.0)),
-    }
-    allocations = [AllocationInput(DAYS[0], (equity("AAA", 50.0), equity("BBB", 50.0)))]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[2])
-
-    # 5 shares AAA, 2.5 shares BBB
-    assert result.series[0]["nav"] == pytest.approx(100.0)
-    assert result.series[1]["nav"] == pytest.approx(5 * 11.0 + 2.5 * 20.0)
-    assert result.series[2]["nav"] == pytest.approx(5 * 12.0 + 2.5 * 18.0)
-
-    # drifted holdings on the last day
-    weights = {holding.symbol: holding.weight_pct for holding in result.holdings}
-    assert weights["AAA"] == pytest.approx(60.0 / 105.0 * 100.0)
-    assert weights["BBB"] == pytest.approx(45.0 / 105.0 * 100.0)
-
-
-def test_rebalance_turnover_and_two_sided_cost():
-    # Constant prices: drifted weights equal targets, so turnover is exactly
-    # the target change: 60/40 -> 40/60 = 20% one-sided.
-    prices = {
-        "AAA": series(*((day, 10.0) for day in DAYS)),
-        "BBB": series(*((day, 20.0) for day in DAYS)),
-    }
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 60.0), equity("BBB", 40.0))),
-        AllocationInput(DAYS[2], (equity("AAA", 40.0), equity("BBB", 60.0))),
+def prices(values):
+    return [
+        {"date": day, "open": opening, "close": close}
+        for day, (opening, close) in zip(DAYS, values, strict=True)
     ]
 
-    result = value_portfolio(allocations, cost_bps=10, prices=prices, calendar=calendar(), as_of=DAYS[-1])
 
-    rebalance = result.allocations[1]
-    assert rebalance.turnover_pct == pytest.approx(20.0)
-    nav_before = rebalance.nav_before
-    assert rebalance.cost == pytest.approx(nav_before * 2 * 0.20 * 10 / 10_000)
-    assert rebalance.nav_after == pytest.approx(nav_before - rebalance.cost)
-    assert result.cumulative_turnover_pct == pytest.approx(20.0)
+def position(symbol="AAPL", weight=100):
+    return PositionInput(symbol, weight)
 
 
-def test_rebalance_uses_drifted_weights_not_targets():
-    # AAA doubles by the rebalance: drifted 2/3 vs target 50 -> selling back to
-    # 50/50 turns over |50 - 66.67|/... one-sided = 16.67%.
-    prices = {
-        "AAA": series((DAYS[0], 10.0), (DAYS[1], 20.0), (DAYS[2], 20.0)),
-        "BBB": series((DAYS[0], 10.0), (DAYS[1], 10.0), (DAYS[2], 10.0)),
+SPY = prices([(100, 100), (100, 100), (100, 100)])
+
+
+def value(allocations, data, phase="close", direction="long", as_of=None):
+    end = as_of or boundary(DAYS[-1])
+    return value_portfolio(allocations, data, build_calendar(SPY, end), end, direction, phase)
+
+
+def test_close_execution_starts_at_close_and_marks_next_open():
+    result = value(
+        [AllocationInput(DAYS[0], (position(),))], {"AAPL": prices([(10, 20), (30, 40), (50, 60)])}
+    )
+    assert [point["nav"] for point in result.series] == pytest.approx([100, 150, 200, 250, 300])
+    assert result.series[0]["phase"] == "close"
+    assert result.allocations[0].applied_at == boundary(DAYS[0])
+    assert result.holdings[0].entry_price == 20
+
+
+def test_open_execution_uses_open_and_keeps_same_day_close_distinct():
+    result = value(
+        [AllocationInput(DAYS[0], (position(),))],
+        {"AAPL": prices([(10, 20), (30, 40), (50, 60)])},
+        phase="open",
+    )
+    assert [point["nav"] for point in result.series] == pytest.approx([100, 200, 300, 400, 500, 600])
+    assert result.series[0]["timestamp"] != result.series[1]["timestamp"]
+    assert result.allocations[0].effective_at == boundary(DAYS[0], "open")
+
+
+def test_marks_do_not_rebalance_drifted_weights():
+    data = {"AAPL": prices([(10, 20), (30, 40), (50, 60)]), "MSFT": prices([(10, 10), (10, 10), (10, 10)])}
+    allocation = AllocationInput(DAYS[0], (position("AAPL", 50), position("MSFT", 50)))
+    result = value([allocation], data, phase="open")
+    assert result.series[-1]["nav"] == pytest.approx(350)
+    assert result.cumulative_turnover_pct == 0
+    assert len(result.allocations) == 1
+    assert result.holdings[0].weight_pct == pytest.approx(300 / 350 * 100)
+
+
+def test_rebalance_has_no_cost_and_retains_turnover():
+    data = {
+        "AAPL": prices([(100, 100), (120, 120), (120, 120)]),
+        "MSFT": prices([(100, 100), (100, 100), (110, 110)]),
     }
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 50.0), equity("BBB", 50.0))),
-        AllocationInput(DAYS[1], (equity("AAA", 50.0), equity("BBB", 50.0))),
-    ]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[2])
-
-    assert result.allocations[1].turnover_pct == pytest.approx(100.0 / 6.0, rel=1e-6)
-
-
-def test_exit_position_counts_as_turnover():
-    prices = {
-        "AAA": series(*((day, 10.0) for day in DAYS)),
-        "BBB": series(*((day, 20.0) for day in DAYS)),
-    }
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 100.0),)),
-        AllocationInput(DAYS[2], (equity("BBB", 100.0),)),
-    ]
-
-    result = value_portfolio(allocations, cost_bps=10, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-
-    # Sell 100% AAA, buy 100% BBB: one-sided turnover 100%.
-    assert result.allocations[1].turnover_pct == pytest.approx(100.0)
-
-
-def test_effective_date_shifts_to_next_calendar_close():
-    # Effective date falls on an unscheduled closure (not in the calendar):
-    # the allocation applies at the next actual close.
-    prices = {"AAA": series(*((day, 10.0) for day in DAYS))}
-    allocations = [AllocationInput("2026-01-04", (equity("AAA", 100.0),))]  # Sunday
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-
-    assert result.allocations[0].applied_date == DAYS[0]
-    assert result.series[0]["date"] == DAYS[0]
+    result = value(
+        [AllocationInput(DAYS[0], (position(),)), AllocationInput(DAYS[1], (position("MSFT"),))], data
+    )
+    assert result.series[-1]["nav"] == pytest.approx(132)
+    assert result.allocations[1].nav_before == result.allocations[1].nav_after == pytest.approx(120)
+    assert result.cumulative_turnover_pct == pytest.approx(100)
 
 
 def test_future_allocation_is_pending():
-    prices = {"AAA": series(*((day, 10.0) for day in DAYS))}
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 100.0),)),
-        AllocationInput("2026-02-01", (equity("BBB", 100.0),)),
-    ]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-
-    pending = [a for a in result.allocations if a.applied_date is None]
-    assert len(pending) == 1
-    assert pending[0].effective_date == "2026-02-01"
-    # NAV series unaffected by the pending allocation
-    assert result.series[-1]["nav"] == pytest.approx(100.0)
+    result = value([AllocationInput("2026-01-08", (position(),))], {"AAPL": SPY})
+    assert result.series == []
+    assert result.allocations[0].applied_at is None
 
 
-def test_missing_price_carries_forward_and_flags_stale():
-    prices = {
-        "AAA": series((DAYS[0], 10.0), (DAYS[1], 12.0), (DAYS[3], 14.0)),  # DAYS[2] missing
-    }
-    allocations = [AllocationInput(DAYS[0], (equity("AAA", 100.0),))]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[3])
-
-    assert result.series[2]["nav"] == pytest.approx(result.series[1]["nav"])  # carried
-    assert result.stale_days == {"AAA": [DAYS[2]]}
-    assert result.frozen_symbols == []
-
-
-def test_delisted_symbol_freezes_and_warns():
-    # AAA stops printing after day 0; 5+ trading days of silence => frozen.
-    days = [f"2026-02-{str(dom).zfill(2)}" for dom in (2, 3, 4, 5, 6, 9, 10)]
-    spy = series(*((day, 100.0) for day in days))
-    prices = {"AAA": series((days[0], 10.0))}
-    allocations = [AllocationInput(days[0], (equity("AAA", 100.0),))]
-
-    result = value_portfolio(
-        allocations, cost_bps=0, prices=prices, calendar=build_calendar(spy, days[-1]), as_of=days[-1]
-    )
-
-    assert result.frozen_symbols == ["AAA"]
-    assert result.series[-1]["nav"] == pytest.approx(100.0)  # frozen at last price
-    assert result.stale_days["AAA"] == days[1:]
-
-
-def test_no_price_at_or_before_first_close_raises():
-    prices = {"AAA": series((DAYS[2], 10.0))}
-    allocations = [AllocationInput(DAYS[0], (equity("AAA", 100.0),))]
-
-    with pytest.raises(ValuationError):
-        value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-
-
-def test_zero_weight_positions_are_ignored():
-    prices = {"AAA": series(*((day, 10.0) for day in DAYS))}
-    allocations = [AllocationInput(DAYS[0], (equity("AAA", 100.0), equity("MISSING-DATA", 0.0)))]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-
-    assert len(result.holdings) == 1
-
-
-def test_determinism():
-    prices = {
-        "AAA": series(*((day, 10.0 + i) for i, day in enumerate(DAYS))),
-        "BBB": series(*((day, 20.0 - i / 2) for i, day in enumerate(DAYS))),
-    }
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 70.0), equity("BBB", 30.0))),
-        AllocationInput(DAYS[2], (equity("AAA", 40.0), equity("BBB", 60.0))),
-    ]
-
-    first = value_portfolio(allocations, cost_bps=25, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-    second = value_portfolio(allocations, cost_bps=25, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-
-    assert first.series == second.series
-    assert first.allocations == second.allocations
-    assert first.holdings == second.holdings
-
-
-def test_metrics_vs_spy_identical_window():
-    prices = {"AAA": series(*((day, 10.0) for day in DAYS))}  # flat portfolio
-    allocations = [AllocationInput(DAYS[1], (equity("AAA", 100.0),))]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-    metrics = compute_metrics(result, SPY)
-
-    # Window starts at DAYS[1] (SPY=101), ends DAYS[4] (SPY=104)
-    assert metrics["itd_return"] == pytest.approx(0.0)
-    assert metrics["spy_return"] == pytest.approx(104.0 / 101.0 - 1.0)
-    assert metrics["cumulative_excess"] == pytest.approx(-(104.0 / 101.0 - 1.0))
-
-
-def test_metrics_max_drawdown_and_shape():
-    navs = [100.0, 110.0, 99.0, 104.5, 121.0]
-    prices = {"AAA": series(*((day, nav) for day, nav in zip(DAYS, navs, strict=True)))}
-    allocations = [AllocationInput(DAYS[0], (equity("AAA", 100.0),))]
-
-    result = value_portfolio(allocations, cost_bps=0, prices=prices, calendar=calendar(), as_of=DAYS[-1])
-    metrics = compute_metrics(result, SPY)
-
-    assert metrics["max_drawdown"] == pytest.approx(99.0 / 110.0 - 1.0)
-    assert metrics["itd_return"] == pytest.approx(0.21)
-    assert metrics["ann_volatility"] > 0
-    assert metrics["r1m"] is None  # too young for trailing windows
-
-
-def test_metrics_empty_series():
-    result = value_portfolio([], cost_bps=0, prices={}, calendar=calendar(), as_of=DAYS[-1])
-    assert compute_metrics(result, SPY) == {"has_data": False}
-
-
-def test_rebase_series_windows():
-    rebased = rebase_series(SPY, DAYS[1], DAYS[3])
-    assert [point["date"] for point in rebased] == DAYS[1:4]
-    assert rebased[0]["nav"] == pytest.approx(100.0)
-    assert rebased[-1]["nav"] == pytest.approx(103.0 / 101.0 * 100.0)
-
-
-def test_explicit_long_direction_is_identical_to_default_path():
-    prices = {
-        "AAA": series(*((day, 10.0 + i) for i, day in enumerate(DAYS))),
-        "BBB": series(*((day, 20.0 - i / 2) for i, day in enumerate(DAYS))),
-    }
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 70.0), equity("BBB", 30.0))),
-        AllocationInput(DAYS[2], (equity("AAA", 40.0), equity("BBB", 60.0))),
-    ]
-
-    default = value_portfolio(
-        allocations,
-        cost_bps=25,
-        prices=prices,
-        calendar=calendar(),
-        as_of=DAYS[-1],
-    )
-    explicit = value_portfolio(
-        allocations,
-        cost_bps=25,
-        prices=prices,
-        calendar=calendar(),
-        as_of=DAYS[-1],
-        direction="long",
-    )
-
-    assert explicit == default
-
-
-def test_managed_short_uses_opposite_pnl_and_gross_weights_drift():
-    prices = {"AAA": series((DAYS[0], 100.0), (DAYS[1], 150.0))}
-    allocations = [AllocationInput(DAYS[0], (equity("AAA", 100.0),))]
-
-    result = value_portfolio(
-        allocations,
-        cost_bps=0,
-        prices=prices,
-        calendar=calendar(),
-        as_of=DAYS[1],
+def test_short_shares_are_fixed_between_decisions():
+    result = value(
+        [AllocationInput(DAYS[0], (position(),))],
+        {"AAPL": prices([(100, 100), (110, 120), (110, 100)])},
         direction="short",
     )
-
-    assert result.series == [
-        {"date": DAYS[0], "nav": pytest.approx(100.0)},
-        {"date": DAYS[1], "nav": pytest.approx(50.0)},
-    ]
-    assert result.holdings[0].value == pytest.approx(150.0)
-    assert result.holdings[0].weight_pct == pytest.approx(300.0)
+    assert [point["nav"] for point in result.series] == pytest.approx([100, 90, 80, 90, 100])
 
 
-def test_managed_short_rebalance_cost_uses_absolute_traded_notional():
-    prices = {
-        "AAA": series(*((day, 10.0) for day in DAYS)),
-        "BBB": series(*((day, 20.0) for day in DAYS)),
-    }
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 100.0),)),
-        AllocationInput(DAYS[1], (equity("BBB", 100.0),)),
-    ]
-
-    result = value_portfolio(
-        allocations,
-        cost_bps=10,
-        prices=prices,
-        calendar=calendar(),
-        as_of=DAYS[1],
+def test_short_liquidates_at_open_and_never_recovers():
+    result = value(
+        [AllocationInput(DAYS[0], (position(),))],
+        {"AAPL": prices([(100, 100), (210, 150), (50, 50)])},
         direction="short",
     )
-
-    initial, rebalance = result.allocations
-    assert initial.cost == pytest.approx(0.1)
-    assert rebalance.turnover_pct == pytest.approx(100.0)
-    # Covering AAA and opening BBB trades 200% of pre-cost NAV.
-    assert rebalance.cost == pytest.approx(rebalance.nav_before * 2.0 * 10 / 10_000)
-
-
-def test_managed_short_liquidation_is_absorbing_and_leaves_later_allocation_pending():
-    prices = {
-        "AAA": series(*((day, value) for day, value in zip(DAYS, [100, 201, 210, 220, 230], strict=True))),
-        "BBB": series(*((day, 20.0) for day in DAYS)),
-    }
-    allocations = [
-        AllocationInput(DAYS[0], (equity("AAA", 100.0),)),
-        AllocationInput(DAYS[2], (equity("BBB", 100.0),)),
-    ]
-
-    result = value_portfolio(
-        allocations,
-        cost_bps=0,
-        prices=prices,
-        calendar=calendar(),
-        as_of=DAYS[-1],
-        direction="short",
-    )
-
-    assert result.liquidated_at == DAYS[1]
-    assert result.series[1:] == [{"date": day, "nav": 0.0} for day in DAYS[1:]]
+    assert result.liquidated_at == boundary(DAYS[1], "open")
+    assert [point["nav"] for point in result.series] == [100, 0, 0, 0, 0]
     assert result.holdings == []
-    assert result.allocations[1].effective_date == DAYS[2]
-    assert result.allocations[1].applied_date is None
 
 
-def test_short_spy_benchmark_compounds_inverse_daily_returns():
-    spy = series((DAYS[0], 100.0), (DAYS[1], 110.0), (DAYS[2], 99.0))
+def test_short_reference_resets_only_at_close():
+    spy = prices([(100, 110), (121, 132), (132, 132)])
+    result = rebase_series(spy, boundary(DAYS[0], "open"), boundary(DAYS[-1]), "short")
+    # Initial day 100->90; next open marks 81 without resetting, close is72.
+    assert [point["nav"] for point in result] == pytest.approx([100, 90, 81, 72, 72, 72])
 
-    rebased = rebase_series(spy, DAYS[0], DAYS[2], direction="short")
 
-    assert rebased[-1]["nav"] == pytest.approx(100.0 * 0.9 * 1.1)
+def test_missing_open_is_not_replaced_by_close():
+    data = prices([(100, 100), (110, 120), (110, 100)])
+    del data[1]["open"]
+    with pytest.raises(ValuationError, match="Missing open price"):
+        value([AllocationInput(DAYS[0], (position(),))], {"AAPL": data})
 
 
-def test_synthetic_short_spy_row_exposes_direction_and_liquidation():
-    spy = series((DAYS[0], 100.0), (DAYS[1], 210.0), (DAYS[2], 220.0))
+def test_calendar_preserves_missing_open_for_horizon_accounting():
+    spy = [dict(point) for point in SPY]
+    del spy[1]["open"]
+    events = build_calendar(spy, boundary(DAYS[-1]))
+    assert len(events) == 6
+    assert events[2] == boundary(DAYS[1], "open")
 
-    row = synthetic_spy_row(spy, direction="short")
 
-    assert row["slug"] == "spy"
-    assert row["name"] == "Short SPY"
-    assert row["direction"] == "short"
-    assert row["is_liquidated"] is True
-    assert row["liquidated_at"] == DAYS[1]
-    assert row["sparkline"] == [100.0, 0.0, 0.0]
+def test_metrics_use_full_session_returns_and_252_annualization():
+    data = prices([(100, 101), (110, 121), (132, 133)])
+    result = value(
+        [AllocationInput(DAYS[0], (position(),))],
+        {"AAPL": data},
+        phase="open",
+        as_of=boundary(DAYS[-1], "open"),
+    )
+    metrics = compute_metrics(result, SPY)
+    assert metrics["observation_count"] == 2
+    assert metrics["mean_daily_alpha"] == pytest.approx(0.15)
+    assert metrics["ann_volatility"] == pytest.approx((0.005**0.5) * (252**0.5))
+    assert metrics["itd_return"] == pytest.approx(0.32)
+    assert metrics["end_at"] == point_boundary(result.series[-1])
+
+
+def test_close_statistics_exclude_partial_open_to_close_entry_interval():
+    result = value(
+        [AllocationInput(DAYS[0], (position(),))],
+        {"AAPL": prices([(100, 110), (120, 121), (130, 133.1)])},
+        phase="open",
+    )
+    metrics = compute_metrics(result, SPY)
+    assert metrics["observation_count"] == 2
+    assert metrics["mean_daily_alpha"] == pytest.approx(0.1)
+    assert metrics["itd_return"] == pytest.approx(0.331)
+
+
+def test_missing_full_spy_session_preserves_calendar_and_fails_pricing():
+    spy = [SPY[0], SPY[2]]
+    calendar = build_calendar(spy, boundary(DAYS[-1]))
+    assert len(calendar) == 6
+    assert calendar[2] == boundary(DAYS[1], "open")
+    with pytest.raises(ValuationError, match="Missing open price for SPY"):
+        rebase_series(spy, boundary(DAYS[0]), boundary(DAYS[-1]))

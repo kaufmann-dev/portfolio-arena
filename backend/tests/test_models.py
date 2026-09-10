@@ -207,6 +207,7 @@ def test_codex_portfolios_are_eligible_but_start_disabled(
     unsupported_portfolio = client.post(
         "/api/portfolios",
         json={
+            "version_id": 1,
             "name": "Manual only",
             "agent_id": unsupported_agent["id"],
             "prompt_id": sample_prompt["id"],
@@ -263,6 +264,13 @@ def test_reassigning_to_manual_agent_disables_and_cancels_automation(
         json={"agent_id": manual_agent["id"]},
         headers=admin_headers,
     )
+    assert response.status_code == 409
+    assert client.post(f"/api/evaluator/runs/{run['id']}/cancel", headers=admin_headers).status_code == 200
+    response = client.patch(
+        f"/api/portfolios/{sample_portfolio['id']}",
+        json={"agent_id": manual_agent["id"]},
+        headers=admin_headers,
+    )
     assert response.status_code == 200
 
     with session_factory()() as session:
@@ -273,7 +281,7 @@ def test_reassigning_to_manual_agent_disables_and_cancels_automation(
     assert config.enabled is False
     assert historical["id"] == run["id"]
     assert historical["status"] == "cancelled"
-    assert "without integrated automation" in historical["error"]
+    assert "Cancelled by an administrator" in historical["error"]
 
 
 def test_runs_snapshot_agent_profile_and_model_execution_id(

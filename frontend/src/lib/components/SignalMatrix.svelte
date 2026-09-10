@@ -1,18 +1,16 @@
 <script lang="ts">
-  import type { RebuiltAnalysisContext, RebuiltArenaPortfolio, SignalHorizon } from "../api/types";
+  import type { RebuiltArenaPortfolio, SignalHorizon } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
   import { pct } from "../format";
   import { link } from "../stores/router.svelte";
 
   interface Props {
     rows: RebuiltArenaPortfolio[];
-    selectedHorizon: number;
-    context: RebuiltAnalysisContext;
     benchmarkName: string;
   }
 
-  const { rows, selectedHorizon, context, benchmarkName }: Props = $props();
-  const horizons = Array.from({ length: 20 }, (_, index) => index + 1);
+  const { rows, benchmarkName }: Props = $props();
+  const horizons = Array.from({ length: 40 }, (_, index) => (index + 1) / 2);
 
   function cellFor(row: RebuiltArenaPortfolio, horizon: number): SignalHorizon | undefined {
     return row.signal_horizons.find((cell) => cell.horizon === horizon);
@@ -31,13 +29,7 @@
   }
 
   function detailHref(row: RebuiltArenaPortfolio): string {
-    return portfolioAnalysisHref(row.slug, "rebuilt", row.direction, {
-      ...context,
-      view: "signal",
-      objective: "canonical",
-      cost_basis: "gross",
-      horizon: selectedHorizon,
-    });
+    return portfolioAnalysisHref(row.slug, "rebuilt", row.direction, row.version_id);
   }
 </script>
 
@@ -46,8 +38,7 @@
     <div>
       <h2 id="signal-matrix-title">Signal Alpha matrix</h2>
       <p>
-        Mean daily alpha for every completed holding period. The selected {selectedHorizon}-session horizon is
-        outlined.
+        Direct signal evidence at half-session holding periods. Each portfolio’s selected horizon is outlined.
       </p>
     </div>
   </header>
@@ -56,14 +47,14 @@
   <div class="table-scroll" role="region" aria-labelledby="signal-matrix-title" tabindex="0">
     <table class="matrix-table">
       <caption class="visually-hidden">
-        Portfolio rows by one through twenty trading-session holding periods. Every cell contains its numeric
+        Portfolio rows by half through twenty trading-session holding periods. Every cell contains its numeric
         result or pending state.
       </caption>
       <thead>
         <tr>
           <th class="portfolio-head" scope="col">Portfolio</th>
           {#each horizons as horizon (horizon)}
-            <th scope="col" class={{ selected: horizon === selectedHorizon }}>
+            <th scope="col">
               H{horizon}
             </th>
           {/each}
@@ -73,7 +64,7 @@
         <tr class="benchmark">
           <th scope="row">{benchmarkName} reference</th>
           {#each horizons as horizon (horizon)}
-            <td class={{ selected: horizon === selectedHorizon }}>0.00%</td>
+            <td>0.00%</td>
           {/each}
         </tr>
         {#each rows as row (row.id)}
@@ -82,11 +73,12 @@
               <a href={detailHref(row)} onclick={(event) => link(event, detailHref(row))}>
                 {row.name}
               </a>
+              <span class="badge">{row.execution_boundary === "open" ? "Open" : "Close"}</span>
             </th>
             {#each horizons as horizon (horizon)}
               {@const cell = cellFor(row, horizon)}
               <td
-                class={[cell?.evidence ?? "pending", horizon === selectedHorizon && "selected"]}
+                class={[cell?.evidence ?? "pending", horizon === row.selected_policy?.horizon && "selected"]}
                 title={cellTitle(row, cell, horizon)}
               >
                 {cellText(cell)}
@@ -105,7 +97,7 @@
   }
 
   .matrix-table {
-    --matrix-table-min: 1740px;
+    --matrix-table-min: 3240px;
     --matrix-cell-width: 74px;
     --matrix-label-width: 236px;
   }
@@ -113,6 +105,13 @@
   .matrix-table tr > :first-child {
     padding-left: 12px;
     text-align: left;
+  }
+
+  .matrix-table tr > :first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--bg-surface);
   }
 
   .matrix-table tbody th {
@@ -127,11 +126,6 @@
     border-left: 2px solid var(--accent);
   }
 
-  .matrix-table thead .selected {
-    color: var(--accent);
-    border-top: 2px solid var(--accent);
-  }
-
   .matrix-table tbody tr:last-child .selected {
     border-bottom: 2px solid var(--accent);
   }
@@ -140,9 +134,5 @@
   .matrix-table .benchmark td {
     color: var(--text-tertiary);
     background: var(--bg-inset);
-  }
-
-  .benchmark .selected {
-    color: var(--accent);
   }
 </style>

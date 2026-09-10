@@ -1,27 +1,34 @@
-"""Pure analytics for daily, independent rebuilt-portfolio signals.
+"""Pure rebuilt analytics: forty half-session horizons, one fixed-exposure policy.
 
-The engine has no database or wall-clock dependencies.  A signal starts at its
-effective close and remains in a cohort for exactly ``horizon`` close-to-close
-intervals.  Each active cohort receives ``exposure / horizon`` percent of the
-aggregate portfolio; every unused sleeve remains invested in SPY.
+Signals enter once per session. A horizon H uses 1/ceil(H) sleeves; unused
+capacity follows direction-matched SPY. Only entries/expiries change holdings.
 """
 
 from __future__ import annotations
 
 import math
-from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from statistics import NormalDist, median
 from typing import Literal
 
-from .valuation import TRADING_DAYS_PER_YEAR, Direction, PositionInput, Series, rebase_series
+from .trading_calendar import boundary_value, is_trading_day
+from .valuation import (
+    Boundary,
+    Direction,
+    Phase,
+    PositionInput,
+    PriceLookup,
+    Series,
+    ValuationError,
+    boundary_date,
+    rebase_series,
+    series_metrics,
+    session_returns,
+)
 
-HORIZONS = tuple(range(1, 21))
-EXPOSURES = tuple(range(10, 101, 10))
+HORIZONS = tuple(step / 2 for step in range(1, 41))
 DIRECT_SEARCH_FAMILY_SIZE = len(HORIZONS)
-OPTIMIZED_SEARCH_FAMILY_SIZE = len(HORIZONS) * len(EXPOSURES)
-CostBasis = Literal["gross", "net"]
-Objective = Literal["canonical", "max_alpha", "max_information_ratio", "max_sharpe"]
 Evidence = Literal["pending", "inconclusive", "positive", "negative"]
 
 
@@ -40,226 +47,57 @@ class MappedSignal:
 
 @dataclass
 class PolicyResult:
-    horizon: int
-    exposure_pct: int
-    cost_basis: CostBasis
+    horizon: float
     series: Series
     spy_series: Series
     daily_returns: list[dict]
     holdings: list[dict]
     active_cohorts: list[dict]
-    cumulative_cost: float
     cumulative_turnover_pct: float
     direction: Direction = "long"
-    liquidated_at: str | None = None
+    liquidated_at: Boundary | None = None
     metrics: dict = field(default_factory=dict)
 
 
-class RebuiltValuationError(ValueError):
-    """A rebuilt cohort cannot be valued with the supplied series."""
-
-
-class _Lookup:
-    def __init__(self, points: Series):
-        cleaned = sorted(
-            (str(point["date"]), float(point["close"]))
-            for point in points or []
-            if point.get("close") is not None
-            and math.isfinite(float(point["close"]))
-            and float(point["close"]) > 0
-        )
-        self.dates = [day for day, _ in cleaned]
-        self.values = [value for _, value in cleaned]
-
-    def at(self, day: str) -> float | None:
-        index = bisect_right(self.dates, day)
-        return self.values[index - 1] if index else None
+class RebuiltValuationError(ValuationError):
+    """A rebuilt cohort cannot be priced from the supplied observations."""
 
 
 @dataclass
 class PreparedMarket:
-    """Read-only market indexes reused across every portfolio and policy."""
-
     prices: dict[str, Series]
-    calendar: list[str]
-    lookups: dict[str, _Lookup]
-    daily_returns: dict[tuple[str, str], dict[str, float]] = field(default_factory=dict)
-    short_benchmarks: dict[int, Series] = field(default_factory=dict)
+    calendar: list[Boundary]
+    lookups: dict[str, PriceLookup]
 
-    def daily_return(self, symbol: str, previous_day: str, day: str) -> float:
-        try:
-            return self.daily_returns[(previous_day, day)][symbol]
-        except KeyError:
-            raise RebuiltValuationError(
-                f"No price at or before {previous_day} and {day} for {symbol}"
-            ) from None
-
-    def short_benchmark(self, first_index: int) -> Series:
-        benchmark = self.short_benchmarks.get(first_index)
-        if benchmark is None:
-            benchmark = rebase_series(
-                self.prices["SPY"],
-                self.calendar[first_index],
-                self.calendar[-1],
-                direction="short",
-            )
-            self.short_benchmarks[first_index] = benchmark
-        return benchmark
+    def price(self, symbol: str, event: Boundary) -> float:
+        lookup = self.lookups.get(symbol)
+        if lookup is None:
+            raise RebuiltValuationError(f"Missing price series for {symbol}.")
+        return lookup.require(event, symbol)
 
 
-def prepare_market(prices: dict[str, Series], calendar: list[str]) -> PreparedMarket:
-    market = PreparedMarket(
-        prices=prices,
-        calendar=calendar,
-        lookups={symbol: _Lookup(points) for symbol, points in prices.items()},
-    )
-    for previous_day, day in zip(calendar, calendar[1:], strict=False):
-        returns: dict[str, float] = {}
-        for symbol, lookup in market.lookups.items():
-            previous = lookup.at(previous_day)
-            current = lookup.at(day)
-            if previous is not None and current is not None:
-                returns[symbol] = current / previous - 1.0
-        market.daily_returns[(previous_day, day)] = returns
-    return market
-
-
-@dataclass
-class _PolicyContext:
-    market: PreparedMarket
-    signals: list[SignalInput]
-    mapped: list[MappedSignal]
-    mapped_by_session: dict[int, list[MappedSignal]]
-    base_targets: dict[tuple[int, int], tuple[dict[str, float], list[MappedSignal]]] = field(
-        default_factory=dict
+def prepare_market(prices: dict[str, Series], calendar: list[Boundary]) -> PreparedMarket:
+    return PreparedMarket(
+        prices, calendar, {symbol: PriceLookup(points) for symbol, points in prices.items()}
     )
 
-    @classmethod
-    def build(cls, market: PreparedMarket, signals: list[SignalInput]) -> _PolicyContext:
-        mapped = map_signals(signals, market.calendar)
-        return cls(
-            market=market,
-            signals=signals,
-            mapped=mapped,
-            mapped_by_session=_signals_by_session(mapped),
-        )
 
-    def target(
-        self,
-        day_index: int,
-        horizon: int,
-        exposure_pct: int,
-    ) -> tuple[dict[str, float], list[MappedSignal]]:
-        key = (day_index, horizon)
-        cached = self.base_targets.get(key)
-        if cached is None:
-            cached = _target_weights(
-                self.mapped_by_session,
-                day_index,
-                horizon,
-                100,
-            )
-            self.base_targets[key] = cached
-        base, active = cached
-        if exposure_pct == 100:
-            return base, active
-        factor = exposure_pct / 100.0
-        target = {symbol: weight * factor for symbol, weight in base.items() if symbol != "SPY"}
-        target["SPY"] = 1.0 + (base.get("SPY", 1.0) - 1.0) * factor
-        return target, active
-
-
-def map_signals(signals: list[SignalInput], calendar: list[str]) -> list[MappedSignal]:
-    """Map effective dates to the first actual SPY session on or after them."""
-    mapped: list[MappedSignal] = []
+def map_signals(
+    signals: list[SignalInput], calendar: list[Boundary], execution_boundary: Phase = "close"
+) -> list[MappedSignal]:
+    mapped = []
     for signal in sorted(signals, key=lambda item: (item.effective_date, item.id)):
-        index = bisect_left(calendar, signal.effective_date)
-        if index < len(calendar):
-            mapped.append(MappedSignal(signal=signal, start_index=index))
-    return mapped
-
-
-def _weighted_basket_return(
-    signal: SignalInput,
-    start_day: str,
-    end_day: str,
-    lookups: dict[str, _Lookup],
-) -> float | None:
-    result = 0.0
-    for position in signal.positions:
-        if position.weight_pct <= 0:
-            continue
-        lookup = lookups.get(position.symbol)
-        start = lookup.at(start_day) if lookup else None
-        end = lookup.at(end_day) if lookup else None
-        if start is None or end is None:
-            return None
-        result += position.weight_pct / 100.0 * (end / start - 1.0)
-    return result
-
-
-def _short_basket_return(
-    signal: SignalInput,
-    start_index: int,
-    end_index: int,
-    calendar: list[str],
-    lookups: dict[str, _Lookup],
-) -> tuple[float | None, str | None]:
-    """Return inverse fixed-share P&L, capped when portfolio equity reaches zero."""
-    quantities: dict[str, float] = {}
-    start_prices: dict[str, float] = {}
-    start_day = calendar[start_index]
-    for position in signal.positions:
-        if position.weight_pct <= 0:
-            continue
-        lookup = lookups.get(position.symbol)
-        start = lookup.at(start_day) if lookup else None
-        if start is None:
-            return None, None
-        quantities[position.symbol] = quantities.get(position.symbol, 0.0) + (
-            position.weight_pct / 100.0 / start
+        index = next(
+            (
+                index
+                for index, event in enumerate(calendar)
+                if event["phase"] == execution_boundary and boundary_date(event) >= signal.effective_date
+            ),
+            None,
         )
-        start_prices[position.symbol] = start
-
-    underlying_pnl = 0.0
-    for day in calendar[start_index + 1 : end_index + 1]:
-        underlying_pnl = 0.0
-        for symbol, quantity in quantities.items():
-            current = lookups[symbol].at(day)
-            if current is None:
-                return None, None
-            underlying_pnl += quantity * (current - start_prices[symbol])
-        nav = 1.0 - underlying_pnl
-        if nav <= 0:
-            return -1.0, day
-    return -underlying_pnl, None
-
-
-def _directional_spy_return(
-    spy: _Lookup,
-    start_index: int,
-    end_index: int,
-    calendar: list[str],
-    direction: Direction,
-) -> tuple[float | None, str | None]:
-    start = spy.at(calendar[start_index])
-    if start is None:
-        return None, None
-    if direction == "long":
-        end = spy.at(calendar[end_index])
-        return (end / start - 1.0, None) if end is not None else (None, None)
-
-    nav = 1.0
-    previous = start
-    for day in calendar[start_index + 1 : end_index + 1]:
-        current = spy.at(day)
-        if current is None:
-            return None, None
-        nav *= 2.0 - current / previous
-        if nav <= 0:
-            return -1.0, day
-        previous = current
-    return nav - 1.0, None
+        if index is not None:
+            mapped.append(MappedSignal(signal, index))
+    return mapped
 
 
 def _evidence(lower: float | None, upper: float | None) -> Evidence:
@@ -346,489 +184,250 @@ def automatic_hac_lag(observation_count: int) -> int:
 def signal_horizon_statistics(
     signals: list[SignalInput],
     prices: dict[str, Series],
-    calendar: list[str],
-    horizon: int,
+    calendar: list[Boundary],
+    horizon: float,
     family_size: int = DIRECT_SEARCH_FAMILY_SIZE,
     direction: Direction = "long",
+    execution_boundary: Phase = "close",
     *,
-    _context: _PolicyContext | None = None,
+    prepared_market: PreparedMarket | None = None,
 ) -> dict:
-    """Direct, completed-cohort signal alpha for one holding horizon."""
+    """Direct basket evidence, normalized to one full trading session."""
     if horizon not in HORIZONS:
-        raise ValueError("horizon must be between 1 and 20")
-    if direction not in ("long", "short"):
-        raise ValueError("direction must be long or short")
-    context = _context or _PolicyContext.build(prepare_market(prices, calendar), signals)
-    lookups = context.market.lookups
-    spy = lookups.get("SPY")
-    if spy is None:
-        raise RebuiltValuationError("SPY price series is required")
-
-    completed_values: list[float] = []
-    completed: list[dict] = []
-    mapped_signals = context.mapped
-    # A signal after the last priced session has begun its lifecycle but has
-    # no observable entry close yet. It is open evidence, not invalid evidence.
-    open_count = len(signals) - len(mapped_signals)
+        raise ValueError("horizon must be H0.5 through H20 in half steps")
+    market = prepared_market or prepare_market(prices, calendar)
+    mapped = map_signals(signals, calendar, execution_boundary)
+    completed = []
+    values = []
+    open_count = len(signals) - len(mapped)
     invalid_count = 0
-    for mapped in mapped_signals:
-        end_index = mapped.start_index + horizon
-        start_day = calendar[mapped.start_index]
-        basket_liquidated_at = None
-        if end_index >= len(calendar):
-            if direction == "long":
-                open_count += 1
-                continue
-            basket_return, basket_liquidated_at = _short_basket_return(
-                mapped.signal,
-                mapped.start_index,
-                len(calendar) - 1,
-                calendar,
-                lookups,
-            )
-            if basket_return is None or basket_liquidated_at is None:
-                open_count += 1
-                continue
-        elif direction == "long":
-            basket_return = _weighted_basket_return(
-                mapped.signal,
-                start_day,
-                calendar[end_index],
-                lookups,
-            )
-        else:
-            basket_return, basket_liquidated_at = _short_basket_return(
-                mapped.signal,
-                mapped.start_index,
-                end_index,
-                calendar,
-                lookups,
-            )
-        comparison_end_index = (
-            bisect_left(calendar, basket_liquidated_at) if basket_liquidated_at is not None else end_index
-        )
-        comparison_end_day = calendar[comparison_end_index]
-        spy_return, spy_liquidated_at = _directional_spy_return(
-            spy,
-            mapped.start_index,
-            comparison_end_index,
-            calendar,
-            direction,
-        )
-        if basket_return is None or spy_return is None or spy_liquidated_at is not None:
-            invalid_count += 1
-            continue
-        if (direction == "long" and 1.0 + basket_return <= 0) or 1.0 + spy_return <= 0:
-            invalid_count += 1
-            continue
-        observed_intervals = comparison_end_index - mapped.start_index
-        daily_alpha = ((1.0 + basket_return) / (1.0 + spy_return)) ** (1.0 / observed_intervals) - 1.0
-        completed_values.append(daily_alpha)
-        completed.append(
-            {
-                "signal_id": mapped.signal.id,
-                "start_date": start_day,
-                "end_date": comparison_end_day,
-                "signal_return": basket_return,
-                "spy_return": spy_return,
-                "daily_alpha": daily_alpha,
-                "liquidated_at": basket_liquidated_at,
+    steps = int(horizon * 2)
+    for item in mapped:
+        planned_end = item.start_index + steps
+        final_index = min(planned_end, len(calendar) - 1)
+        start = calendar[item.start_index]
+        entries = {}
+        try:
+            entries = {
+                position.symbol: market.price(position.symbol, start)
+                for position in item.signal.positions
+                if position.weight_pct > 0
             }
-        )
-
-    valid_count = len(completed_values) + open_count
-    completion_ratio = len(completed_values) / valid_count if valid_count else 0.0
-    eligible = len(completed_values) >= 2 and completion_ratio >= 0.5
+            liquidation_index = None
+            basket_return = 0.0
+            for index in range(item.start_index + 1, final_index + 1):
+                underlying = sum(
+                    position.weight_pct
+                    / 100
+                    * (market.price(position.symbol, calendar[index]) / entries[position.symbol] - 1)
+                    for position in item.signal.positions
+                    if position.weight_pct > 0
+                )
+                basket_return = underlying if direction == "long" else -underlying
+                if basket_return <= -1:
+                    basket_return = -1.0
+                    liquidation_index = index
+                    break
+            if planned_end >= len(calendar) and liquidation_index is None:
+                open_count += 1
+                continue
+            end_index = liquidation_index if liquidation_index is not None else planned_end
+            end = calendar[end_index]
+            benchmark = rebase_series(prices["SPY"], start, end, direction)
+            benchmark_return = benchmark[-1]["nav"] / 100 - 1
+            if benchmark_return <= -1:
+                invalid_count += 1
+                continue
+            observed_sessions = (end_index - item.start_index) / 2
+            daily_alpha = ((1 + basket_return) / (1 + benchmark_return)) ** (1 / observed_sessions) - 1
+            values.append(daily_alpha)
+            completed.append(
+                {
+                    "signal_id": item.signal.id,
+                    "start_at": start,
+                    "end_at": end,
+                    "signal_return": basket_return,
+                    "spy_return": benchmark_return,
+                    "daily_alpha": daily_alpha,
+                    "liquidated_at": end if liquidation_index is not None else None,
+                }
+            )
+        except (ValuationError, KeyError):
+            invalid_count += 1
+    denominator = len(values) + open_count
+    completion_ratio = len(values) / denominator if denominator else 0.0
+    eligible = len(values) >= 2 and completion_ratio >= 0.5 and invalid_count == 0
     result = {
         "horizon": horizon,
-        "complete_count": len(completed_values),
+        "complete_count": len(values),
         "open_count": open_count,
         "invalid_count": invalid_count,
         "completion_ratio": completion_ratio,
         "eligible": eligible,
         "completed_cohorts": completed,
-        **hac_mean_statistics(completed_values, lag=horizon - 1, family_size=family_size),
+        **hac_mean_statistics(values, lag=math.ceil(horizon) - 1, family_size=family_size),
     }
     if not eligible:
-        result.update(
-            {
-                "ci_lower": None,
-                "ci_upper": None,
-                "evidence": "pending",
-            }
-        )
+        result.update(ci_lower=None, ci_upper=None, evidence="pending")
     return result
 
 
-def _signals_by_session(mapped: list[MappedSignal]) -> dict[int, list[MappedSignal]]:
-    grouped: dict[int, list[MappedSignal]] = {}
-    for item in mapped:
-        grouped.setdefault(item.start_index, []).append(item)
-    return grouped
-
-
-def _target_weights(
-    mapped_by_session: dict[int, list[MappedSignal]],
-    day_index: int,
-    horizon: int,
-    exposure_pct: int,
+def _targets(
+    mapped: list[MappedSignal], index: int, steps: int, horizon: float
 ) -> tuple[dict[str, float], list[MappedSignal]]:
-    active_groups = [
-        mapped_by_session[start_index]
-        for start_index in range(max(0, day_index - horizon + 1), day_index + 1)
-        if start_index in mapped_by_session
-    ]
-    active = [item for group in active_groups for item in group]
-    session_sleeve = exposure_pct / 100.0 / horizon
+    active = [item for item in mapped if item.start_index <= index < item.start_index + steps]
+    groups: dict[int, list[MappedSignal]] = {}
+    for item in active:
+        groups.setdefault(item.start_index, []).append(item)
     target: dict[str, float] = {}
-    for group in active_groups:
-        signal_sleeve = session_sleeve / len(group)
+    sleeve = 1 / math.ceil(horizon)
+    for group in groups.values():
         for item in group:
             for position in item.signal.positions:
                 if position.weight_pct > 0:
                     target[position.symbol] = (
-                        target.get(position.symbol, 0.0) + signal_sleeve * position.weight_pct / 100.0
+                        target.get(position.symbol, 0.0) + sleeve / len(group) * position.weight_pct / 100
                     )
-    equity_weight = sum(target.values())
-    target["SPY"] = target.get("SPY", 0.0) + max(0.0, 1.0 - equity_weight)
+    # Distinct from a SPY stock recommendation: this is the daily-reset reference.
+    target["__reference__"] = max(0.0, 1 - sum(target.values()))
     return target, active
 
 
-def _daily_return(lookup: _Lookup, previous_day: str, day: str) -> float:
-    previous = lookup.at(previous_day)
-    current = lookup.at(day)
-    if previous is None or current is None:
-        raise RebuiltValuationError(f"No price at or before {previous_day} and {day}")
-    return current / previous - 1.0
-
-
-def _construct_long_policy(
-    signals: list[SignalInput],
-    prices: dict[str, Series],
-    calendar: list[str],
-    horizon: int,
-    exposure_pct: int,
-    cost_bps: int,
-    cost_basis: CostBasis,
-    context: _PolicyContext | None = None,
-) -> PolicyResult:
-    """Construct one overlapping-cohort aggregate policy."""
-    if horizon not in HORIZONS:
-        raise ValueError("horizon must be between 1 and 20")
-    if exposure_pct not in EXPOSURES:
-        raise ValueError("exposure_pct must be 10, 20, …, 100")
-    if cost_basis not in ("gross", "net"):
-        raise ValueError("cost_basis must be gross or net")
-    context = context or _PolicyContext.build(prepare_market(prices, calendar), signals)
-    mapped = context.mapped
-    if not mapped:
-        return PolicyResult(
-            horizon=horizon,
-            exposure_pct=exposure_pct,
-            cost_basis=cost_basis,
-            series=[],
-            spy_series=[],
-            daily_returns=[],
-            holdings=[],
-            active_cohorts=[],
-            cumulative_cost=0.0,
-            cumulative_turnover_pct=0.0,
-        )
-
-    lookups = context.market.lookups
-    if "SPY" not in lookups:
-        raise RebuiltValuationError("SPY price series is required")
-    first_index = min(item.start_index for item in mapped)
-    nav = 100.0
-    cumulative_cost = 0.0
-    cumulative_turnover = 0.0
-    drifted = {"SPY": 1.0}
-    series: Series = []
-    spy_series: Series = []
-    daily: list[dict] = []
-    previous_day: str | None = None
-    target: dict[str, float] = {"SPY": 1.0}
-    active: list[MappedSignal] = []
-    deferred_cost = 0.0
-    deferred_turnover_pct = 0.0
-
-    for day_index in range(first_index, len(calendar)):
-        day = calendar[day_index]
-        before_return = 100.0 if previous_day is not None and not daily else nav
-        if previous_day is not None:
-            day_returns = context.market.daily_returns[(previous_day, day)]
-            values: dict[str, float] = {}
-            for symbol, weight in target.items():
-                lookup = lookups.get(symbol)
-                if lookup is None:
-                    raise RebuiltValuationError(f"No price series for {symbol}")
-                try:
-                    daily_return = day_returns[symbol]
-                except KeyError:
-                    raise RebuiltValuationError(
-                        f"No price at or before {previous_day} and {day} for {symbol}"
-                    ) from None
-                values[symbol] = weight * (1.0 + daily_return)
-            gross_factor = sum(values.values())
-            nav *= gross_factor
-            drifted = (
-                {symbol: value / gross_factor for symbol, value in values.items()} if gross_factor > 0 else {}
-            )
-
-        next_target, active = context.target(
-            day_index,
-            horizon,
-            exposure_pct,
-        )
-        symbols = set(drifted) | set(next_target)
-        turnover = 0.5 * sum(
-            abs(next_target.get(symbol, 0.0) - drifted.get(symbol, 0.0)) for symbol in symbols
-        )
-        cost = nav * 2.0 * turnover * cost_bps / 10_000.0 if cost_basis == "net" else 0.0
-        nav -= cost
-        cumulative_cost += cost
-        cumulative_turnover += turnover * 100.0
-
-        if previous_day is not None:
-            spy_return = day_returns["SPY"]
-            strategy_return = nav / before_return - 1.0 if before_return > 0 else 0.0
-            reported_cost = cost + deferred_cost
-            reported_turnover_pct = turnover * 100.0 + deferred_turnover_pct
-            daily.append(
-                {
-                    "date": day,
-                    "return": strategy_return,
-                    "spy_return": spy_return,
-                    "alpha": strategy_return - spy_return,
-                    "turnover_pct": reported_turnover_pct,
-                    "cost": reported_cost,
-                }
-            )
-            deferred_cost = 0.0
-            deferred_turnover_pct = 0.0
+def _cohort_end(calendar: list[Boundary], end_index: int) -> Boundary:
+    if end_index < len(calendar):
+        return calendar[end_index]
+    day = date.fromisoformat(boundary_date(calendar[-1]))
+    phase = calendar[-1]["phase"]
+    for _ in range(end_index - len(calendar) + 1):
+        if phase == "open":
+            phase = "close"
         else:
-            # There is no return observation at the entry close. Carry its
-            # trade cost into the first actual close-to-close observation so
-            # every net statistic and objective includes the entry trade.
-            deferred_cost = cost
-            deferred_turnover_pct = turnover * 100.0
-        series.append({"date": day, "nav": nav})
-        spy_close = lookups["SPY"].at(day)
-        if spy_close is not None:
-            if not spy_series:
-                spy_base = spy_close
-            spy_series.append({"date": day, "nav": spy_close / spy_base * 100.0})
-        target = next_target
-        drifted = next_target
-        previous_day = day
-
-    last_index = len(calendar) - 1
-    active_out = [
-        {
-            "signal_id": item.signal.id,
-            "start_date": calendar[item.start_index],
-            "end_date": (
-                calendar[item.start_index + horizon] if item.start_index + horizon < len(calendar) else None
-            ),
-            "age_sessions": last_index - item.start_index,
-            "positions": [
-                {"symbol": position.symbol, "weight_pct": position.weight_pct}
-                for position in item.signal.positions
-                if position.weight_pct > 0
-            ],
-        }
-        for item in active
-    ]
-    return PolicyResult(
-        horizon=horizon,
-        exposure_pct=exposure_pct,
-        cost_basis=cost_basis,
-        series=series,
-        spy_series=spy_series,
-        daily_returns=daily,
-        holdings=[
-            {"symbol": symbol, "weight_pct": weight * 100.0}
-            for symbol, weight in sorted(target.items())
-            if weight > 0
-        ],
-        active_cohorts=active_out,
-        cumulative_cost=cumulative_cost,
-        cumulative_turnover_pct=cumulative_turnover,
-    )
+            phase = "open"
+            day += timedelta(days=1)
+            while not is_trading_day(day):
+                day += timedelta(days=1)
+    return boundary_value(day, phase)
 
 
-def _construct_short_policy(
+def construct_policy(
     signals: list[SignalInput],
     prices: dict[str, Series],
-    calendar: list[str],
-    horizon: int,
-    exposure_pct: int,
-    cost_bps: int,
-    cost_basis: CostBasis,
-    context: _PolicyContext | None = None,
+    calendar: list[Boundary],
+    horizon: float,
+    direction: Direction = "long",
+    execution_boundary: Phase = "close",
+    *,
+    prepared_market: PreparedMarket | None = None,
 ) -> PolicyResult:
     if horizon not in HORIZONS:
-        raise ValueError("horizon must be between 1 and 20")
-    if exposure_pct not in EXPOSURES:
-        raise ValueError("exposure_pct must be 10, 20, …, 100")
-    if cost_basis not in ("gross", "net"):
-        raise ValueError("cost_basis must be gross or net")
-    context = context or _PolicyContext.build(prepare_market(prices, calendar), signals)
-    mapped = context.mapped
+        raise ValueError("horizon must be H0.5 through H20 in half steps")
+    if direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
+    market = prepared_market or prepare_market(prices, calendar)
+    mapped = map_signals(signals, calendar, execution_boundary)
     if not mapped:
-        return PolicyResult(
-            horizon=horizon,
-            exposure_pct=exposure_pct,
-            cost_basis=cost_basis,
-            series=[],
-            spy_series=[],
-            daily_returns=[],
-            holdings=[],
-            active_cohorts=[],
-            cumulative_cost=0.0,
-            cumulative_turnover_pct=0.0,
-            direction="short",
-        )
-
-    lookups = context.market.lookups
-    if "SPY" not in lookups:
-        raise RebuiltValuationError("SPY price series is required")
+        return PolicyResult(horizon, [], [], [], [], [], 0.0, direction)
+    steps = int(horizon * 2)
     first_index = min(item.start_index for item in mapped)
-    benchmark = context.market.short_benchmark(first_index)
-    benchmark_by_date = {point["date"]: point["nav"] for point in benchmark}
-
-    nav = 100.0
-    cumulative_cost = 0.0
-    cumulative_turnover = 0.0
-    drifted = {"SPY": 1.0}
-    series: Series = []
-    daily: list[dict] = []
-    previous_day: str | None = None
-    target: dict[str, float] = {"SPY": 1.0}
+    benchmark = rebase_series(prices["SPY"], calendar[first_index], calendar[-1], direction)
+    reference = {point["timestamp"]: point["nav"] for point in benchmark}
+    trade_indices = {item.start_index for item in mapped} | {item.start_index + steps for item in mapped}
+    quantities: dict[str, float] = {}
+    entries: dict[str, float] = {}
+    collateral = 0.0
+    reference_units = 0.0
+    series = []
+    turnover_total = 0.0
+    liquidated_at = None
     active: list[MappedSignal] = []
-    deferred_cost = 0.0
-    deferred_turnover_pct = 0.0
-    liquidated_at: str | None = None
+    target: dict[str, float] = {}
 
-    def benchmark_daily_return(previous: str, current: str) -> float | None:
-        previous_nav = benchmark_by_date.get(previous)
-        current_nav = benchmark_by_date.get(current)
-        if previous_nav is None or current_nav is None:
-            return None
-        if previous_nav <= 0:
-            return None
-        return current_nav / previous_nav - 1.0
+    def current_values(event: Boundary) -> dict[str, float]:
+        values = {symbol: quantity * market.price(symbol, event) for symbol, quantity in quantities.items()}
+        values["__reference__"] = reference_units * reference[event["timestamp"]]
+        return values
 
-    for day_index in range(first_index, len(calendar)):
-        day = calendar[day_index]
+    for index in range(first_index, len(calendar)):
+        event = calendar[index]
         if liquidated_at is not None:
-            series.append({"date": day, "nav": 0.0})
-            previous_day = day
+            series.append({**event, "nav": 0.0})
             continue
-
-        before_return = 100.0 if previous_day is not None and not daily else nav
-        if previous_day is not None:
-            day_returns = context.market.daily_returns[(previous_day, day)]
-            notionals: dict[str, float] = {}
-            underlying_pnl = 0.0
-            nav_before_move = nav
-            for symbol, weight in target.items():
-                lookup = lookups.get(symbol)
-                if lookup is None:
-                    raise RebuiltValuationError(f"No price series for {symbol}")
-                try:
-                    daily_return = day_returns[symbol]
-                except KeyError:
-                    raise RebuiltValuationError(
-                        f"No price at or before {previous_day} and {day} for {symbol}"
-                    ) from None
-                prior_notional = nav_before_move * weight
-                notionals[symbol] = prior_notional * (1.0 + daily_return)
-                underlying_pnl += prior_notional * daily_return
-            nav = nav_before_move - underlying_pnl
-            if nav <= 0:
-                nav = 0.0
-                liquidated_at = day
-                spy_return = benchmark_daily_return(previous_day, day)
-                strategy_return = -1.0 if before_return > 0 else 0.0
-                daily.append(
-                    {
-                        "date": day,
-                        "return": strategy_return,
-                        "spy_return": spy_return,
-                        "alpha": (strategy_return - spy_return if spy_return is not None else None),
-                        "turnover_pct": deferred_turnover_pct,
-                        "cost": deferred_cost,
-                    }
+        values = current_values(event)
+        stock_value = sum(value for symbol, value in values.items() if symbol != "__reference__")
+        nav = (
+            (
+                stock_value
+                if direction == "long"
+                else collateral
+                + sum(
+                    quantity * (entries[symbol] - market.price(symbol, event))
+                    for symbol, quantity in quantities.items()
                 )
-                deferred_cost = 0.0
-                deferred_turnover_pct = 0.0
-                series.append({"date": day, "nav": 0.0})
-                target = {}
-                drifted = {}
-                active = []
-                previous_day = day
-                continue
-            drifted = {symbol: notional / nav for symbol, notional in notionals.items()}
-
-        next_target, active = context.target(
-            day_index,
-            horizon,
-            exposure_pct,
-        )
-        symbols = set(drifted) | set(next_target)
-        turnover = 0.5 * sum(
-            abs(next_target.get(symbol, 0.0) - drifted.get(symbol, 0.0)) for symbol in symbols
-        )
-        cost = nav * 2.0 * turnover * cost_bps / 10_000.0 if cost_basis == "net" else 0.0
-        nav -= cost
-        cumulative_cost += cost
-        cumulative_turnover += turnover * 100.0
-        if nav <= 0:
-            nav = 0.0
-            liquidated_at = day
-            target = {}
-            drifted = {}
-            active = []
-        else:
-            target = next_target
-            drifted = next_target
-
-        if previous_day is not None:
-            spy_return = benchmark_daily_return(previous_day, day)
-            strategy_return = nav / before_return - 1.0 if before_return > 0 else 0.0
-            reported_cost = cost + deferred_cost
-            reported_turnover_pct = turnover * 100.0 + deferred_turnover_pct
-            daily.append(
-                {
-                    "date": day,
-                    "return": strategy_return,
-                    "spy_return": spy_return,
-                    "alpha": strategy_return - spy_return if spy_return is not None else None,
-                    "turnover_pct": reported_turnover_pct,
-                    "cost": reported_cost,
-                }
             )
-            deferred_cost = 0.0
-            deferred_turnover_pct = 0.0
-        elif liquidated_at is None:
-            deferred_cost = cost
-            deferred_turnover_pct = turnover * 100.0
-        series.append({"date": day, "nav": nav})
-        previous_day = day
+            + values["__reference__"]
+            if series
+            else 100.0
+        )
+        if nav <= 0:
+            liquidated_at = event
+            series.append({**event, "nav": 0.0})
+            quantities, active, target = {}, [], {}
+            continue
+        if index in trade_indices:
+            target, active = _targets(mapped, index, steps, horizon)
+            weights = (
+                {symbol: value / nav for symbol, value in values.items()}
+                if series
+                else {"__reference__": 1.0}
+            )
+            turnover_target = dict(target)
+            if direction == "long":
+                # A long SPY recommendation and the unused reference sleeve
+                # own the same asset; moving between them is not a trade.
+                for basket in (weights, turnover_target):
+                    basket["SPY"] = basket.get("SPY", 0.0) + basket.pop("__reference__", 0.0)
+            turnover_total += (
+                0.5
+                * sum(
+                    abs(turnover_target.get(symbol, 0) - weights.get(symbol, 0))
+                    for symbol in turnover_target.keys() | weights.keys()
+                )
+                * 100
+            )
+            entries = {
+                symbol: market.price(symbol, event)
+                for symbol, weight in target.items()
+                if symbol != "__reference__" and weight > 0
+            }
+            quantities = {symbol: nav * target[symbol] / entry for symbol, entry in entries.items()}
+            collateral = nav * sum(weight for symbol, weight in target.items() if symbol != "__reference__")
+            reference_value = reference[event["timestamp"]]
+            if target.get("__reference__", 0) and reference_value <= 0:
+                raise RebuiltValuationError("Direction-matched SPY reference has liquidated.")
+            reference_units = (
+                nav * target.get("__reference__", 0) / reference_value if reference_value > 0 else 0.0
+            )
+        series.append({**event, "nav": nav})
 
-    last_index = len(calendar) - 1
+    holdings = []
+    if liquidated_at is None:
+        final_values = current_values(calendar[-1])
+        merged: dict[str, float] = {}
+        for symbol, value in final_values.items():
+            name = "SPY" if symbol == "__reference__" else symbol
+            merged[name] = merged.get(name, 0.0) + value
+        holdings = [
+            {"symbol": symbol, "weight_pct": value / series[-1]["nav"] * 100}
+            for symbol, value in sorted(merged.items())
+            if value > 0
+        ]
     active_out = (
         [
             {
                 "signal_id": item.signal.id,
-                "start_date": calendar[item.start_index],
-                "end_date": (
-                    calendar[item.start_index + horizon]
-                    if item.start_index + horizon < len(calendar)
-                    else None
-                ),
-                "age_sessions": last_index - item.start_index,
+                "start_at": calendar[item.start_index],
+                "end_at": _cohort_end(calendar, item.start_index + steps),
+                "age_sessions": (len(calendar) - 1 - item.start_index) / 2,
                 "positions": [
                     {"symbol": position.symbol, "weight_pct": position.weight_pct}
                     for position in item.signal.positions
@@ -841,237 +440,72 @@ def _construct_short_policy(
         else []
     )
     return PolicyResult(
-        horizon=horizon,
-        exposure_pct=exposure_pct,
-        cost_basis=cost_basis,
-        series=series,
-        spy_series=benchmark,
-        daily_returns=daily,
-        holdings=(
-            [
-                {"symbol": symbol, "weight_pct": weight * 100.0}
-                for symbol, weight in sorted(target.items())
-                if weight > 0
-            ]
-            if liquidated_at is None
-            else []
-        ),
-        active_cohorts=active_out,
-        cumulative_cost=cumulative_cost,
-        cumulative_turnover_pct=cumulative_turnover,
-        direction="short",
-        liquidated_at=liquidated_at,
+        horizon,
+        series,
+        benchmark,
+        session_returns(series, benchmark),
+        holdings,
+        active_out,
+        turnover_total,
+        direction,
+        liquidated_at,
     )
-
-
-def construct_policy(
-    signals: list[SignalInput],
-    prices: dict[str, Series],
-    calendar: list[str],
-    horizon: int,
-    exposure_pct: int,
-    cost_bps: int,
-    cost_basis: CostBasis,
-    direction: Direction = "long",
-    *,
-    _context: _PolicyContext | None = None,
-) -> PolicyResult:
-    """Construct one overlapping-cohort aggregate long or short policy."""
-    if direction == "long":
-        return _construct_long_policy(
-            signals,
-            prices,
-            calendar,
-            horizon,
-            exposure_pct,
-            cost_bps,
-            cost_basis,
-            _context,
-        )
-    if direction == "short":
-        return _construct_short_policy(
-            signals,
-            prices,
-            calendar,
-            horizon,
-            exposure_pct,
-            cost_bps,
-            cost_basis,
-            _context,
-        )
-    raise ValueError("direction must be long or short")
 
 
 def policy_metrics(
-    result: PolicyResult,
-    completion: dict,
-    family_size: int = 1,
+    result: PolicyResult, completion: dict, family_size: int = DIRECT_SEARCH_FAMILY_SIZE
 ) -> dict:
-    if not result.series:
-        return {
-            "has_data": False,
-            "complete_count": completion["complete_count"],
-            "open_count": completion["open_count"],
-            "completion_ratio": completion["completion_ratio"],
-            "eligible": completion["eligible"],
-            **hac_mean_statistics(
-                [],
-                lag=result.horizon - 1,
-                family_size=family_size,
-            ),
-        }
-    returns = [
-        float(point["return"])
-        for point in result.daily_returns
-        if point.get("return") is not None and math.isfinite(float(point["return"]))
-    ]
-    alphas = [
-        float(point["alpha"])
-        for point in result.daily_returns
-        if point.get("alpha") is not None and math.isfinite(float(point["alpha"]))
-    ]
-    alpha_stats = hac_mean_statistics(alphas, lag=result.horizon - 1, family_size=family_size)
-    mean_return = sum(returns) / len(returns) if returns else None
-    return_std = _sample_std(returns)
-    alpha_std = _sample_std(alphas)
-    sharpe = (
-        mean_return / return_std * math.sqrt(TRADING_DAYS_PER_YEAR)
-        if mean_return is not None and return_std > 0
-        else None
+    metrics = series_metrics(
+        result.series, result.spy_series, result.cumulative_turnover_pct, result.liquidated_at
     )
-    information_ratio = (
-        alpha_stats["mean_daily_alpha"] / alpha_std * math.sqrt(TRADING_DAYS_PER_YEAR)
-        if alpha_stats["mean_daily_alpha"] is not None and alpha_std > 0
-        else None
+    alphas = [point["alpha"] for point in result.daily_returns if point["alpha"] is not None]
+    metrics.update(hac_mean_statistics(alphas, lag=math.ceil(result.horizon) - 1, family_size=family_size))
+    metrics.update(
+        {key: completion[key] for key in ("complete_count", "open_count", "completion_ratio", "eligible")}
     )
-    peak = 100.0
-    max_drawdown = 0.0
-    for point in result.series:
-        peak = max(peak, point["nav"])
-        if peak > 0:
-            max_drawdown = min(max_drawdown, point["nav"] / peak - 1.0)
-    strategy_return = result.series[-1]["nav"] / 100.0 - 1.0
-    spy_return = result.spy_series[-1]["nav"] / 100.0 - 1.0 if len(result.spy_series) > 1 else 0.0
-    metrics = {
-        "has_data": True,
-        "start_date": result.series[0]["date"],
-        "end_date": result.series[-1]["date"],
-        "itd_return": strategy_return,
-        "spy_return": spy_return,
-        "cumulative_excess": strategy_return - spy_return,
-        "ann_volatility": return_std * math.sqrt(TRADING_DAYS_PER_YEAR) if returns else None,
-        "max_drawdown": max_drawdown,
-        "turnover_pct": result.cumulative_turnover_pct,
-        "cost_drag_pct": result.cumulative_cost,
-        "liquidated_at": result.liquidated_at,
-        "sharpe": sharpe,
-        "information_ratio": information_ratio,
-        "complete_count": completion["complete_count"],
-        "open_count": completion["open_count"],
-        "completion_ratio": completion["completion_ratio"],
-        "eligible": completion["eligible"],
-        **alpha_stats,
-    }
     if not completion["eligible"]:
-        metrics.update(
-            {
-                "ci_lower": None,
-                "ci_upper": None,
-                "evidence": "pending",
-            }
-        )
+        metrics.update(ci_lower=None, ci_upper=None, evidence="pending")
     return metrics
 
 
-def _sample_std(values: list[float]) -> float:
-    if len(values) < 2:
-        return 0.0
-    mean = sum(values) / len(values)
-    return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
-
-
-def selected_objective_score(metrics: dict, objective: Objective) -> float | None:
-    if objective == "canonical":
-        return metrics.get("ci_lower")
-    if objective == "max_alpha":
-        return metrics.get("mean_daily_alpha")
-    if objective == "max_information_ratio":
-        return metrics.get("information_ratio")
-    if objective == "max_sharpe":
-        return metrics.get("sharpe")
-    raise ValueError(f"Unknown objective: {objective}")
-
-
-def select_policy(candidates: list[PolicyResult], objective: Objective) -> PolicyResult | None:
-    """Select an eligible policy, resolving exact ties conservatively."""
-    scored = [
-        (selected_objective_score(candidate.metrics, objective), candidate)
+def select_policy(candidates: list[PolicyResult]) -> PolicyResult | None:
+    eligible = [
+        candidate
         for candidate in candidates
-        if candidate.metrics.get("eligible") and (objective != "canonical" or candidate.exposure_pct == 100)
+        if candidate.metrics.get("eligible") and candidate.metrics.get("ci_lower") is not None
     ]
-    scored = [(score, candidate) for score, candidate in scored if score is not None]
-    if not scored:
-        return None
     return max(
-        scored,
-        key=lambda item: (
-            item[0],
-            -item[1].exposure_pct,
-            -item[1].horizon,
-        ),
-    )[1]
+        eligible, key=lambda candidate: (candidate.metrics["ci_lower"], -candidate.horizon), default=None
+    )
 
 
 def evaluate_policy_grid(
     signals: list[SignalInput],
     prices: dict[str, Series],
-    calendar: list[str],
-    cost_bps: int,
-    cost_basis: CostBasis,
-    objective: Objective,
+    calendar: list[Boundary],
     direction: Direction = "long",
+    execution_boundary: Phase = "close",
     *,
-    policy_pairs: tuple[tuple[int, int], ...] | None = None,
     prepared_market: PreparedMarket | None = None,
 ) -> tuple[list[dict], list[PolicyResult], PolicyResult | None]:
-    """Evaluate the direct H=1..20 matrix and all admissible policies."""
-    context = _PolicyContext.build(
-        prepared_market or prepare_market(prices, calendar),
-        signals,
-    )
-    horizon_stats = [
+    market = prepared_market or prepare_market(prices, calendar)
+    statistics = [
         signal_horizon_statistics(
             signals,
             prices,
             calendar,
             horizon,
-            family_size=DIRECT_SEARCH_FAMILY_SIZE,
             direction=direction,
-            _context=context,
+            execution_boundary=execution_boundary,
+            prepared_market=market,
         )
         for horizon in HORIZONS
     ]
-
-    family_size = DIRECT_SEARCH_FAMILY_SIZE if objective == "canonical" else OPTIMIZED_SEARCH_FAMILY_SIZE
-    policies: list[PolicyResult] = []
-    completion_by_horizon = {item["horizon"]: item for item in horizon_stats}
-    pairs = policy_pairs or tuple((horizon, exposure) for horizon in HORIZONS for exposure in EXPOSURES)
-    for horizon, exposure in pairs:
-        result = construct_policy(
-            signals,
-            prices,
-            calendar,
-            horizon,
-            exposure,
-            cost_bps,
-            cost_basis,
-            direction,
-            _context=context,
+    policies = []
+    for horizon, completion in zip(HORIZONS, statistics, strict=True):
+        policy = construct_policy(
+            signals, prices, calendar, horizon, direction, execution_boundary, prepared_market=market
         )
-        result.metrics = policy_metrics(
-            result,
-            completion_by_horizon[horizon],
-            family_size=family_size,
-        )
-        policies.append(result)
-    return horizon_stats, policies, select_policy(policies, objective)
+        policy.metrics = policy_metrics(policy, completion)
+        policies.append(policy)
+    return statistics, policies, select_policy(policies)

@@ -2,9 +2,14 @@
   import { Tabs } from "bits-ui";
   import { onMount } from "svelte";
 
+  import { router } from "../stores/router.svelte";
   import { apiJson, del, patchJson, postJson, putJson } from "../api/client";
   import type {
     AdminPrompt,
+    ArenaVersion,
+    VersionsResponse,
+    ExecutionBoundary,
+    Boundary,
     AdminPromptsResponse,
     AdminAgent,
     AllocationOut,
@@ -20,13 +25,11 @@
     HarnessDefinition,
     HarnessesResponse,
     ManagedPortfolioDetail,
-    MetaPortfolioSetCreated,
     ModelDefinition,
     ModelHarnessCapability,
     MarketDataStatus,
     PortfolioResetResult,
     PromptAvailability,
-    PromptContextScope,
     PromptMode,
     PromptVersion,
     PromptVersionsResponse,
@@ -38,10 +41,19 @@
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import ConfirmDialog from "../components/ui/ConfirmDialog.svelte";
   import { fmtDate, num, pctPoints, pctPointsSignClass } from "../format";
+  import { selectedVersion } from "../arena";
   import { auth } from "../stores/auth.svelte";
 
   type Tab =
-    "allocation" | "automation" | "portfolio" | "models" | "agents" | "prompts" | "keys" | "settings";
+    | "versions"
+    | "allocation"
+    | "automation"
+    | "portfolio"
+    | "models"
+    | "agents"
+    | "prompts"
+    | "keys"
+    | "settings";
   interface DestructiveConfirmation {
     title: string;
     description: string;
@@ -50,6 +62,7 @@
   }
 
   const ADMIN_TABS: { id: Tab; label: string }[] = [
+    { id: "versions", label: "Versions" },
     { id: "allocation", label: "Portfolio state" },
     { id: "automation", label: "Automation" },
     { id: "portfolio", label: "Portfolios" },
@@ -93,40 +106,103 @@
   }
 
   // ── Shared data ──────────────────────────────
+  let versions = $state.raw<ArenaVersion[]>([]);
+  let versionId = $state<number | null>(null);
+  let versionNames = $state<Record<number, string>>({});
+  let newVersionName = $state("");
+  let newExecutionBoundary = $state<ExecutionBoundary>("close");
+  let versionBusy = $state(false);
+  function writeVersionUrl() {
+    const url = new URL(window.location.href);
+    if (versionId !== null) url.searchParams.set("version", String(versionId));
+    window.history.replaceState(window.history.state, "", url);
+    router.syncVersion();
+  }
+  function changeVersion(event: Event) {
+    versionId = Number((event.currentTarget as HTMLSelectElement).value);
+    selectedSlug = "";
+    detail = null;
+    editPortfolio = null;
+    writeVersionUrl();
+  }
+  async function createVersion(event: SubmitEvent) {
+    event.preventDefault();
+    if (!newVersionName.trim() || versionBusy) return;
+    versionBusy = true;
+    try {
+      const version = await postJson<ArenaVersion>("/api/admin/versions", { name: newVersionName.trim() });
+      versionId = version.id;
+      newVersionName = "";
+      await loadAll();
+      flash("Version created with evaluation paused.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Could not create version.");
+    } finally {
+      versionBusy = false;
+    }
+  }
+  async function saveVersion(version: ArenaVersion, evaluationEnabled = version.evaluation_enabled) {
+    versionBusy = true;
+    try {
+      await patchJson(`/api/admin/versions/${version.id}`, {
+        name: versionNames[version.id].trim(),
+        evaluation_enabled: evaluationEnabled,
+      });
+      await loadAll();
+      flash(
+        evaluationEnabled
+          ? "Version saved; evaluation enabled."
+          : "Version saved; evaluation paused. Running evaluations may finish.",
+      );
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Could not save version.");
+    } finally {
+      versionBusy = false;
+    }
+  }
+  function deleteVersion(version: ArenaVersion) {
+    requestConfirmation({
+      title: `Delete ${version.name}?`,
+      description: "This empty Arena version will be permanently removed.",
+      confirmLabel: "Delete version",
+      action: async () => {
+        await del(`/api/admin/versions/${version.id}`);
+        await loadAll();
+        return true;
+      },
+    });
+  }
+  function deletePrompt(prompt: AdminPrompt) {
+    requestConfirmation({
+      title: `Delete ${prompt.name}?`,
+      description: "The unused prompt and its revision history will be permanently removed.",
+      confirmLabel: "Delete prompt",
+      action: async () => {
+        await del(`/api/admin/prompts/${prompt.id}`);
+        await loadAll();
+        return true;
+      },
+    });
+  }
   let portfolios = $state.raw<AdminPortfolio[]>([]);
-  let metaSets = $state.raw<MetaPortfolioSetCreated[]>([]);
-  let portfolioStatus = $state<"all" | "active" | "archived">("all");
   let portfolioSearch = $state("");
   let portfolioBusy = $state<number | null>(null);
   let savingPortfolio = $state(false);
-  let metaAgentDrafts = $state<Record<number, number>>({});
-  let metaSetBusy = $state<number | null>(null);
   let prompts = $state.raw<AdminPrompt[]>([]);
   let agents = $state.raw<AdminAgent[]>([]);
   let models = $state.raw<ModelDefinition[]>([]);
   let harnesses = $state.raw<HarnessDefinition[]>([]);
   let notice = $state("");
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
-  const activePrompts = $derived(prompts.filter((prompt) => prompt.status === "active"));
-  const activeAgents = $derived(agents.filter((agent) => agent.status === "active"));
+  const activePrompts = $derived(prompts);
+  const activeAgents = $derived(agents);
   const visiblePortfolios = $derived(
     portfolios.filter(
       (portfolio) =>
-        (portfolioStatus === "all" || portfolio.status === portfolioStatus) &&
+        portfolio.version_id === versionId &&
         portfolio.name.toLowerCase().includes(portfolioSearch.trim().toLowerCase()),
     ),
   );
-  const activeArenaPrompts = $derived(
-    activePrompts.filter(
-      (prompt) => prompt.context_scope === "arena" && prompt.mode === "both" && prompt.direction === "both",
-    ),
-  );
-  const automationAgents = $derived(
-    activeAgents.filter((agent) =>
-      harnesses.some((harness) => harness.id === agent.harness?.id && harness.automation_supported),
-    ),
-  );
-
   function promptSupportsTrack(mode: PromptAvailability, track: PromptMode): boolean {
     return mode === "both" || mode === track;
   }
@@ -145,16 +221,8 @@
     return direction === "long" ? "Long" : "Short";
   }
 
-  function promptScopeLabel(scope: PromptContextScope): string {
-    return scope === "arena" ? "Arena synthesis" : "Portfolio strategy";
-  }
-
   function promptIsCompatible(prompt: AdminPrompt, mode: PromptMode, direction: Direction): boolean {
     return promptSupportsTrack(prompt.mode, mode) && promptSupportsDirection(prompt.direction, direction);
-  }
-
-  function promptHasActivePortfolio(promptId: number): boolean {
-    return portfolios.some((portfolio) => portfolio.status === "active" && portfolio.prompt.id === promptId);
   }
 
   function promptSupportsCell(
@@ -189,38 +257,48 @@
   }
 
   async function loadAll() {
-    const [portfolioPayload, promptsPayload, agentsPayload, modelsPayload, harnessesPayload] =
+    const [portfolioPayload, promptsPayload, agentsPayload, modelsPayload, harnessesPayload, versionPayload] =
       await Promise.all([
         apiJson<AdminPortfoliosResponse>("/api/admin/portfolios"),
-        apiJson<AdminPromptsResponse>("/api/admin/prompts?status=all"),
-        apiJson<{ agents: AdminAgent[] }>("/api/admin/agents?status=all"),
+        apiJson<AdminPromptsResponse>("/api/admin/prompts"),
+        apiJson<{ agents: AdminAgent[] }>("/api/admin/agents"),
         apiJson<{ models: ModelDefinition[] }>("/api/models"),
         apiJson<HarnessesResponse>("/api/harnesses"),
+        apiJson<VersionsResponse>("/api/versions"),
       ]);
     portfolios = portfolioPayload.portfolios;
-    metaSets = portfolioPayload.meta_sets;
-    metaAgentDrafts = Object.fromEntries(metaSets.map((family) => [family.id, family.agent_id]));
     prompts = promptsPayload.prompts;
     agents = agentsPayload.agents;
     models = modelsPayload.models;
     harnesses = harnessesPayload.harnesses;
+    versions = versionPayload.versions;
+    versionId =
+      selectedVersion(
+        versions,
+        versionId === null ? new URLSearchParams(window.location.search).get("version") : String(versionId),
+      )?.id ?? null;
+    versionNames = Object.fromEntries(versions.map((version) => [version.id, version.name]));
+    if (versionId !== null) writeVersionUrl();
   }
 
   async function refreshPrompts() {
-    const payload = await apiJson<AdminPromptsResponse>("/api/admin/prompts?status=all");
+    const payload = await apiJson<AdminPromptsResponse>("/api/admin/prompts");
     prompts = payload.prompts;
   }
 
   onMount(() => {
     void auth.restore().then(() => {
-      if (auth.isAuthenticated) void loadAll();
+      if (auth.isAuthenticated)
+        void loadAll().catch((error) =>
+          flash(error instanceof Error ? error.message : "Could not load administration."),
+        );
     });
   });
 
   // ── Tab 1: managed allocations and rebuilt signals ───────────────────────
   let selectedSlug = $state("");
   let detail = $state.raw<ManagedPortfolioDetail | RebuiltPortfolioDetail | null>(null);
-  let detailAsOf = $state<string | null>(null);
+  let detailAsOf = $state<Boundary | null>(null);
   let detailMarketDataStatus = $state<MarketDataStatus>("fresh");
   let detailLoading = $state(false);
   let editingAllocation = $state<AllocationOut | null>(null);
@@ -266,7 +344,7 @@
   function buildHandoff(): string {
     if (!detail || detail.kind !== "managed") return "";
     const lines = [
-      `${detail.name} — current state as of ${detailAsOf ?? "n/a"}`,
+      `${detail.name} — current state as of ${fmtDate(detailAsOf)}`,
       `Overall note: ${latestAllocation?.note?.trim() || "—"}`,
       "",
       `${detail.direction === "short" ? "Short" : "Long"} holdings:`,
@@ -328,7 +406,7 @@
     const portfolioSlug = detail.slug;
     requestConfirmation({
       title: "Delete allocation?",
-      description: `The allocation effective ${allocation.effective_date} will be permanently removed.`,
+      description: `The allocation effective ${fmtDate(allocation.effective_at)} will be permanently removed.`,
       confirmLabel: "Delete allocation",
       action: async () => {
         try {
@@ -367,7 +445,7 @@
     const portfolioSlug = detail.slug;
     requestConfirmation({
       title: "Delete signal?",
-      description: `The pending signal effective ${signal.effective_date} will be permanently removed.`,
+      description: `The pending signal effective ${fmtDate(signal.effective_at)} will be permanently removed.`,
       confirmLabel: "Delete signal",
       action: async () => {
         try {
@@ -424,22 +502,14 @@
   let newPromptId = $state<number | null>(null);
   let newPromptMode = $state<PromptMode>("managed");
   let newDirection = $state<Direction>("long");
-  let newCostBps = $state<string>("");
   let portfolioError = $state("");
   const newPortfolioPrompts = $derived(
-    activePrompts.filter(
-      (prompt) =>
-        prompt.context_scope === "portfolio" && promptIsCompatible(prompt, newPromptMode, newDirection),
-    ),
+    activePrompts.filter((prompt) => promptIsCompatible(prompt, newPromptMode, newDirection)),
   );
 
   function clearIncompatibleNewPortfolioPrompt(): void {
     const selectedPrompt = prompts.find((prompt) => prompt.id === newPromptId);
-    if (
-      !selectedPrompt ||
-      selectedPrompt.context_scope !== "portfolio" ||
-      !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)
-    ) {
+    if (!selectedPrompt || !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)) {
       newPromptId = null;
     }
   }
@@ -461,16 +531,12 @@
   async function createPortfolio(event: SubmitEvent) {
     event.preventDefault();
     portfolioError = "";
-    if (!newName.trim() || newAgentId === null || newPromptId === null) {
+    if (versionId === null || !newName.trim() || newAgentId === null || newPromptId === null) {
       portfolioError = "Portfolio name, agent, and prompt are required.";
       return;
     }
     const selectedPrompt = activePrompts.find((prompt) => prompt.id === newPromptId);
-    if (
-      !selectedPrompt ||
-      selectedPrompt.context_scope !== "portfolio" ||
-      !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)
-    ) {
+    if (!selectedPrompt || !promptIsCompatible(selectedPrompt, newPromptMode, newDirection)) {
       newPromptId = null;
       portfolioError = `Select an active prompt that supports ${newDirection} ${newPromptMode} portfolios.`;
       return;
@@ -481,8 +547,9 @@
       prompt_id: newPromptId,
       prompt_mode: newPromptMode,
       direction: newDirection,
+      version_id: versionId,
+      execution_boundary: newExecutionBoundary,
     };
-    if (newCostBps.trim() !== "") body.cost_bps = parseInt(newCostBps, 10);
     try {
       const created = await postJson<{ slug: string; name: string }>("/api/portfolios", body);
       flash(
@@ -493,7 +560,6 @@
       newPromptId = null;
       newPromptMode = "managed";
       newDirection = "long";
-      newCostBps = "";
       await loadAll();
       // Jump to Portfolio state with the new portfolio selected.
       selectedSlug = created.slug;
@@ -501,45 +567,6 @@
       await loadDetail(created.slug);
     } catch (e) {
       portfolioError = e instanceof Error ? e.message : "Create failed";
-    }
-  }
-
-  let newMetaFamilyName = $state("");
-  let newMetaAgentId = $state<number | null>(null);
-  let newMetaPromptId = $state<number | null>(null);
-  let metaFamilyError = $state("");
-  let metaFamilyBusy = $state(false);
-
-  async function createMetaFamily(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-    metaFamilyError = "";
-    if (!newMetaFamilyName.trim() || newMetaAgentId === null || newMetaPromptId === null) {
-      metaFamilyError = "Family name, agent, and Arena synthesis prompt are required.";
-      return;
-    }
-    if (!activeArenaPrompts.some((prompt) => prompt.id === newMetaPromptId)) {
-      newMetaPromptId = null;
-      metaFamilyError = "Select an active Arena synthesis prompt that supports all four cells.";
-      return;
-    }
-
-    metaFamilyBusy = true;
-    try {
-      const created = await postJson<MetaPortfolioSetCreated>("/api/admin/meta-portfolio-sets", {
-        family_name: newMetaFamilyName.trim(),
-        agent_id: newMetaAgentId,
-        prompt_id: newMetaPromptId,
-      });
-      const familyName = newMetaFamilyName.trim();
-      newMetaFamilyName = "";
-      newMetaAgentId = null;
-      newMetaPromptId = null;
-      await loadAll();
-      flash(`Meta family ${familyName} created with ${created.portfolios.length} automated portfolios.`);
-    } catch (e) {
-      metaFamilyError = e instanceof Error ? e.message : "Meta family creation failed.";
-    } finally {
-      metaFamilyBusy = false;
     }
   }
 
@@ -737,32 +764,11 @@
     }
   }
 
-  type AgentStatusFilter = "active" | "archived" | "all";
-  let agentStatusFilter = $state<AgentStatusFilter>("all");
   let agentAction = $state("");
-  const filteredAgents = $derived(
-    agentStatusFilter === "all" ? agents : agents.filter((agent) => agent.status === agentStatusFilter),
-  );
+  const filteredAgents = $derived(agents);
 
   function agentsForPortfolio(currentAgentId: number): AdminAgent[] {
-    return agents.filter((agent) => agent.status === "active" || agent.id === currentAgentId);
-  }
-
-  async function setAgentArchived(agent: AdminAgent, archived: boolean): Promise<void> {
-    const action = archived ? "archive" : "unarchive";
-    agentAction = `${action}-${agent.id}`;
-    try {
-      await postJson(`/api/admin/agents/${agent.id}/${action}`, {});
-      if (archived && editAgent?.id === agent.id) editAgent = null;
-      if (archived && newAgentId === agent.id) newAgentId = null;
-      if (archived && newMetaAgentId === agent.id) newMetaAgentId = null;
-      await loadAll();
-      flash(`Agent ${archived ? "archived" : "restored"}.`);
-    } catch (e) {
-      flash(e instanceof Error ? e.message : `${archived ? "Archive" : "Restore"} failed`);
-    } finally {
-      agentAction = "";
-    }
+    return agents;
   }
 
   function deleteAgent(agent: AdminAgent) {
@@ -785,11 +791,8 @@
   }
 
   // ── Tab 4: prompts ───────────────────────────
-  type PromptStatusFilter = "active" | "archived" | "all";
-  let promptStatusFilter = $state<PromptStatusFilter>("active");
   let editPrompt = $state<AdminPrompt | null>(null);
   let newPromptName = $state("");
-  let newPromptContextScope = $state<PromptContextScope>("portfolio");
   let newPromptAvailability = $state<PromptAvailability | "">("");
   let newPromptDirection = $state<DirectionAvailability | "">("");
   let newPromptManagedLongText = $state("");
@@ -803,9 +806,7 @@
   let promptHistoryError = $state("");
   let promptAction = $state("");
   let promptHistorySequence = 0;
-  const filteredPrompts = $derived(
-    prompts.filter((prompt) => promptStatusFilter === "all" || prompt.status === promptStatusFilter),
-  );
+  const filteredPrompts = $derived(prompts);
 
   async function createPrompt(event: SubmitEvent) {
     event.preventDefault();
@@ -827,7 +828,6 @@
     try {
       await postJson("/api/admin/prompts", {
         name: newPromptName.trim(),
-        context_scope: newPromptContextScope,
         mode,
         direction: newPromptDirection,
         managed_long_text: promptSupportsCell(mode, newPromptDirection, "managed", "long")
@@ -845,7 +845,6 @@
         notes: newPromptNotes.trim(),
       });
       newPromptName = "";
-      newPromptContextScope = "portfolio";
       newPromptAvailability = "";
       newPromptDirection = "";
       newPromptManagedLongText = "";
@@ -993,22 +992,6 @@
     void loadPromptVersions(prompt.id);
   }
 
-  async function setPromptArchived(prompt: AdminPrompt, archived: boolean): Promise<void> {
-    const action = archived ? "archive" : "unarchive";
-    promptAction = `${action}-${prompt.id}`;
-    try {
-      await postJson(`/api/admin/prompts/${prompt.id}/${action}`, {});
-      if (archived && editPrompt?.id === prompt.id) editPrompt = null;
-      if (archived && newPromptId === prompt.id) newPromptId = null;
-      await refreshPrompts();
-      flash(`Prompt ${archived ? "archived" : "unarchived"}.`);
-    } catch (e) {
-      flash(e instanceof Error ? e.message : `${archived ? "Archive" : "Unarchive"} failed`);
-    } finally {
-      promptAction = "";
-    }
-  }
-
   function restorePromptVersion(prompt: AdminPrompt, version: PromptVersion): void {
     requestConfirmation({
       title: `Restore ${prompt.name} v${version.version}?`,
@@ -1035,26 +1018,16 @@
     name: string;
     agent_id: number;
     prompt_id: number | null;
-    context_scope: PromptContextScope;
     prompt_mode: PromptMode;
     direction: Direction;
     direction_editable: boolean;
     original: AdminPortfolio;
-    cost_bps: string;
+    version_id: number;
+    execution_boundary: ExecutionBoundary;
   } | null>(null);
 
-  function promptsForPortfolio(
-    currentPromptId: number | null,
-    contextScope: PromptContextScope,
-    track: PromptMode,
-    direction: Direction,
-  ): AdminPrompt[] {
-    return prompts.filter(
-      (prompt) =>
-        prompt.context_scope === contextScope &&
-        promptIsCompatible(prompt, track, direction) &&
-        (prompt.status === "active" || prompt.id === currentPromptId),
-    );
+  function promptsForPortfolio(track: PromptMode, direction: Direction): AdminPrompt[] {
+    return prompts.filter((prompt) => promptIsCompatible(prompt, track, direction));
   }
 
   function clearIncompatibleEditPortfolioPrompt(): void {
@@ -1062,7 +1035,6 @@
     const selectedPrompt = prompts.find((prompt) => prompt.id === editPortfolio?.prompt_id);
     if (
       !selectedPrompt ||
-      selectedPrompt.context_scope !== editPortfolio.context_scope ||
       !promptIsCompatible(selectedPrompt, editPortfolio.prompt_mode, editPortfolio.direction)
     ) {
       editPortfolio.prompt_id = null;
@@ -1091,49 +1063,13 @@
       name: portfolio.name,
       agent_id: portfolio.agent.id,
       prompt_id: portfolio.prompt.id,
-      context_scope: portfolio.prompt.context_scope,
       prompt_mode: portfolio.prompt_mode,
       direction: portfolio.direction,
       direction_editable: portfolio.structure_editable,
-      cost_bps: String(portfolio.cost_bps),
+      version_id: portfolio.version_id,
+      execution_boundary: portfolio.execution_boundary,
       original: portfolio,
     };
-  }
-
-  async function toggleArchive(portfolio: AdminPortfolio) {
-    if (portfolioBusy !== null) return;
-    portfolioBusy = portfolio.id;
-    const status = portfolio.status === "active" ? "archived" : "active";
-    try {
-      await patchJson(`/api/portfolios/${portfolio.id}`, { status });
-      await loadAll();
-      if (selectedSlug === portfolio.slug) await loadDetail(portfolio.slug);
-      flash(
-        status === "archived"
-          ? "Portfolio archived. Automation disabled; queued evaluations cancelled and running evaluations stopping."
-          : "Portfolio restored. Enable its schedule in Automation when ready.",
-      );
-    } catch (e) {
-      flash(e instanceof Error ? e.message : "Could not change portfolio status.");
-    } finally {
-      portfolioBusy = null;
-    }
-  }
-
-  async function saveMetaAgent(family: MetaPortfolioSetCreated) {
-    if (metaSetBusy !== null) return;
-    metaSetBusy = family.id;
-    try {
-      await patchJson(`/api/admin/meta-portfolio-sets/${family.id}`, {
-        agent_id: metaAgentDrafts[family.id],
-      });
-      await loadAll();
-      flash("Meta family agent updated for future evaluations.");
-    } catch (e) {
-      flash(e instanceof Error ? e.message : "Could not update the Meta family.");
-    } finally {
-      metaSetBusy = null;
-    }
   }
 
   async function savePortfolio(event: SubmitEvent) {
@@ -1146,7 +1082,6 @@
     const selectedPrompt = prompts.find((prompt) => prompt.id === editPortfolio?.prompt_id);
     if (
       !selectedPrompt ||
-      selectedPrompt.context_scope !== editPortfolio.context_scope ||
       !promptIsCompatible(selectedPrompt, editPortfolio.prompt_mode, editPortfolio.direction)
     ) {
       editPortfolio.prompt_id = null;
@@ -1157,13 +1092,14 @@
     try {
       const original = editPortfolio.original;
       const body: Record<string, unknown> = {};
-      const cost = Number(editPortfolio.cost_bps);
-      if (!editPortfolio.name.trim() || !Number.isInteger(cost) || cost < 0) {
-        flash("Enter a portfolio name and a nonnegative whole-number cost.");
+      if (!editPortfolio.name.trim()) {
+        flash("Enter a portfolio name.");
         return;
       }
       if (editPortfolio.name.trim() !== original.name) body.name = editPortfolio.name.trim();
-      if (cost !== original.cost_bps) body.cost_bps = cost;
+      if (editPortfolio.version_id !== original.version_id) body.version_id = editPortfolio.version_id;
+      if (editPortfolio.execution_boundary !== original.execution_boundary)
+        body.execution_boundary = editPortfolio.execution_boundary;
       if (editPortfolio.agent_id !== original.agent.id) body.agent_id = editPortfolio.agent_id;
       if (editPortfolio.prompt_id !== original.prompt.id) body.prompt_id = editPortfolio.prompt_id;
       if (editPortfolio.prompt_mode !== original.prompt_mode) body.prompt_mode = editPortfolio.prompt_mode;
@@ -1182,7 +1118,7 @@
   function deletePortfolio(portfolio: AdminPortfolio) {
     requestConfirmation({
       title: "Delete portfolio?",
-      description: `${portfolio.name}, all allocations and signals, and all ${portfolio.evaluation_run_count} evaluation runs will be permanently removed. Any running evaluation will stop.${portfolio.meta_set_id !== null ? " Other members of its Meta family will be kept." : ""}`,
+      description: `${portfolio.name}, all allocations and signals, and all ${portfolio.evaluation_run_count} evaluation runs will be permanently removed. Any running evaluation will stop.`,
       confirmLabel: "Delete portfolio",
       action: async () => {
         try {
@@ -1260,7 +1196,6 @@
   }
 
   // ── Tab 4: settings ──────────────────────────
-  let defaultCostBps = $state<string>("");
   let managedMinPositionWeightPct = $state<string>("");
   let managedMaxPositionWeightPct = $state<string>("");
   let rebuiltMinPositionWeightPct = $state<string>("");
@@ -1281,7 +1216,6 @@
   async function loadSettings() {
     try {
       const payload = await apiJson<AppSettings>("/api/settings");
-      defaultCostBps = String(payload.default_cost_bps);
       managedMinPositionWeightPct = String(payload.managed_allocation_policy.min_position_weight_pct);
       managedMaxPositionWeightPct = String(payload.managed_allocation_policy.max_position_weight_pct);
       rebuiltMinPositionWeightPct = String(payload.rebuilt_allocation_policy.min_position_weight_pct);
@@ -1291,7 +1225,6 @@
       longDirectionInstructions = payload.long_direction_instructions;
       shortDirectionInstructions = payload.short_direction_instructions;
     } catch {
-      defaultCostBps = "";
       managedMinPositionWeightPct = "";
       managedMaxPositionWeightPct = "";
       rebuiltMinPositionWeightPct = "";
@@ -1322,7 +1255,6 @@
     settingsError = "";
     try {
       await putJson("/api/settings", {
-        default_cost_bps: parseInt(defaultCostBps, 10) || 0,
         managed_allocation_policy: {
           min_position_weight_pct: Number(managedMinPositionWeightPct),
           max_position_weight_pct: Number(managedMaxPositionWeightPct),
@@ -1380,8 +1312,23 @@
     </div>
   </div>
 
+  <div class="field">
+    <label for="admin-version">Arena version</label><select
+      id="admin-version"
+      value={versionId}
+      onchange={changeVersion}
+      >{#each versions as version (version.id)}<option value={version.id}
+          >{version.name}{version.evaluation_enabled ? "" : " · paused"}</option
+        >{/each}</select
+    >
+  </div>
   {#key `${displayedMarketDataStatus}:${displayedMarketDataAsOf}`}
-    <MarketDataWarning status={displayedMarketDataStatus} asOf={displayedMarketDataAsOf} onReady={loadAll} />
+    <MarketDataWarning
+      versionId={detail?.version_id ?? versionId!}
+      status={displayedMarketDataStatus}
+      asOf={displayedMarketDataAsOf}
+      onReady={loadAll}
+    />
   {/key}
 
   {#if notice}
@@ -1395,6 +1342,60 @@
       {/each}
     </Tabs.List>
 
+    <Tabs.Content value="versions" class="tab-panel">
+      {#if tab === "versions"}
+        <section class="card">
+          <h2>Arena versions</h2>
+          <p class="muted">
+            Paused versions remain visible and continue tracking market prices. Any number of versions can
+            evaluate concurrently.
+          </p>
+          <form onsubmit={createVersion}>
+            <div class="field">
+              <label for="new-version">New version name</label><input
+                id="new-version"
+                bind:value={newVersionName}
+                required
+              />
+            </div>
+            <button class="btn primary" disabled={versionBusy || !newVersionName.trim()}
+              >Create paused version</button
+            >
+          </form>
+          {#each versions as version (version.id)}
+            <div class="manage-row">
+              <div class="field">
+                <label for={`version-name-${version.id}`}>Version name</label><input
+                  id={`version-name-${version.id}`}
+                  bind:value={versionNames[version.id]}
+                />
+              </div>
+              <span class="badge"
+                >{version.evaluation_enabled ? "Evaluation enabled" : "Evaluation paused"}</span
+              >
+              <div class="row-actions">
+                <button
+                  class="btn small"
+                  disabled={versionBusy || !versionNames[version.id]?.trim()}
+                  onclick={() => saveVersion(version)}>Save name</button
+                ><button
+                  class="btn small"
+                  disabled={versionBusy}
+                  onclick={() => saveVersion(version, !version.evaluation_enabled)}
+                  >{version.evaluation_enabled ? "Pause evaluation" : "Enable evaluation"}</button
+                ><button
+                  class="btn small danger"
+                  disabled={versionBusy ||
+                    portfolios.some((portfolio) => portfolio.version_id === version.id)}
+                  title="Only empty versions can be deleted"
+                  onclick={() => deleteVersion(version)}>Delete</button
+                >
+              </div>
+            </div>
+          {/each}
+        </section>
+      {/if}
+    </Tabs.Content>
     <Tabs.Content value="allocation" class="tab-panel">
       {#if tab === "allocation"}
         <section class="card">
@@ -1402,10 +1403,9 @@
             <label for="portfolio-select">Portfolio</label>
             <select id="portfolio-select" value={selectedSlug} onchange={selectPortfolio}>
               <option value="">Select a portfolio…</option>
-              {#each portfolios as portfolio (portfolio.slug)}
+              {#each portfolios.filter((portfolio) => portfolio.version_id === versionId) as portfolio (portfolio.slug)}
                 <option value={portfolio.slug}>
                   {portfolio.name} — {portfolio.direction} — {portfolio.agent.name} — {portfolio.prompt_mode}
-                  {portfolio.status === "archived" ? " (archived)" : ""}
                 </option>
               {/each}
             </select>
@@ -1456,12 +1456,12 @@
                   <tbody>
                     {#each managedDetail.allocations as allocation (allocation.id)}
                       <tr>
-                        <td class="num">{fmtDate(allocation.effective_date)}</td>
+                        <td class="num">{fmtDate(allocation.effective_at)}</td>
                         <td>
                           {#if allocation.locked}
                             <span class="badge">locked</span>
                           {:else}
-                            <span class="badge warn">editable until close</span>
+                            <span class="badge warn">editable until {managedDetail.execution_boundary}</span>
                           {/if}
                         </td>
                         <td class="right muted">
@@ -1556,11 +1556,12 @@
                 <p class="muted prefill-note">No further allocations can be entered.</p>
               {:else if editingAllocation}
                 <h2>
-                  Edit allocation effective {editingAllocation.effective_date}
+                  Edit allocation effective {editingAllocation.effective_at}
                   <button class="btn small" onclick={() => (editingAllocation = null)}>Cancel</button>
                 </h2>
                 {#key editingAllocation.id}
                   <AllocationForm
+                    portfolioId={detail.id}
                     initialPositions={editingAllocation.positions}
                     initialNote={editingAllocation.note}
                     positionsEditable={!editingAllocation.locked}
@@ -1577,6 +1578,7 @@
                 {/if}
                 {#key formKey}
                   <AllocationForm
+                    portfolioId={detail.id}
                     initialPositions={latestAllocation?.positions ?? []}
                     policy={managedDetail.prompt.allocation_policy}
                     direction={managedDetail.direction}
@@ -1609,7 +1611,7 @@
                   <tbody>
                     {#each rebuiltDetail.signals as signal (signal.id)}
                       <tr>
-                        <td class="num">{fmtDate(signal.effective_date)}</td>
+                        <td class="num">{fmtDate(signal.effective_at)}</td>
                         <td>
                           <span class="badge">{signal.provenance?.replace("_", " ") ?? "—"}</span>
                         </td>
@@ -1641,11 +1643,12 @@
 
               {#if editingSignal}
                 <h2>
-                  Edit pending signal effective {editingSignal.effective_date}
+                  Edit pending signal effective {editingSignal.effective_at}
                   <button class="btn small" onclick={() => (editingSignal = null)}>Cancel</button>
                 </h2>
                 {#key editingSignal.id}
                   <AllocationForm
+                    portfolioId={detail.id}
                     initialPositions={editingSignal.positions}
                     initialNote={editingSignal.note}
                     policy={rebuiltDetail.prompt.allocation_policy}
@@ -1663,6 +1666,7 @@
                 </p>
                 {#key formKey}
                   <AllocationForm
+                    portfolioId={detail.id}
                     policy={rebuiltDetail.prompt.allocation_policy}
                     entryKind="signal"
                     direction={rebuiltDetail.direction}
@@ -1683,7 +1687,7 @@
 
     <Tabs.Content value="automation" class="tab-panel">
       {#if tab === "automation"}
-        <AutomationPanel />
+        {#if versionId !== null}{#key versionId}<AutomationPanel {versionId} />{/key}{/if}
       {/if}
     </Tabs.Content>
 
@@ -1691,15 +1695,22 @@
       {#if tab === "portfolio"}
         <section class="card">
           <h2>New portfolio</h2>
+          <p class="muted">
+            Created in {versions.find((version) => version.id === versionId)?.name ?? "the selected version"}.
+          </p>
           <form onsubmit={createPortfolio}>
+            <div class="field">
+              <label for="new-execution">Execution price</label><select
+                id="new-execution"
+                bind:value={newExecutionBoundary}
+                ><option value="close">Market close</option><option value="open">Market open</option></select
+              >
+              <p class="muted hint">Timing locks permanently after the first decision.</p>
+            </div>
             <div class="grid-2">
               <div class="field">
                 <label for="np-name">Portfolio name</label>
                 <input id="np-name" type="text" bind:value={newName} placeholder="Daily Alpha Signal" />
-              </div>
-              <div class="field">
-                <label for="np-cost">Cost bps <span class="muted">(blank = default)</span></label>
-                <input id="np-cost" type="number" min="0" bind:value={newCostBps} placeholder="10" />
               </div>
             </div>
             <div class="field">
@@ -1768,113 +1779,11 @@
             <p class="muted hint">Enter its first allocation or daily signal from Portfolio state.</p>
           </form>
 
-          <h2 class="spaced">New meta family</h2>
-          <p class="muted cache-note">
-            Create Core, Pulse, Shadow, and Probe together for one agent. All four portfolios are enabled for
-            weekday automation and run only after their frozen normal-Arena source batch is complete. View
-            results in Meta and manage runs from Automation.
-          </p>
-          <form onsubmit={createMetaFamily}>
-            <div class="field">
-              <label for="nmf-name">Family name</label>
-              <input id="nmf-name" type="text" bind:value={newMetaFamilyName} placeholder="Confluence" />
-              {#if newMetaFamilyName.trim()}
-                <p class="muted hint">
-                  Creates {newMetaFamilyName.trim()} Core, {newMetaFamilyName.trim()} Pulse,
-                  {newMetaFamilyName.trim()} Shadow, and {newMetaFamilyName.trim()} Probe.
-                </p>
-              {/if}
-            </div>
-            <div class="grid-2 meta-family-grid">
-              <div class="field">
-                <label for="nmf-agent">Agent</label>
-                <select id="nmf-agent" bind:value={newMetaAgentId}>
-                  <option value={null} disabled>Select an agent…</option>
-                  {#each automationAgents as agent (agent.id)}
-                    <option value={agent.id}>{agent.name}</option>
-                  {/each}
-                </select>
-                {#if automationAgents.length === 0}
-                  <p class="muted hint">No agents currently support integrated automation.</p>
-                {/if}
-              </div>
-              <div class="field">
-                <label for="nmf-prompt">Arena synthesis prompt</label>
-                <select id="nmf-prompt" bind:value={newMetaPromptId}>
-                  <option value={null} disabled>Select a prompt…</option>
-                  {#each activeArenaPrompts as prompt (prompt.id)}
-                    <option value={prompt.id}>{prompt.name}</option>
-                  {/each}
-                </select>
-              </div>
-            </div>
-            {#if activeArenaPrompts.length === 0}
-              <p class="muted hint">
-                Create an active Arena synthesis prompt supporting both modes and both directions first.
-              </p>
-            {/if}
-            {#if metaFamilyError}
-              <div class="error-box" role="alert">{metaFamilyError}</div>
-            {/if}
-            <button
-              class="btn primary"
-              type="submit"
-              disabled={metaFamilyBusy ||
-                !newMetaFamilyName.trim() ||
-                newMetaAgentId === null ||
-                newMetaPromptId === null}
-            >
-              {metaFamilyBusy ? "Creating family…" : "Create four meta portfolios"}
-            </button>
-          </form>
-
-          {#if metaSets.length}
-            <h2 class="spaced">Meta family agents</h2>
-            <p class="muted hint">
-              Change the agent for every remaining member together. Existing runs retain their original
-              execution profile.
-            </p>
-            {#each metaSets as family (family.id)}
-              <div class="manage-row">
-                <div class="field manage-copy">
-                  <label for="meta-agent-{family.id}"
-                    >{family.family_name}{family.variant_label ? ` · ${family.variant_label}` : ""} · {family
-                      .portfolios.length}
-                    {family.portfolios.length === 1 ? "portfolio" : "portfolios"}</label
-                  >
-                  <select id="meta-agent-{family.id}" bind:value={metaAgentDrafts[family.id]}>
-                    {#each agentsForPortfolio(family.agent_id) as agent (agent.id)}
-                      <option
-                        value={agent.id}
-                        disabled={!automationAgents.some((candidate) => candidate.id === agent.id)}
-                        >{agent.name}</option
-                      >
-                    {/each}
-                  </select>
-                </div>
-                <button
-                  class="btn small"
-                  onclick={() => saveMetaAgent(family)}
-                  disabled={metaSetBusy !== null || metaAgentDrafts[family.id] === family.agent_id}
-                  >{metaSetBusy === family.id ? "Saving…" : "Save agent"}</button
-                >
-              </div>
-            {/each}
-          {/if}
-
           <h2 class="spaced">Existing portfolios</h2>
           <div class="grid-2">
             <div class="field">
               <label for="portfolio-search">Search portfolios</label>
               <input id="portfolio-search" type="search" bind:value={portfolioSearch} />
-            </div>
-            <div class="field">
-              <label for="portfolio-status">Status</label>
-              <select id="portfolio-status" bind:value={portfolioStatus}>
-                <option value="all">All</option>
-                <option value="active">Active</option>
-                <option value="archived">Archived</option>
-              </select>
             </div>
           </div>
 
@@ -1882,19 +1791,37 @@
             {#if editPortfolio?.id === portfolio.id}
               <form class="edit-form" onsubmit={savePortfolio}>
                 <div class="field">
+                  <label for={`edit-version-${portfolio.id}`}>Arena version</label><select
+                    id={`edit-version-${portfolio.id}`}
+                    bind:value={editPortfolio.version_id}
+                    >{#each versions as version (version.id)}<option value={version.id}>{version.name}</option
+                      >{/each}</select
+                  >
+                </div>
+                <div class="field">
+                  <label for={`edit-execution-${portfolio.id}`}>Execution price</label><select
+                    id={`edit-execution-${portfolio.id}`}
+                    bind:value={editPortfolio.execution_boundary}
+                    disabled={!portfolio.timing_editable}
+                    ><option value="close">Market close</option><option value="open">Market open</option
+                    ></select
+                  >
+                  <p class="muted hint">
+                    {portfolio.execution_locked
+                      ? "Timing is permanently locked after the first decision."
+                      : "Timing can change before the first decision while no evaluation is active."}
+                  </p>
+                </div>
+                <div class="field">
                   <label for="epf-name-{portfolio.id}">Name</label>
                   <input id="epf-name-{portfolio.id}" type="text" bind:value={editPortfolio.name} />
                 </div>
                 <div class="field">
                   <label for="epf-agent-{portfolio.id}">Agent</label>
-                  <select
-                    id="epf-agent-{portfolio.id}"
-                    bind:value={editPortfolio.agent_id}
-                    disabled={portfolio.meta_set_id !== null}
-                  >
+                  <select id="epf-agent-{portfolio.id}" bind:value={editPortfolio.agent_id}>
                     {#each agentsForPortfolio(editPortfolio.agent_id) as agent (agent.id)}
-                      <option value={agent.id} disabled={agent.status === "archived"}>
-                        {agent.name}{agent.status === "archived" ? " (archived)" : ""}
+                      <option value={agent.id}>
+                        {agent.name}
                       </option>
                     {/each}
                   </select>
@@ -1919,20 +1846,18 @@
                     disabled={!portfolio.prompt_editable}
                   >
                     <option value={null} disabled>Select a prompt…</option>
-                    {#each promptsForPortfolio(editPortfolio.prompt_id, editPortfolio.context_scope, editPortfolio.prompt_mode, editPortfolio.direction) as prompt (prompt.id)}
-                      <option value={prompt.id} disabled={prompt.status === "archived"}>
+                    {#each promptsForPortfolio(editPortfolio.prompt_mode, editPortfolio.direction) as prompt (prompt.id)}
+                      <option value={prompt.id}>
                         {prompt.name} · {promptModeLabel(prompt.mode)} · {promptDirectionLabel(
                           prompt.direction,
-                        )}{prompt.status === "archived" ? " (archived)" : ""}
+                        )}
                       </option>
                     {/each}
                   </select>
                   <p class="muted hint">
-                    {portfolio.meta_set_id !== null
-                      ? "Prompt and agent belong to the Meta family. Use Meta family agents above to reassign its members."
-                      : !portfolio.prompt_editable
-                        ? "Wait for the active evaluation to stop before changing its prompt."
-                        : promptScopeLabel(editPortfolio.context_scope)}
+                    {!portfolio.prompt_editable
+                      ? "Wait for the active evaluation before changing the prompt."
+                      : "Shared prompts use their latest revision."}
                   </p>
                 </div>
                 <div class="field">
@@ -1952,15 +1877,7 @@
                       : portfolio.structure_blocker}
                   </p>
                 </div>
-                <div class="field">
-                  <label for="epf-cost-{portfolio.id}">Cost bps</label>
-                  <input
-                    id="epf-cost-{portfolio.id}"
-                    type="number"
-                    min="0"
-                    bind:value={editPortfolio.cost_bps}
-                  />
-                </div>
+
                 <div class="edit-actions">
                   <button
                     class="btn primary"
@@ -1982,28 +1899,15 @@
                   <div class="manage-summary">
                     <strong class="manage-name">{portfolio.name}</strong>
                     <span class="manage-meta muted">
-                      · {promptScopeLabel(portfolio.prompt.context_scope)} · {portfolio.direction} ·
+                      · {portfolio.version.name} · {portfolio.execution_boundary} · {portfolio.direction} ·
                       {portfolio.agent.name} · {portfolio.prompt_mode} ·
-                      {portfolio.cost_bps} bps · {portfolio.status} · {portfolio.evaluation_run_count} runs
+                      {portfolio.evaluation_run_count} runs
                     </span>
                   </div>
-                  {#if portfolio.status === "archived" && portfolio.restore_blocker}
-                    <p class="muted hint">{portfolio.restore_blocker}</p>
-                  {/if}
                 </div>
                 <div class="row-actions">
                   <button class="btn small" onclick={() => beginPortfolioEdit(portfolio)}> Edit </button>
-                  <button
-                    class="btn small"
-                    onclick={() => toggleArchive(portfolio)}
-                    disabled={portfolioBusy !== null ||
-                      (portfolio.status === "archived" && portfolio.restore_blocker !== null)}
-                    title={portfolio.status === "archived"
-                      ? (portfolio.restore_blocker ?? "")
-                      : "Disable automation and cancel active evaluations"}
-                  >
-                    {portfolio.status === "active" ? "Archive" : "Unarchive"}
-                  </button>
+
                   <button class="btn small danger" onclick={() => resetPortfolio(portfolio)}> Reset </button>
                   <button class="btn small danger" onclick={() => deletePortfolio(portfolio)}>Delete</button>
                 </div>
@@ -2239,18 +2143,7 @@
           <div class="prompt-list-head spaced">
             <div>
               <h2>Agents</h2>
-              <p class="muted">
-                Archive retires an agent from new assignments while preserving portfolio and run history.
-                Permanent deletion is available only when nothing references it.
-              </p>
-            </div>
-            <div class="field prompt-filter">
-              <label for="agent-status-filter">Status</label>
-              <select id="agent-status-filter" bind:value={agentStatusFilter}>
-                <option value="active">Active</option>
-                <option value="archived">Archived</option>
-                <option value="all">All</option>
-              </select>
+              <p class="muted">Permanent deletion is available only when nothing references it.</p>
             </div>
           </div>
           {#each filteredAgents as agent (agent.id)}
@@ -2297,12 +2190,8 @@
                 <div class="manage-copy">
                   <div class="manage-summary">
                     <strong class="manage-name">{agent.name}</strong>
-                    <span class={["badge", agent.status === "archived" && "warn"]}>{agent.status}</span>
                     <span class="manage-meta muted">
-                      · {agent.active_portfolio_count} active · {agent.archived_portfolio_count} archived ·
-                      {agent.evaluation_run_count} run{agent.evaluation_run_count === 1
-                        ? ""
-                        : "s"}{agent.archived_at ? ` · archived ${fmtDate(agent.archived_at)}` : ""}
+                      · {agent.portfolio_count} portfolios · {agent.evaluation_run_count} evaluations
                     </span>
                   </div>
                   {#if agent.notes}<p class="truncate muted preview">{agent.notes}</p>{/if}
@@ -2317,29 +2206,9 @@
                         harness: agent.harness?.id ?? "",
                         reasoning_effort: agent.reasoning_effort ?? "",
                         notes: agent.notes,
-                      })}
-                    disabled={agent.status === "archived"}
-                    title={agent.status === "archived" ? "Restore this agent before editing" : ""}
-                    >Edit</button
+                      })}>Edit</button
                   >
-                  <button
-                    class="btn small"
-                    onclick={() => setAgentArchived(agent, agent.status === "active")}
-                    disabled={agentAction.endsWith(`-${agent.id}`) ||
-                      (agent.status === "active" && !agent.can_archive) ||
-                      (agent.status === "archived" && !agent.can_restore)}
-                    title={agent.status === "active" && !agent.can_archive
-                      ? (agent.archive_blocker ?? "")
-                      : agent.status === "archived" && !agent.can_restore
-                        ? (agent.restore_blocker ?? "")
-                        : ""}
-                  >
-                    {agentAction.endsWith(`-${agent.id}`)
-                      ? "Saving…"
-                      : agent.status === "active"
-                        ? "Archive"
-                        : "Restore"}
-                  </button>
+
                   <button
                     class="btn small danger"
                     onclick={() => deleteAgent(agent)}
@@ -2353,7 +2222,7 @@
             {/if}
           {:else}
             <div class="empty-state compact">
-              <p>No {agentStatusFilter === "all" ? "" : `${agentStatusFilter} `}agents found.</p>
+              <p>No agents found.</p>
             </div>
           {/each}
         </section>
@@ -2369,18 +2238,7 @@
               <label for="np-prompt-name">Name <span class="muted">(e.g. daily-signal-v2)</span></label>
               <input id="np-prompt-name" type="text" bind:value={newPromptName} />
             </div>
-            <div class="field">
-              <label for="np-prompt-scope">Context scope</label>
-              <select id="np-prompt-scope" bind:value={newPromptContextScope} required>
-                <option value="portfolio">Portfolio strategy</option>
-                <option value="arena">Arena synthesis</option>
-              </select>
-              <p class="muted hint">
-                Portfolio strategies evaluate one portfolio. Arena synthesis prompts receive a frozen packet
-                of normal-Arena decisions and can only be used by atomic meta families. Scope cannot change
-                after creation.
-              </p>
-            </div>
+
             <div class="field">
               <label for="np-prompt-availability">Support mode</label>
               <select id="np-prompt-availability" bind:value={newPromptAvailability} required>
@@ -2472,16 +2330,9 @@
             <div>
               <h2>Prompts</h2>
               <p class="muted">
-                Edits create immutable versions; archived prompts remain available to history.
+                Edits create immutable revisions. Restore a revision as a new edit, or delete an unused
+                prompt.
               </p>
-            </div>
-            <div class="field prompt-filter">
-              <label for="prompt-status-filter">Status</label>
-              <select id="prompt-status-filter" bind:value={promptStatusFilter}>
-                <option value="active">Active</option>
-                <option value="archived">Archived</option>
-                <option value="all">All</option>
-              </select>
             </div>
           </div>
 
@@ -2492,11 +2343,7 @@
                   <label for="ep-name-{prompt.id}">Name</label>
                   <input id="ep-name-{prompt.id}" type="text" bind:value={editPrompt.name} />
                 </div>
-                <div class="field">
-                  <span class="field-label">Context scope</span>
-                  <span class="badge">{promptScopeLabel(editPrompt.context_scope)}</span>
-                  <p class="muted hint">Context scope is fixed for the life of this prompt.</p>
-                </div>
+
                 <div class="field">
                   <label for="ep-mode-{prompt.id}">Support mode</label>
                   <select id="ep-mode-{prompt.id}" value={editPrompt.mode} onchange={setEditPromptMode}>
@@ -2587,15 +2434,11 @@
                 <div class="manage-copy">
                   <div class="manage-summary">
                     <strong class="manage-name">{prompt.name}</strong>
-                    <span class={["badge", prompt.status === "archived" && "warn"]}>{prompt.status}</span>
-                    <span class="badge">{promptScopeLabel(prompt.context_scope)}</span>
                     <span class="badge">{promptModeLabel(prompt.mode)}</span>
                     <span class="badge">{promptDirectionLabel(prompt.direction)}</span>
                     <span class="manage-meta muted">
                       · {prompt.portfolio_count} portfolio(s) · current v{prompt.current_version} ·
-                      {prompt.version_count} version{prompt.version_count === 1 ? "" : "s"}{prompt.archived_at
-                        ? ` · archived ${fmtDate(prompt.archived_at)}`
-                        : ""}
+                      {prompt.version_count} revisions
                     </span>
                   </div>
                   <div class="prompt-previews">
@@ -2626,28 +2469,13 @@
                   </div>
                 </div>
                 <div class="row-actions">
+                  <button class="btn small" onclick={() => beginPromptEdit(prompt)}>Edit</button>
                   <button
-                    class="btn small"
-                    onclick={() => beginPromptEdit(prompt)}
-                    disabled={prompt.status === "archived"}
-                    title={prompt.status === "archived" ? "Unarchive this prompt before editing" : ""}
-                    >Edit</button
+                    class="btn small danger"
+                    onclick={() => deletePrompt(prompt)}
+                    disabled={!prompt.can_delete}
+                    title={prompt.delete_blocker ?? ""}>Delete</button
                   >
-                  <button
-                    class="btn small"
-                    onclick={() => setPromptArchived(prompt, prompt.status === "active")}
-                    disabled={promptAction.endsWith(`-${prompt.id}`) ||
-                      (prompt.status === "active" && promptHasActivePortfolio(prompt.id))}
-                    title={prompt.status === "active" && promptHasActivePortfolio(prompt.id)
-                      ? "Archive every portfolio using this prompt first"
-                      : ""}
-                  >
-                    {promptAction.endsWith(`-${prompt.id}`)
-                      ? "Saving…"
-                      : prompt.status === "active"
-                        ? "Archive"
-                        : "Unarchive"}
-                  </button>
                   <button
                     class="btn small"
                     aria-expanded={historyPromptId === prompt.id}
@@ -2770,9 +2598,7 @@
             {/if}
           {:else}
             <div class="empty-state compact">
-              <p>
-                No {promptStatusFilter === "all" ? "" : `${promptStatusFilter} `}prompts match this filter.
-              </p>
+              <p>No prompts found.</p>
             </div>
           {/each}
         </section>
@@ -2859,10 +2685,6 @@
         <section class="card">
           <h2>Defaults</h2>
           <form onsubmit={saveSettings}>
-            <div class="field">
-              <label for="set-cost">Default cost bps for new portfolios</label>
-              <input id="set-cost" type="number" min="0" bind:value={defaultCostBps} />
-            </div>
             <h3>Managed allocation policy</h3>
             <div class="grid-2 weight-grid">
               <div class="field">
@@ -2944,7 +2766,7 @@
               <textarea id="set-managed-wrapper" bind:value={managedWrapperPrompt} rows="18" required
               ></textarea>
               <p class="muted hint">
-                Managed evaluations receive holdings, allocation history, notes, performance, and costs.
+                Managed evaluations receive holdings, allocation history, notes, and performance.
               </p>
             </div>
             <div class="field">
@@ -3110,10 +2932,6 @@
   }
 
   .weight-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .meta-family-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

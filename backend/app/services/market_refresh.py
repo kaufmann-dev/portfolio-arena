@@ -1,4 +1,4 @@
-"""Background publication of coherent daily market-data snapshots."""
+"""Background publication of coherent opening and closing market-data snapshots."""
 
 from __future__ import annotations
 
@@ -28,17 +28,22 @@ REGULAR_REFRESH_BATCH_SIZE = PRICE_FETCH_MAX_WORKERS
 class RefreshOutcome:
     acquired: bool
     complete: bool
-    target_as_of: str
+    target_as_of: dict
     updated_symbols: tuple[str, ...] = ()
 
 
-def market_snapshot(session: Session, now: datetime | None = None):
-    """Return the global cache watermark used by the lightweight status API."""
+def market_snapshot(session: Session, now: datetime | None = None, *, version_id: int | None = None):
+    """Return the requested version's cache watermark for the status API."""
     from .arena import global_pricing_requirements, load_portfolios, load_price_series
 
     now = _aware(now or datetime.now(UTC))
     target = price_cache.latest_available_session(now)
-    requirements, readiness = global_pricing_requirements(load_portfolios(session), target)
+    portfolios = (
+        load_portfolios(session) if version_id is None else load_portfolios(session, version_id=version_id)
+    )
+    requirements, readiness = global_pricing_requirements(
+        portfolios, target, target_phase=price_cache.latest_available_boundary(now)["phase"]
+    )
     return load_price_series(session, requirements, readiness, now)
 
 
@@ -57,7 +62,7 @@ def refresh_market_data_once(now: datetime | None = None) -> RefreshOutcome:
         )
         connection.commit()
         if not acquired:
-            return RefreshOutcome(False, False, target.isoformat())
+            return RefreshOutcome(False, False, price_cache.latest_available_boundary(now))
 
         try:
             with Session(bind=connection, expire_on_commit=False) as session:
@@ -73,7 +78,9 @@ def refresh_market_data_once(now: datetime | None = None) -> RefreshOutcome:
 def _refresh_locked(session: Session, now: datetime, target) -> RefreshOutcome:
     from .arena import global_pricing_requirements, load_portfolios
 
-    requirements, readiness = global_pricing_requirements(load_portfolios(session), target)
+    requirements, readiness = global_pricing_requirements(
+        load_portfolios(session), target, target_phase=price_cache.latest_available_boundary(now)["phase"]
+    )
     symbols = sorted(requirements)
     entries = price_cache.get_cache_entries(session, symbols)
     updated_symbols = _refresh_grouped_sessions(
@@ -93,8 +100,8 @@ def _refresh_locked(session: Session, now: datetime, target) -> RefreshOutcome:
     if not due:
         return RefreshOutcome(
             True,
-            _snapshot_complete(entries, requirements, readiness, target),
-            target.isoformat(),
+            _snapshot_complete(entries, requirements, readiness, target, now),
+            price_cache.latest_available_boundary(now),
             tuple(sorted(updated_symbols)),
         )
 
@@ -117,6 +124,9 @@ def _refresh_locked(session: Session, now: datetime, target) -> RefreshOutcome:
         data = fetched.get(symbol)
         if not massive.is_valid_series(data):
             continue
+        data = price_cache.published_series(data, now)
+        if not data:
+            continue
         current = entries.get(symbol)
         merged = price_cache.merge_series(data, current.series) if current else data
         candidate = price_cache.cache_entry(merged, now)
@@ -138,11 +148,11 @@ def _refresh_locked(session: Session, now: datetime, target) -> RefreshOutcome:
         logger.warning("market-data refresh failed symbol=%s error=%s", symbol, type(error).__name__)
 
     entries = price_cache.get_cache_entries(session, symbols)
-    complete = _snapshot_complete(entries, requirements, readiness, target)
+    complete = _snapshot_complete(entries, requirements, readiness, target, now)
     return RefreshOutcome(
         acquired=True,
         complete=complete,
-        target_as_of=target.isoformat(),
+        target_as_of=price_cache.latest_available_boundary(now),
         updated_symbols=tuple(sorted(updated_symbols)),
     )
 
@@ -155,7 +165,7 @@ def _refresh_grouped_sessions(
     readiness: set[str],
     entries: dict[str, price_cache.CacheEntry],
 ) -> set[str]:
-    """Append recent closes for live symbols using one market-wide response per session."""
+    """Merge published boundaries with one market-wide response per session."""
     working = dict(entries)
     candidates: set[str] = set()
     sessions: set[date] = set()
@@ -165,6 +175,9 @@ def _refresh_grouped_sessions(
         if entry is None or required_start is None or not entry.covers(required_start):
             continue
         missing = _forward_sessions(entry.latest_date, target)
+        target_phase = price_cache.latest_available_boundary(now)["phase"]
+        if entry.latest_date == target and not entry.has_boundary(target, target_phase):
+            missing = [target]
         if 0 < len(missing) <= GROUPED_CATCHUP_MAX_SESSIONS:
             candidates.add(symbol)
             sessions.update(missing)
@@ -174,7 +187,10 @@ def _refresh_grouped_sessions(
         pending = sorted(
             symbol
             for symbol in candidates
-            if (latest := working[symbol].latest_date) is not None and latest < session_date
+            if not working[symbol].has_boundary(
+                session_date,
+                price_cache.latest_available_boundary(now)["phase"] if session_date == target else "close",
+            )
         )
         if not pending:
             continue
@@ -193,10 +209,15 @@ def _refresh_grouped_sessions(
             points = grouped.prices.get(symbol)
             if not massive.is_valid_series(points):
                 continue
+            points = price_cache.published_series(points, now)
+            if not points:
+                continue
             current = working[symbol]
+            # A session's first published boundary puts history on its corporate-action
+            # basis. Adding that session's close must not apply the factor a second time.
             historical = _apply_historical_factor(
                 current.series,
-                grouped.historical_factors.get(symbol, 1.0),
+                1.0 if current.has_session(session_date) else grouped.historical_factors.get(symbol, 1.0),
                 session_date,
             )
             merged = price_cache.merge_series(points, historical)
@@ -239,31 +260,35 @@ def _apply_historical_factor(series: massive.Series, factor: float, session_date
     return [
         {
             "date": point["date"],
-            "close": round(float(point["close"]) * factor, 6)
-            if str(point["date"]) < cutoff
-            else point["close"],
+            **{
+                phase: round(float(point[phase]) * factor, 6) if str(point["date"]) < cutoff else point[phase]
+                for phase in ("open", "close")
+                if phase in point
+            },
         }
         for point in series
     ]
 
 
-def _snapshot_complete(entries, requirements, readiness, target) -> bool:
+def _snapshot_complete(entries, requirements, readiness, target, now) -> bool:
     return all(
         (entry := entries.get(symbol)) is not None and entry.covers(required_start)
         for symbol, required_start in requirements.items()
-    ) and _readiness_complete(entries, requirements, readiness, target)
+    ) and _readiness_complete(entries, requirements, readiness, target, now)
 
 
-def _readiness_complete(entries, requirements, readiness, target) -> bool:
-    return all(_entry_ready(entries.get(symbol), requirements.get(symbol), target) for symbol in readiness)
+def _readiness_complete(entries, requirements, readiness, target, now) -> bool:
+    return all(
+        _entry_ready(entries.get(symbol), requirements.get(symbol), target, now) for symbol in readiness
+    )
 
 
-def _entry_ready(entry, required_start, target) -> bool:
+def _entry_ready(entry, required_start, target, now) -> bool:
     return bool(
         entry is not None
         and required_start is not None
         and entry.covers(required_start)
-        and entry.has_session(target)
+        and entry.has_boundary(target, price_cache.latest_available_boundary(now)["phase"])
     )
 
 

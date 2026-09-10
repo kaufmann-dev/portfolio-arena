@@ -48,7 +48,6 @@ class Settings(BaseSettings):
         validation_alias="ARENA_INTERNAL_MCP_API_KEY",
     )
 
-    default_cost_bps: int = Field(default=10, validation_alias="ARENA_DEFAULT_COST_BPS")
     db_connect_retries: int = Field(default=30, validation_alias="ARENA_DB_CONNECT_RETRIES")
     db_connect_retry_delay: float = Field(default=2.0, validation_alias="ARENA_DB_CONNECT_RETRY_DELAY")
     price_cache_ttl_seconds: int = Field(default=3600, validation_alias="ARENA_PRICE_CACHE_TTL_SECONDS")

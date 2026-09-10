@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..config import MASSIVE_DATA_DELAY_MINUTES, get_settings
 from ..models import PriceCache
 from .massive import Series, is_valid_series
-from .trading_calendar import NY, close_at, is_trading_day
+from .trading_calendar import NY, boundary_at, boundary_value, is_trading_day
 
 
 @dataclass(frozen=True)
@@ -38,11 +38,17 @@ class CacheEntry:
         return self.dates[-1] if self.dates else None
 
     def covers(self, required_start: date) -> bool:
+        required_session = required_start
+        while not is_trading_day(required_session):
+            required_session += timedelta(days=1)
         earliest = self.earliest_date
-        return self.start_date <= required_start and earliest is not None and earliest <= required_start
+        return self.start_date <= required_session and earliest is not None and earliest <= required_session
 
     def has_session(self, session_date: date) -> bool:
         return session_date in self.dates
+
+    def has_boundary(self, session_date: date, phase: str) -> bool:
+        return any(point["date"] == session_date.isoformat() and phase in point for point in self.series)
 
 
 def get_cache_entries(session: Session, symbols: list[str]) -> dict[str, CacheEntry]:
@@ -62,15 +68,41 @@ def get_cache_entries(session: Session, symbols: list[str]) -> dict[str, CacheEn
     }
 
 
-def latest_available_session(now: datetime) -> date:
-    """Latest session Massive should expose after its documented 15m delay."""
+def latest_available_boundary(now: datetime) -> dict:
+    """Latest opening or closing expected after Massive's publication delay."""
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     day = now.astimezone(NY).date()
     delay = timedelta(minutes=MASSIVE_DATA_DELAY_MINUTES)
-    while not is_trading_day(day) or now < close_at(day) + delay:
+    while True:
+        if is_trading_day(day):
+            for phase in ("close", "open"):
+                if now >= boundary_at(day, phase) + delay:
+                    return boundary_value(day, phase)
         day -= timedelta(days=1)
-    return day
+
+
+def latest_available_session(now: datetime) -> date:
+    boundary = latest_available_boundary(now)
+    return datetime.fromisoformat(boundary["timestamp"]).astimezone(NY).date()
+
+
+def published_series(series: Series, now: datetime) -> Series:
+    """Drop unpublished fields; an intraday aggregate's close is still developing."""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    delay = timedelta(minutes=MASSIVE_DATA_DELAY_MINUTES)
+    published = []
+    for point in series:
+        day = date.fromisoformat(point["date"])
+        prices = {
+            phase: point[phase]
+            for phase in ("open", "close")
+            if phase in point and now >= boundary_at(day, phase) + delay
+        }
+        if prices:
+            published.append({"date": point["date"], **prices})
+    return published
 
 
 def refresh_due(entry: CacheEntry | None, required_start: date, now: datetime) -> bool:
@@ -84,7 +116,8 @@ def refresh_due(entry: CacheEntry | None, required_start: date, now: datetime) -
     ttl = get_settings().price_cache_ttl_seconds
     if now - fetched_at >= timedelta(seconds=ttl):
         return True
-    return not entry.has_session(latest_available_session(now))
+    target = latest_available_boundary(now)
+    return not entry.has_boundary(latest_available_session(now), target["phase"])
 
 
 def cache_entry(series: Series | None, fetched_at: datetime) -> CacheEntry | None:
@@ -101,9 +134,10 @@ def cache_entry(series: Series | None, fetched_at: datetime) -> CacheEntry | Non
 
 
 def merge_series(preferred: Series, fallback: Series) -> Series:
-    """Fill missing date edges from fallback, preferring refreshed overlaps."""
-    merged = {point["date"]: point for point in fallback}
-    merged.update({point["date"]: point for point in preferred})
+    """Merge each published field without discarding the other session boundary."""
+    merged = {point["date"]: dict(point) for point in fallback}
+    for point in preferred:
+        merged[point["date"]] = {**merged.get(point["date"], {}), **point}
     return [merged[day] for day in sorted(merged)]
 
 

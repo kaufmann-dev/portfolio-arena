@@ -14,6 +14,8 @@
   import SelectField, { type SelectOption } from "./ui/SelectField.svelte";
   import ToggleSwitch from "./ui/ToggleSwitch.svelte";
 
+  const { versionId }: { versionId: number } = $props();
+
   const WEEKDAYS = [
     { value: 0, label: "Mon" },
     { value: 1, label: "Tue" },
@@ -68,14 +70,14 @@
 
   function evaluatorBlocked(config: PortfolioEvaluatorConfig): boolean {
     return (
-      config.portfolio.status !== "active" ||
+      !config.portfolio.version.evaluation_enabled ||
       (config.portfolio.prompt_mode === "managed" && Boolean(config.portfolio.is_liquidated))
     );
   }
 
   function retryBlocked(run: EvaluationRun): boolean {
     const config = dashboard?.portfolios.find((candidate) => candidate.portfolio.id === run.portfolio.id);
-    return config ? evaluatorBlocked(config) : true;
+    return config ? !config.enabled || evaluatorBlocked(config) : true;
   }
 
   function toggleRunReport(runId: number): void {
@@ -92,6 +94,7 @@
       attempt_timeout_seconds: settings.attempt_timeout_seconds,
       max_attempts: settings.max_attempts,
       queue_before_close_minutes: settings.queue_before_close_minutes,
+      queue_before_open_minutes: settings.queue_before_open_minutes,
     };
   }
 
@@ -110,12 +113,12 @@
   }
 
   async function loadDashboard() {
-    const payload = await apiJson<EvaluatorDashboard>("/api/evaluator");
+    const payload = await apiJson<EvaluatorDashboard>(`/api/evaluator?version_id=${versionId}`);
     setDashboard(payload);
   }
 
   function query(cursor?: string): string {
-    const params = new URLSearchParams({ limit: "25" });
+    const params = new URLSearchParams({ limit: "25", version_id: String(versionId) });
     if (portfolioFilter) params.set("portfolio_id", portfolioFilter);
     if (statusFilter) params.set("status", statusFilter);
     if (cursor) params.set("cursor", cursor);
@@ -383,7 +386,7 @@
           <p class="muted">
             Active runs keep their captured timeout and attempt limit. Due runs enter the queue at the
             configured offset, but polling and concurrency can delay their start. Once queued, they may start
-            or finish after close.
+            or finish after their scheduled open or close.
           </p>
         </div>
       </div>
@@ -420,6 +423,16 @@
           <div class="field">
             <label for="eval-attempts">Automatic attempts</label>
             <input id="eval-attempts" type="number" min="1" max="5" bind:value={settingsDraft.max_attempts} />
+          </div>
+          <div class="field">
+            <label for="eval-queue-open">Queue before open (min)</label>
+            <input
+              id="eval-queue-open"
+              type="number"
+              min="15"
+              max="240"
+              bind:value={settingsDraft.queue_before_open_minutes}
+            />
           </div>
           <div class="field">
             <label for="eval-queue">Queue before close (min)</label>
@@ -460,6 +473,11 @@
                   <div class="config-title">
                     <strong>{config.portfolio.name}</strong>
                     <span class="badge">{config.portfolio.direction}</span>
+                    <span class="badge"
+                      >{config.portfolio.execution_boundary === "open" ? "Open" : "Close"}</span
+                    >
+                    {#if !config.portfolio.version.evaluation_enabled}<span class="badge">Version paused</span
+                      >{/if}
                     {#if config.portfolio.is_liquidated}
                       <span class="badge neg">
                         {config.portfolio.prompt_mode === "rebuilt" ? "policy liquidated" : "liquidated"}
@@ -474,11 +492,7 @@
                     {/if}
                   </div>
                 </div>
-                <ToggleSwitch
-                  label="Enabled"
-                  bind:checked={draft.enabled}
-                  disabled={evaluatorBlocked(config) && !draft.enabled}
-                />
+                <ToggleSwitch label="Enabled" bind:checked={draft.enabled} />
               </div>
               {#if config.portfolio.prompt_mode === "managed" && config.portfolio.is_liquidated}
                 <p class="liquidation-note">
@@ -499,12 +513,10 @@
                         type="button"
                         class={["weekday", { selected: draft.weekdays.includes(weekday.value) }]}
                         aria-pressed={draft.weekdays.includes(weekday.value)}
-                        disabled={config.portfolio.prompt_mode === "rebuilt" || evaluatorBlocked(config)}
+                        disabled={config.portfolio.prompt_mode === "rebuilt"}
                         title={config.portfolio.prompt_mode === "rebuilt"
                           ? "Rebuilt signals are required every trading day"
-                          : evaluatorBlocked(config)
-                            ? "This portfolio is not eligible for evaluator runs"
-                            : undefined}
+                          : undefined}
                         onclick={() => toggleWeekday(config.portfolio.id, weekday.value)}
                       >
                         {weekday.label}
@@ -519,8 +531,7 @@
                   class="btn small"
                   type="button"
                   onclick={() => savePortfolio(config)}
-                  disabled={busyAction === `save-${config.portfolio.id}` ||
-                    (evaluatorBlocked(config) && draft.enabled)}
+                  disabled={busyAction === `save-${config.portfolio.id}`}
                 >
                   {busyAction === `save-${config.portfolio.id}` ? "Saving…" : "Save"}
                 </button>
@@ -609,7 +620,14 @@
             <tr>
               <td>
                 <span class="badge">{run.trigger_kind}</span>
-                <div class="cell-line muted num">{run.scheduled_for ?? `#${run.id}`}</div>
+                <div class="cell-line muted num">
+                  {run.scheduled_for
+                    ? `Scheduled ${fmtDateTime(run.scheduled_boundary?.timestamp)}`
+                    : `#${run.id}`}
+                </div>
+                <div class="cell-line muted">
+                  {run.execution_boundary === "open" ? "Opening price" : "Closing price"}
+                </div>
               </td>
               <td>
                 <strong class="cell-line">{run.portfolio.name}</strong>

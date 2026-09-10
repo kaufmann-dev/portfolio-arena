@@ -1,28 +1,27 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
+  import { router } from "../stores/router.svelte";
   import { apiJson } from "../api/client";
   import type {
     ArenaTrack,
+    ArenaVersion,
+    VersionsResponse,
     CompareResponse,
-    CostBasis,
     Direction,
     ManagedArenaPortfolio,
     ManagedArenaResponse,
     RebuiltArenaPortfolio,
     RebuiltArenaResponse,
-    RebuiltObjective,
-    RebuiltView,
   } from "../api/types";
-  import { DEFAULT_REBUILT_VIEW, parseDirection, rebuiltContext, rebuiltContextParams } from "../arena";
+  import { parseDirection, selectedVersion } from "../arena";
   import LineChart, { type ChartSeries } from "../components/LineChart.svelte";
   import ManagedArenaTable from "../components/ManagedArenaTable.svelte";
   import MarketDataWarning from "../components/MarketDataWarning.svelte";
   import RebuiltArenaTable from "../components/RebuiltArenaTable.svelte";
   import SignalMatrix from "../components/SignalMatrix.svelte";
   import SelectField from "../components/ui/SelectField.svelte";
-  import ToggleSwitch from "../components/ui/ToggleSwitch.svelte";
-  import { pctPoints } from "../format";
+  import { fmtDate } from "../format";
   import { combineMarketData } from "../marketData";
 
   type RealPortfolio = ManagedArenaPortfolio | RebuiltArenaPortfolio;
@@ -43,7 +42,8 @@
     {
       value: "rebuilt",
       label: "Rebuilt",
-      description: "Independent daily signals tested across holding periods and exposure levels.",
+      description:
+        "Independent daily signals tested across H0.5–H20 holding periods at full target exposure.",
     },
     {
       value: "managed",
@@ -51,40 +51,20 @@
       description: "Stateful portfolios whose agents receive their prior portfolio context.",
     },
   ];
-  const VIEW_OPTIONS: { value: RebuiltView; label: string }[] = [
-    { value: "common", label: "Common policy" },
-    { value: "tuned", label: "Portfolio tuned" },
-    { value: "signal", label: "Signal Alpha" },
-  ];
-  const OBJECTIVE_OPTIONS: { value: RebuiltObjective; label: string }[] = [
-    { value: "canonical", label: "Adjusted lower 95%" },
-    { value: "max_alpha", label: "Mean alpha" },
-    { value: "max_information_ratio", label: "Information ratio" },
-    { value: "max_sharpe", label: "Sharpe (rf=0)" },
-  ];
-  const COST_OPTIONS: { value: CostBasis; label: string }[] = [
-    { value: "net", label: "Net of costs" },
-    { value: "gross", label: "Gross" },
-  ];
-  const HORIZON_OPTIONS = Array.from({ length: 20 }, (_, index) => ({
-    value: String(index + 1),
-    label: `H${index + 1} · ${index + 1} session${index ? "s" : ""}`,
-  }));
-
   let direction = $state<Direction>(
     parseDirection(new URLSearchParams(window.location.search).get("direction")),
   );
-  let track = $state<ArenaTrack>("rebuilt");
-  let rebuiltView = $state<RebuiltView>(DEFAULT_REBUILT_VIEW);
-  let objective = $state<RebuiltObjective>("canonical");
-  let costBasis = $state<CostBasis>("net");
-  let horizon = $state(5);
-  let showArchived = $state(false);
+  let track = $state<ArenaTrack>(
+    new URLSearchParams(window.location.search).get("track") === "managed" ? "managed" : "rebuilt",
+  );
+  let versions = $state.raw<ArenaVersion[]>([]);
+  let versionId = $state<number | null>(null);
+  const version = $derived(versions.find((item) => item.id === versionId));
   let agentFilter = $state("all");
   let promptFilter = $state("all");
   let managedData = $state.raw<ManagedArenaResponse | null>(null);
   let rebuiltData = $state.raw<RebuiltArenaResponse | null>(null);
-  let loading = $state(false);
+  let loading = $state(true);
   let error = $state("");
   let selected = $state<string[]>([]);
   let compareData = $state.raw<CompareResponse | null>(null);
@@ -125,7 +105,6 @@
   const filteredRealRows = $derived(
     allRealRows.filter(
       (row) =>
-        (showArchived || row.status === "active") &&
         (agentFilter === "all" || row.agent.slug === agentFilter) &&
         (promptFilter === "all" || row.prompt.slug === promptFilter),
     ),
@@ -168,32 +147,32 @@
 
   onMount(() => {
     writeDirectionUrl(direction);
-    void loadArena();
+    void initialize();
   });
-
-  function rebuiltQuery(): URLSearchParams {
-    const query = rebuiltContextParams(rebuiltContext(rebuiltView, objective, costBasis, horizon));
-    query.set("direction", direction);
-    return query;
-  }
 
   function writeDirectionUrl(next: Direction): void {
     const url = new URL(window.location.href);
     url.searchParams.set("direction", next);
+    url.searchParams.set("track", track);
+    if (versionId !== null) url.searchParams.set("version", String(versionId));
     window.history.replaceState(window.history.state, "", url);
+    router.syncVersion();
   }
 
   async function loadArena(): Promise<void> {
+    if (versionId === null) return;
     const sequence = ++requestSequence;
     error = "";
     loading = true;
     try {
       if (track === "managed") {
-        const payload = await apiJson<ManagedArenaResponse>(`/api/arena/managed?direction=${direction}`);
+        const payload = await apiJson<ManagedArenaResponse>(
+          `/api/arena/managed?direction=${direction}&version_id=${versionId}`,
+        );
         if (sequence === requestSequence) managedData = payload;
       } else {
         const payload = await apiJson<RebuiltArenaResponse>(
-          `/api/arena/rebuilt?${rebuiltQuery().toString()}`,
+          `/api/arena/rebuilt?direction=${direction}&version_id=${versionId}`,
         );
         if (sequence === requestSequence) rebuiltData = payload;
       }
@@ -225,49 +204,8 @@
   function changeTrack(next: ArenaTrack): void {
     if (track === next) return;
     track = next;
+    writeDirectionUrl(direction);
     resetFilters();
-    clearComparison();
-    void loadArena();
-  }
-
-  function changeView(value: string): void {
-    const next = VIEW_OPTIONS.find((option) => option.value === value)?.value;
-    if (!next || next === rebuiltView) return;
-    rebuiltView = next;
-    if (next === "signal") {
-      objective = "canonical";
-      costBasis = "gross";
-    } else if (costBasis === "gross") {
-      costBasis = "net";
-    }
-    rebuiltData = null;
-    clearComparison();
-    void loadArena();
-  }
-
-  function changeObjective(value: string): void {
-    const next = OBJECTIVE_OPTIONS.find((option) => option.value === value)?.value;
-    if (!next || next === objective) return;
-    objective = next;
-    rebuiltData = null;
-    clearComparison();
-    void loadArena();
-  }
-
-  function changeCostBasis(value: string): void {
-    const next = COST_OPTIONS.find((option) => option.value === value)?.value;
-    if (!next || next === costBasis) return;
-    costBasis = next;
-    rebuiltData = null;
-    clearComparison();
-    void loadArena();
-  }
-
-  function changeHorizon(value: string): void {
-    const next = Number(value);
-    if (!Number.isInteger(next) || next < 1 || next > 20 || next === horizon) return;
-    horizon = next;
-    rebuiltData = null;
     clearComparison();
     void loadArena();
   }
@@ -301,10 +239,12 @@
       return;
     }
 
-    const query = new URLSearchParams({ slugs: slugs.join(","), track, direction });
-    if (track === "rebuilt") {
-      for (const [key, value] of rebuiltQuery()) query.set(key, value);
-    }
+    const query = new URLSearchParams({
+      slugs: slugs.join(","),
+      track,
+      direction,
+      version_id: String(versionId),
+    });
 
     compareLoading = true;
     try {
@@ -318,6 +258,29 @@
     } finally {
       if (sequence === compareSequence) compareLoading = false;
     }
+  }
+  async function initialize(): Promise<void> {
+    try {
+      const payload = await apiJson<VersionsResponse>("/api/versions");
+      versions = payload.versions;
+      versionId =
+        selectedVersion(versions, new URLSearchParams(window.location.search).get("version"))?.id ?? null;
+      writeDirectionUrl(direction);
+      await loadArena();
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : "Could not load versions.";
+    } finally {
+      loading = false;
+    }
+  }
+  function changeVersion(value: string): void {
+    versionId = Number(value);
+    managedData = null;
+    rebuiltData = null;
+    resetFilters();
+    clearComparison();
+    writeDirectionUrl(direction);
+    void loadArena();
   }
 </script>
 
@@ -337,11 +300,26 @@
     <div class="valuation-stamp">
       <span>Valuation</span>
       <strong class="num">
-        {displayedMarketData.asOf ? `${displayedMarketData.asOf} close` : "Pending"}
+        {displayedMarketData.asOf ? fmtDate(displayedMarketData.asOf) : "Pending"}
       </strong>
     </div>
   </header>
 
+  {#if !loading && !versions.length && !error}<div class="empty-state card">
+      <p>No Arena versions have been created yet.</p>
+    </div>{/if}
+  <div class="filter-controls">
+    <SelectField
+      id="arena-version"
+      label="Arena version"
+      options={versions.map((item) => ({ value: String(item.id), label: item.name }))}
+      value={versionId === null ? "" : String(versionId)}
+      onValueChange={changeVersion}
+    />
+    {#if version}<span class="badge"
+        >{version.evaluation_enabled ? "Evaluation enabled" : "Evaluation paused"}</span
+      >{/if}
+  </div>
   <nav class="direction-selector" aria-label="Investment direction">
     {#each DIRECTIONS as item (item.value)}
       <button
@@ -374,6 +352,7 @@
   {#if currentData}
     {#key `${displayedMarketData.status}:${displayedMarketData.asOf}`}
       <MarketDataWarning
+        versionId={versionId!}
         status={displayedMarketData.status}
         asOf={displayedMarketData.asOf}
         onReady={loadArena}
@@ -388,73 +367,6 @@
     </div>
   {/if}
 
-  {#if track === "rebuilt"}
-    <section class="analysis-controls" aria-label="Rebuilt analysis controls">
-      <SelectField
-        id="rebuilt-view"
-        label="Comparison mode"
-        options={VIEW_OPTIONS}
-        value={rebuiltView}
-        compact
-        onValueChange={changeView}
-      />
-      {#if rebuiltView !== "signal"}
-        <SelectField
-          id="rebuilt-objective"
-          label="Policy objective"
-          options={OBJECTIVE_OPTIONS}
-          value={objective}
-          compact
-          onValueChange={changeObjective}
-        />
-        <SelectField
-          id="rebuilt-cost-basis"
-          label="Returns"
-          options={COST_OPTIONS}
-          value={costBasis}
-          compact
-          onValueChange={changeCostBasis}
-        />
-      {:else}
-        <SelectField
-          id="rebuilt-horizon"
-          label="Holding period"
-          options={HORIZON_OPTIONS}
-          value={String(horizon)}
-          compact
-          onValueChange={changeHorizon}
-        />
-        <div class="locked-context">
-          <span>Signal Alpha</span>
-          <strong>Gross · direct evidence</strong>
-        </div>
-      {/if}
-    </section>
-  {/if}
-
-  {#if rebuiltData && track === "rebuilt" && rebuiltView === "common"}
-    <section class="selection-summary" aria-label="Common policy selection">
-      <span>Common policy</span>
-      {#if rebuiltData.common_policy}
-        <strong class="num">
-          H{rebuiltData.common_policy.horizon} · {pctPoints(rebuiltData.common_policy.exposure_pct, 0)} exposure
-        </strong>
-        <p>
-          Selected from the equal-weight meta-portfolio, then applied to every eligible rebuilt portfolio.
-          {#if rebuiltData.common_policy.scoring_start}
-            Shared window <span class="num">{rebuiltData.common_policy.scoring_start}</span>
-            {#if rebuiltData.common_policy.scoring_end}
-              – <span class="num">{rebuiltData.common_policy.scoring_end}</span>
-            {/if}
-          {/if}
-        </p>
-      {:else}
-        <strong>Pending evidence</strong>
-        <p>No common horizon and exposure pair is eligible yet.</p>
-      {/if}
-    </section>
-  {/if}
-
   {#if currentData}
     <section class="filter-panel" aria-label="Portfolio filters">
       <div class="filter-controls">
@@ -466,7 +378,6 @@
           bind:value={promptFilter}
           compact
         />
-        <ToggleSwitch label="Show archived" bind:checked={showArchived} />
       </div>
       <div class="filter-context">
         <span class="result-count num">{filteredRealRows.length} shown</span>
@@ -489,7 +400,7 @@
       <header>
         <div>
           <h2 id="comparison-title">
-            {compareData?.start ? `Rebased to 100 at ${compareData.start}` : "Portfolio comparison"}
+            {compareData?.start ? `Rebased to 100 at ${fmtDate(compareData.start)}` : "Portfolio comparison"}
           </h2>
           <p>Uses the same arena context and latest common inception for every selected line.</p>
         </div>
@@ -522,21 +433,8 @@
   {:else if track === "managed" && managedData}
     <ManagedArenaTable rows={managedRows} {selected} onToggle={toggleCompare} />
   {:else if track === "rebuilt" && rebuiltData}
-    <RebuiltArenaTable
-      rows={rebuiltRows}
-      view={rebuiltView}
-      context={rebuiltData.context}
-      {selected}
-      onToggle={toggleCompare}
-    />
-    {#if rebuiltView === "signal"}
-      <SignalMatrix
-        rows={signalRows}
-        selectedHorizon={horizon}
-        context={rebuiltData.context}
-        benchmarkName={rebuiltBenchmarkName}
-      />
-    {/if}
+    <RebuiltArenaTable rows={rebuiltRows} {selected} onToggle={toggleCompare} />
+    <SignalMatrix rows={signalRows} benchmarkName={rebuiltBenchmarkName} />
   {/if}
 </section>
 
@@ -575,9 +473,7 @@
     text-align: right;
   }
 
-  .valuation-stamp span,
-  .selection-summary > span,
-  .locked-context span {
+  .valuation-stamp span {
     color: var(--text-tertiary);
     font-size: 9px;
     font-weight: 750;
@@ -649,49 +545,10 @@
     font-size: 12px;
   }
 
-  .analysis-controls,
   .filter-controls {
     display: grid;
     align-items: end;
     gap: 12px;
-  }
-
-  .analysis-controls {
-    grid-template-columns: repeat(3, minmax(160px, 230px));
-    padding: 14px 0;
-  }
-
-  .locked-context {
-    min-height: 38px;
-    display: grid;
-    align-content: center;
-    gap: 2px;
-    padding: 5px 10px;
-    background: var(--bg-raised);
-  }
-
-  .locked-context strong {
-    font-size: 11px;
-  }
-
-  .selection-summary {
-    display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr);
-    align-items: center;
-    gap: 10px 18px;
-    padding: 14px;
-    border: 1px solid var(--accent);
-    background: var(--accent-bg);
-  }
-
-  .selection-summary strong {
-    color: var(--accent-strong);
-    font-size: 14px;
-  }
-
-  .selection-summary p {
-    color: var(--text-secondary);
-    font-size: 11px;
   }
 
   .filter-panel {
@@ -766,18 +623,12 @@
       display: none;
     }
 
-    .analysis-controls,
     .filter-controls {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .filter-controls :global(.toggle-row) {
       grid-column: 1 / -1;
-    }
-
-    .selection-summary {
-      grid-template-columns: 1fr;
-      gap: 5px;
     }
   }
 
@@ -790,7 +641,6 @@
       min-height: 60px;
     }
 
-    .analysis-controls,
     .filter-controls {
       grid-template-columns: 1fr;
     }

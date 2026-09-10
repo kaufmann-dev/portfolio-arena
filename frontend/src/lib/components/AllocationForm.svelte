@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { fmtDate } from "../format";
   import { apiJson } from "../api/client";
-  import type { AllocationPolicy, Direction, ResolvedSymbol } from "../api/types";
+  import type { AllocationPolicy, Boundary, Direction, ResolvedSymbol } from "../api/types";
   import { CircleCheck, ChevronUp, ChevronDown, X, Sigma } from "@lucide/svelte";
 
   export interface AllocationPayload {
@@ -20,6 +21,7 @@
   }
 
   interface Props {
+    portfolioId: number;
     initialPositions?: { symbol: string; weight_pct: number; note?: string }[];
     initialNote?: string;
     /** When false (locked allocation edit) position rows are read-only. */
@@ -32,6 +34,7 @@
   }
 
   const {
+    portfolioId,
     initialPositions = [],
     initialNote = "",
     positionsEditable = true,
@@ -76,11 +79,13 @@
   let submitting = $state(false);
   let formError = $state("");
 
-  let effectivePreview = $state<string | null>(null);
+  let effectivePreview = $state<Boundary | null>(null);
   async function loadEffectivePreview() {
     try {
-      const payload = await apiJson<{ effective_date: string }>("/api/effective-date");
-      effectivePreview = payload.effective_date;
+      const payload = await apiJson<{ effective_at: Boundary }>(
+        `/api/effective-date?portfolio_id=${portfolioId}`,
+      );
+      effectivePreview = payload.effective_at;
     } catch {
       effectivePreview = null;
     }
@@ -315,7 +320,7 @@
     </fieldset>
   {:else}
     <p class="muted locked-note">
-      Positions are locked — the effective close has passed. Only the {entryKind} note can change.
+      Positions are locked — the effective market boundary has passed. Only the {entryKind} note can change.
     </p>
   {/if}
 
@@ -345,7 +350,7 @@
     </button>
     {#if positionsEditable && effectivePreview}
       <span class="muted">
-        Takes effect at the <strong>{effectivePreview}</strong> close — editable until then.
+        Takes effect at the <strong>{fmtDate(effectivePreview)}</strong> — editable until then.
       </span>
     {/if}
   </div>

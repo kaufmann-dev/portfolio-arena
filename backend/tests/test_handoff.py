@@ -10,6 +10,7 @@ def _create_with_notes(client, admin_headers, agent_id, prompt_id) -> dict:
     created = client.post(
         "/api/portfolios",
         json={
+            "version_id": 1,
             "name": "Notes Weekly",
             "agent_id": agent_id,
             "prompt_id": prompt_id,

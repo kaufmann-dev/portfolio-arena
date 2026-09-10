@@ -96,15 +96,10 @@ class TestMcpTools:
             "create_model",
             "update_model",
             "delete_model",
-            "archive_agent",
-            "unarchive_agent",
             "create_allocation",
-            "create_meta_portfolio_set",
-            "update_meta_portfolio_set",
             "create_signal",
             "update_signal",
             "delete_signal",
-            "archive_prompt",
             "reset_portfolio",
             "get_evaluator_dashboard",
             "configure_portfolio_evaluator",
@@ -113,40 +108,18 @@ class TestMcpTools:
             "retry_evaluation_run",
             "list_evaluation_runs",
         } <= names
-        assert "delete_prompt" not in names
+        assert {
+            "delete_prompt",
+            "list_versions",
+            "create_version",
+            "update_version",
+            "delete_version",
+        } <= names
         assert "list_prompt_versions" not in names
         assert "restore_prompt_version" not in names
         assert "unarchive_prompt" not in names
         # Key management is never exposed as a tool.
         assert not any("key" in name.lower() for name in names)
-
-    def test_agent_archive_roundtrip(self, client, mcp_headers, sample_agent):
-        archived = _call_tool(
-            client,
-            mcp_headers,
-            "archive_agent",
-            {"agent_id": sample_agent["id"]},
-        )
-        assert archived["status"] == "archived"
-        assert archived["can_delete"] is True
-
-        active_listing = _call_tool(client, mcp_headers, "list_agents")
-        assert all(agent["id"] != sample_agent["id"] for agent in active_listing["agents"])
-        archived_listing = _call_tool(
-            client,
-            mcp_headers,
-            "list_agents",
-            {"status": "archived"},
-        )
-        assert [agent["id"] for agent in archived_listing["agents"]] == [sample_agent["id"]]
-
-        restored = _call_tool(
-            client,
-            mcp_headers,
-            "unarchive_agent",
-            {"agent_id": sample_agent["id"]},
-        )
-        assert restored["status"] == "active"
 
     def test_evaluator_dashboard(self, client, mcp_headers):
         data = _call_tool(client, mcp_headers, "get_evaluator_dashboard")
@@ -164,7 +137,7 @@ class TestMcpTools:
             client,
             mcp_headers,
             "get_arena_overview",
-            {"direction": "long"},
+            {"direction": "long", "version_id": 1},
         )
         assert data["managed"]["portfolios"]
         assert data["managed"]["market_data_status"] == "fresh"
@@ -197,7 +170,7 @@ class TestMcpTools:
                 client,
                 mcp_headers,
                 "get_arena_overview",
-                {"direction": "long"},
+                {"direction": "long", "version_id": 1},
             )["managed"]["market_data_status"]
             == "fresh"
         )
@@ -214,7 +187,7 @@ class TestMcpTools:
             client,
             mcp_headers,
             "get_arena_overview",
-            {"direction": "long"},
+            {"direction": "long", "version_id": 1},
         )
         portfolio = _call_tool(
             client,
@@ -248,7 +221,7 @@ class TestMcpTools:
             client,
             mcp_headers,
             "get_arena_overview",
-            {"direction": "long"},
+            {"direction": "long", "version_id": 1},
         )
         portfolio = _call_tool(
             client,
@@ -293,6 +266,7 @@ class TestMcpTools:
         response = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "MCP Rebuilt",
                 "agent_id": sample_agent["id"],
                 "prompt_id": sample_prompt["id"],
@@ -349,14 +323,11 @@ class TestMcpTools:
             mcp_headers,
             "get_rebuilt_analysis",
             {
-                "view": "signal",
-                "objective": "canonical",
-                "cost_basis": "gross",
-                "horizon": 1,
+                "version_id": 1,
                 "direction": "long",
             },
         )
-        assert analysis["context"]["horizon"] == 1
+        assert len(analysis["portfolios"][1]["signal_horizons"]) == 40
         assert analysis["portfolios"][0]["kind"] == "benchmark"
 
     def test_write_roundtrip(self, client, mcp_headers, admin_headers):
@@ -392,6 +363,7 @@ class TestMcpTools:
             mcp_headers,
             "create_portfolio",
             {
+                "version_id": 1,
                 "name": "MCP Portfolio",
                 "agent_id": agent["id"],
                 "prompt_id": prompt["id"],
@@ -430,126 +402,6 @@ class TestMcpTools:
         detail = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers).json()
         assert detail["portfolio"]["allocations"] == []
 
-    def test_create_discover_and_update_meta_portfolio_set(
-        self,
-        client,
-        admin_headers,
-        mcp_headers,
-        sample_agent,
-        sample_model,
-        sample_portfolio,
-        monkeypatch,
-    ):
-        prompt = _call_tool(
-            client,
-            mcp_headers,
-            "create_prompt",
-            {
-                "name": "MCP Arena Synthesis",
-                "context_scope": "arena",
-                "mode": "both",
-                "direction": "both",
-                "managed_long_text": "Managed long synthesis.",
-                "managed_short_text": "Managed short synthesis.",
-                "rebuilt_long_text": "Rebuilt long synthesis.",
-                "rebuilt_short_text": "Rebuilt short synthesis.",
-            },
-        )
-        assert prompt["context_scope"] == "arena"
-
-        created = _call_tool(
-            client,
-            mcp_headers,
-            "create_meta_portfolio_set",
-            {
-                "family_name": "MCP Confluence",
-                "agent_id": sample_agent["id"],
-                "prompt_id": prompt["id"],
-            },
-        )
-        assert len(created["portfolios"]) == 4
-        assert all(portfolio["evaluator"]["enabled"] for portfolio in created["portfolios"])
-
-        replacement_response = client.post(
-            "/api/agents",
-            json={
-                "model_id": sample_model["id"],
-                "harness": "codex",
-                "reasoning_effort": "high",
-            },
-            headers=admin_headers,
-        )
-        assert replacement_response.status_code == 201, replacement_response.text
-        replacement = replacement_response.json()
-
-        # A later caller must discover an existing family without its creation response.
-        archived = client.patch(
-            f"/api/portfolios/{sample_portfolio['id']}",
-            json={"status": "archived"},
-            headers=admin_headers,
-        )
-        assert archived.status_code == 200
-
-        def no_valuation(*args, **kwargs):
-            raise AssertionError("Admin inventory must not calculate performance")
-
-        monkeypatch.setattr("app.services.admin_ops.compute_valuations", no_valuation)
-        monkeypatch.setattr("app.services.admin_ops.compute_rebuilt_arena", no_valuation)
-        inventory = _call_tool(client, mcp_headers, "list_portfolios")
-        family = next(item for item in inventory["meta_sets"] if item["family_name"] == "MCP Confluence")
-        members = [item for item in inventory["portfolios"] if item["meta_set_id"] == family["id"]]
-        assert len(members) == 4
-        assert {item["id"] for item in members} == {item["id"] for item in family["portfolios"]}
-        assert any(
-            item["id"] == sample_portfolio["id"] and item["status"] == "archived"
-            for item in inventory["portfolios"]
-        )
-
-        rejected = _rpc(
-            client,
-            mcp_headers,
-            "tools/call",
-            {
-                "name": "update_portfolio",
-                "arguments": {"portfolio_id": members[0]["id"], "agent_id": replacement["id"]},
-            },
-        ).json()["result"]
-        assert rejected["isError"] is True
-        assert f"update_meta_portfolio_set(meta_set_id={family['id']}" in rejected["content"][0]["text"]
-        updated = _call_tool(
-            client,
-            mcp_headers,
-            "update_meta_portfolio_set",
-            {"meta_set_id": family["id"], "agent_id": replacement["id"]},
-        )
-        assert updated["agent_id"] == replacement["id"]
-        reassigned = _call_tool(client, mcp_headers, "list_portfolios")
-        assert all(
-            item["agent"]["id"] == replacement["id"]
-            for item in reassigned["portfolios"]
-            if item["meta_set_id"] == family["id"]
-        )
-
-        variant = _call_tool(
-            client,
-            mcp_headers,
-            "create_meta_portfolio_set",
-            {
-                "family_name": "MCP Confluence",
-                "variant_label": "Ultra",
-                "agent_id": sample_agent["id"],
-                "prompt_id": prompt["id"],
-            },
-        )
-        assert variant["slug"] == "mcp-confluence-ultra"
-        assert variant["variant_label"] == "Ultra"
-        assert [portfolio["name"] for portfolio in variant["portfolios"]] == [
-            "MCP Confluence Core Ultra",
-            "MCP Confluence Pulse Ultra",
-            "MCP Confluence Shadow Ultra",
-            "MCP Confluence Probe Ultra",
-        ]
-
     def test_update_normal_portfolio_agent(
         self,
         client,
@@ -586,7 +438,7 @@ class TestMcpTools:
         )
         assert detail["portfolio"]["agent"]["id"] == replacement["id"]
 
-    def test_generic_prompt_exposes_both_fields_but_archive_hides_it(self, client, mcp_headers):
+    def test_generic_prompt_exposes_both_fields_and_deletes_when_unused(self, client, mcp_headers):
         created = _call_tool(
             client,
             mcp_headers,
@@ -618,12 +470,10 @@ class TestMcpTools:
         assert generic["allocation_policies"]["rebuilt"]["max_position_weight_pct"] == 100
         assert "text" not in generic
 
-        assert generic["context_scope"] == "portfolio"
-
         _call_tool(
             client,
             mcp_headers,
-            "archive_prompt",
+            "delete_prompt",
             {"prompt_id": created["id"]},
         )
         listing = _call_tool(client, mcp_headers, "list_prompts")

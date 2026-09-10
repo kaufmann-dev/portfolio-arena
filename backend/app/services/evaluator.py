@@ -10,10 +10,10 @@ from sqlalchemy.orm import Session, selectinload
 from ..models import (
     Agent,
     Allocation,
+    ArenaVersion,
     EvaluationRun,
     EvaluatorInstance,
     EvaluatorSettings,
-    MetaBatch,
     ModelDefinition,
     Portfolio,
     PortfolioEvaluatorConfig,
@@ -24,32 +24,21 @@ from . import admin_ops
 from .admin_ops import AdminOpError
 from .arena import compute_valuations
 from .harnesses import automation_harness_ids, get_harness, supports_automation
-from .meta_synthesis import (
-    build_snapshot,
-    has_usable_sources,
-    render_source_packet,
-    snapshot_hash,
-    source_packet_for,
-    sources_are_terminal,
-)
 from .model_catalog import agent_out, agent_snapshot_out, model_ref
 from .prompt_policy import automated_execution_prompt
-from .trading_calendar import close_at, effective_date_for, is_trading_day
+from .trading_calendar import boundary_at, boundary_value, effective_date_for, is_trading_day
 
 ACTIVE_STATUSES = {"queued", "running", "cancel_requested"}
 FINISHED_STATUSES = {"cancelled", "succeeded", "failed", "skipped"}
 RUN_ERROR_MAX_LENGTH = 4000
 RUN_REPORT_MAX_LENGTH = 20_000
 INSTANCE_STALE_SECONDS = 180
-NO_META_SOURCES = (
-    "No usable frozen source decisions match this Meta portfolio's harness, mode, and direction."
-)
 
 
 def _managed_liquidations(
     session: Session,
     portfolios: list[Portfolio],
-) -> dict[int, str]:
+) -> dict[int, dict]:
     candidates = [
         portfolio
         for portfolio in portfolios
@@ -88,6 +77,7 @@ def settings_out(settings: EvaluatorSettings) -> dict:
         "attempt_timeout_seconds": settings.attempt_timeout_seconds,
         "max_attempts": settings.max_attempts,
         "queue_before_close_minutes": settings.queue_before_close_minutes,
+        "queue_before_open_minutes": settings.queue_before_open_minutes,
         "updated_at": settings.updated_at.isoformat(),
     }
 
@@ -96,14 +86,24 @@ def config_out(
     config: PortfolioEvaluatorConfig | None,
     portfolio: Portfolio,
     *,
-    liquidated_at: str | None = None,
+    liquidated_at: dict | None = None,
 ) -> dict:
     return {
         "portfolio": {
             "id": portfolio.id,
             "slug": portfolio.slug,
             "name": portfolio.name,
-            "status": portfolio.status,
+            "version_id": portfolio.version_id,
+            "version": {
+                "id": portfolio.version.id,
+                "name": portfolio.version.name,
+                "evaluation_enabled": portfolio.version.evaluation_enabled,
+                "created_at": portfolio.version.created_at.isoformat(),
+            },
+            "execution_locked": portfolio.execution_locked,
+            "timing_editable": not portfolio.execution_locked
+            and not any(run.status in ACTIVE_STATUSES for run in portfolio.evaluation_runs),
+            "execution_boundary": portfolio.execution_boundary,
             "prompt_mode": portfolio.prompt_mode,
             "direction": portfolio.direction,
             "is_liquidated": liquidated_at is not None,
@@ -133,6 +133,8 @@ def run_out(run: EvaluationRun) -> dict:
             "slug": run.portfolio.slug,
             "name": run.portfolio.name,
             "direction": run.portfolio.direction,
+            "version_id": run.portfolio.version_id,
+            "execution_boundary": run.execution_boundary,
         },
         "agent": agent_snapshot_out(
             run.agent,
@@ -144,7 +146,11 @@ def run_out(run: EvaluationRun) -> dict:
         "model": model_ref(run.model),
         "trigger_kind": run.trigger_kind,
         "retry_of_run_id": run.retry_of_run_id,
-        "meta_batch_id": run.meta_batch_id,
+        "execution_boundary": run.execution_boundary,
+        "prompt_version_id": run.prompt_version_id,
+        "scheduled_boundary": boundary_value(run.scheduled_for, run.execution_boundary)
+        if run.scheduled_for
+        else None,
         "scheduled_for": run.scheduled_for.isoformat() if run.scheduled_for else None,
         "harness": run.harness,
         "execution_model_id": run.execution_model_id,
@@ -197,17 +203,14 @@ def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
         direction_instructions,
         allocation_policy,
     )
-    if run.portfolio.prompt.context_scope == "arena":
-        batch = session.get(MetaBatch, run.meta_batch_id) if run.meta_batch_id is not None else None
-        if batch is None or batch.status != "ready" or batch.snapshot is None:
-            raise RuntimeError("Arena-synthesis run has no ready frozen source batch")
-        packet = source_packet_for(
-            batch.snapshot,
-            harness=run.harness,
-            mode=run.portfolio.prompt_mode,
-            direction=run.portfolio.direction,
-        )
-        execution_prompt = f"{execution_prompt}\n\n{render_source_packet(packet)}"
+    timing = (
+        f"This scheduled evaluation targets the market {run.execution_boundary} at "
+        f"{boundary_at(run.scheduled_for, run.execution_boundary).isoformat()}. "
+        "That boundary remains authoritative if completion is late."
+        if run.scheduled_for is not None
+        else f"This evaluation uses the first future market {run.execution_boundary} at submission time."
+    )
+    execution_prompt = f"Execution timing: {timing}\n\n{execution_prompt}"
     return {
         **run_out(run),
         "execution_prompt": execution_prompt,
@@ -233,6 +236,7 @@ def _validate_settings(values: dict) -> None:
         "attempt_timeout_seconds": (60, 7200),
         "max_attempts": (1, 5),
         "queue_before_close_minutes": (15, 240),
+        "queue_before_open_minutes": (15, 240),
     }
     for key, (minimum, maximum) in ranges.items():
         value = values[key]
@@ -251,6 +255,7 @@ def update_settings(session: Session, **values) -> dict:
             "attempt_timeout_seconds",
             "max_attempts",
             "queue_before_close_minutes",
+            "queue_before_open_minutes",
         )
     }
     _validate_settings(merged)
@@ -284,8 +289,6 @@ def update_portfolio_config(
         )
     get_settings(session, lock=True)
     clean_weekdays = [0, 1, 2, 3, 4] if portfolio.prompt_mode == "rebuilt" else sorted(set(weekdays))
-    if enabled and portfolio.status != "active":
-        raise AdminOpError(409, "Archived portfolios cannot be enabled for evaluation")
     if enabled and not supports_automation(portfolio.agent.harness):
         raise AdminOpError(422, "The portfolio agent does not support integrated automation")
     if any(day < 0 or day > 4 for day in clean_weekdays):
@@ -379,7 +382,7 @@ def _runtime_out(session: Session, settings: EvaluatorSettings, now: datetime) -
     }
 
 
-def get_dashboard(session: Session, *, now: datetime | None = None) -> dict:
+def get_dashboard(session: Session, *, version_id: int | None = None, now: datetime | None = None) -> dict:
     current_time = now or datetime.now(UTC)
     settings = get_settings(session)
     portfolios = session.scalars(
@@ -396,6 +399,8 @@ def get_dashboard(session: Session, *, now: datetime | None = None) -> dict:
         )
         .order_by(Portfolio.name)
     ).all()
+    if version_id is not None:
+        portfolios = [portfolio for portfolio in portfolios if portfolio.version_id == version_id]
     liquidations = _managed_liquidations(session, portfolios)
     return {
         "settings": settings_out(settings),
@@ -414,12 +419,11 @@ def get_dashboard(session: Session, *, now: datetime | None = None) -> dict:
 def scheduled_enqueue_window(
     scheduled_for: date,
     settings: EvaluatorSettings,
+    execution_boundary: str = "close",
 ) -> tuple[datetime, datetime]:
-    close = close_at(scheduled_for)
-    return (
-        close - timedelta(minutes=settings.queue_before_close_minutes),
-        close,
-    )
+    boundary = boundary_at(scheduled_for, execution_boundary)
+    minutes = getattr(settings, f"queue_before_{execution_boundary}_minutes")
+    return boundary - timedelta(minutes=minutes), boundary
 
 
 def _next_trading_day(day: date) -> date:
@@ -455,7 +459,6 @@ def _new_run(
     trigger_kind: str,
     scheduled_for: date | None = None,
     retry_of_run_id: int | None = None,
-    meta_batch_id: int | None = None,
 ) -> EvaluationRun:
     portfolio = config.portfolio
     agent = portfolio.agent
@@ -474,7 +477,7 @@ def _new_run(
         scheduled_for=scheduled_for,
         trigger_kind=trigger_kind,
         retry_of_run_id=retry_of_run_id,
-        meta_batch_id=meta_batch_id,
+        execution_boundary=portfolio.execution_boundary,
         harness=agent.harness,
         execution_model_id=capability.execution_model_id,
         reasoning_effort=agent.reasoning_effort,
@@ -490,7 +493,7 @@ def _pending_result(
     portfolio: Portfolio,
     now: datetime,
 ) -> Allocation | Signal | None:
-    effective = effective_date_for(now)
+    effective = effective_date_for(now, portfolio.execution_boundary)
     if portfolio.prompt_mode == "managed":
         return session.scalars(
             select(Allocation).where(
@@ -503,19 +506,6 @@ def _pending_result(
             Signal.portfolio_id == portfolio.id,
             Signal.effective_date == effective,
         )
-    ).first()
-
-
-def _latest_ready_meta_batch(session: Session, harness: str) -> MetaBatch | None:
-    return session.scalars(
-        select(MetaBatch)
-        .where(
-            MetaBatch.harness == harness,
-            MetaBatch.status == "ready",
-            MetaBatch.snapshot.is_not(None),
-        )
-        .order_by(MetaBatch.session_date.desc(), MetaBatch.id.desc())
-        .limit(1)
     ).first()
 
 
@@ -537,7 +527,6 @@ def enqueue_manual_runs(
 
     items = []
     for portfolio_id in unique_ids:
-        latest_meta_batch: MetaBatch | None = None
         config = session.get(PortfolioEvaluatorConfig, portfolio_id)
         portfolio = session.scalars(
             select(Portfolio)
@@ -552,7 +541,7 @@ def enqueue_manual_runs(
             config is None
             or portfolio is None
             or not config.enabled
-            or portfolio.status != "active"
+            or not portfolio.version.evaluation_enabled
             or not supports_automation(portfolio.agent.harness)
         ):
             items.append(
@@ -574,34 +563,6 @@ def enqueue_manual_runs(
                 }
             )
             continue
-        if portfolio.prompt.context_scope == "arena":
-            latest_meta_batch = _latest_ready_meta_batch(session, portfolio.agent.harness)
-            if latest_meta_batch is None:
-                items.append(
-                    {
-                        "portfolio_id": portfolio_id,
-                        "action": "rejected",
-                        "reason": "No completed Meta batch is available for synthesis.",
-                        "run": None,
-                    }
-                )
-                continue
-            packet = source_packet_for(
-                latest_meta_batch.snapshot,
-                harness=portfolio.agent.harness,
-                mode=portfolio.prompt_mode,
-                direction=portfolio.direction,
-            )
-            if not has_usable_sources(packet):
-                items.append(
-                    {
-                        "portfolio_id": portfolio_id,
-                        "action": "rejected",
-                        "reason": NO_META_SOURCES,
-                        "run": None,
-                    }
-                )
-                continue
         active = _active_run(session, portfolio_id)
         if active is not None:
             items.append(
@@ -627,7 +588,6 @@ def enqueue_manual_runs(
             config,
             settings,
             trigger_kind="manual",
-            meta_batch_id=(latest_meta_batch.id if portfolio.prompt.context_scope == "arena" else None),
         )
         session.add(run)
         session.flush()
@@ -657,33 +617,19 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
     if not settings.enabled:
         raise AdminOpError(409, "The evaluator is paused")
     config = session.get(PortfolioEvaluatorConfig, source.portfolio_id)
-    if config is None or not config.enabled or source.portfolio.status != "active":
+    if config is None or not config.enabled or not source.portfolio.version.evaluation_enabled:
         raise AdminOpError(409, "Portfolio evaluator configuration is not enabled")
     active = _active_run(session, source.portfolio_id)
     if active is not None:
         return {"action": "existing", "run": run_out(active)}
     if _pending_result(session, source.portfolio, current_time) is not None:
         raise AdminOpError(409, "A result already targets the next effective session")
-    if source.portfolio.prompt.context_scope == "arena":
-        batch = session.get(MetaBatch, source.meta_batch_id) if source.meta_batch_id else None
-        if batch is None or batch.status != "ready" or batch.snapshot is None:
-            raise AdminOpError(409, "The original Meta source batch is no longer available")
-        if not has_usable_sources(
-            source_packet_for(
-                batch.snapshot,
-                harness=source.portfolio.agent.harness,
-                mode=source.portfolio.prompt_mode,
-                direction=source.portfolio.direction,
-            )
-        ):
-            raise AdminOpError(409, NO_META_SOURCES)
     run = _new_run(
         config,
         settings,
         trigger_kind="retry",
         retry_of_run_id=source.id,
-        scheduled_for=(source.scheduled_for if source.portfolio.prompt.context_scope == "arena" else None),
-        meta_batch_id=source.meta_batch_id,
+        scheduled_for=source.scheduled_for,
     )
     session.add(run)
     session.commit()
@@ -717,237 +663,48 @@ def _enqueue_scheduled(
     from .trading_calendar import NY
 
     local_date = now.astimezone(NY).date()
-    if not is_trading_day(local_date):
-        return
-    enqueue_at, close = scheduled_enqueue_window(local_date, settings)
-    if not enqueue_at <= now < close:
+    if not settings.enabled or not is_trading_day(local_date):
         return
     configs = session.scalars(
         select(PortfolioEvaluatorConfig)
-        .where(PortfolioEvaluatorConfig.enabled.is_(True))
+        .join(PortfolioEvaluatorConfig.portfolio)
+        .join(Portfolio.version)
+        .where(PortfolioEvaluatorConfig.enabled.is_(True), ArenaVersion.evaluation_enabled.is_(True))
         .options(
             selectinload(PortfolioEvaluatorConfig.portfolio)
             .selectinload(Portfolio.agent)
             .selectinload(Agent.model)
             .selectinload(ModelDefinition.capabilities),
-            selectinload(PortfolioEvaluatorConfig.portfolio).selectinload(Portfolio.prompt),
         )
     ).all()
-    due_configs = [
-        config
-        for config in configs
-        if config.portfolio.status == "active"
-        and config.portfolio_id not in liquidated_ids
-        and supports_automation(config.portfolio.agent.harness)
-        and is_due_on(config, local_date)
-    ]
-    normal_configs = [
-        config for config in due_configs if config.portfolio.prompt.context_scope == "portfolio"
-    ]
-    meta_configs = [config for config in due_configs if config.portfolio.prompt.context_scope == "arena"]
-
-    batches = session.scalars(
-        select(MetaBatch).where(MetaBatch.session_date == local_date).with_for_update()
-    ).all()
-    by_harness = {batch.harness: batch for batch in batches}
-    for harness in sorted({config.portfolio.agent.harness for config in meta_configs} - by_harness.keys()):
-        source_ids = list(
-            session.scalars(
-                select(Portfolio.id)
-                .join(Portfolio.prompt)
-                .join(Portfolio.agent)
-                .where(
-                    Portfolio.status == "active",
-                    Agent.harness == harness,
-                    Prompt.context_scope == "portfolio",
-                )
-                .order_by(Portfolio.id)
-            )
-        )
-        batch = MetaBatch(
-            session_date=local_date,
-            harness=harness,
-            status="waiting",
-            source_portfolio_ids=source_ids,
-            due_source_portfolio_ids=sorted(
-                config.portfolio_id for config in normal_configs if config.portfolio.agent.harness == harness
-            ),
-            target_portfolio_ids=sorted(
-                config.portfolio_id for config in meta_configs if config.portfolio.agent.harness == harness
-            ),
-        )
-        session.add(batch)
-        session.flush()
-        by_harness[harness] = batch
-
-    frozen_sources = {
-        int(portfolio_id): batch
-        for batch in by_harness.values()
-        for portfolio_id in batch.due_source_portfolio_ids
-    }
-    due_normal_ids = {config.portfolio_id for config in normal_configs}
-    normal_configs = [
-        config
-        for config in configs
-        if config.portfolio_id in frozen_sources
-        or (config.portfolio_id in due_normal_ids and config.portfolio.agent.harness not in by_harness)
-    ]
-
-    for config in normal_configs:
-        batch = frozen_sources.get(config.portfolio_id)
-        existing = session.scalars(
-            select(EvaluationRun).where(
-                EvaluationRun.portfolio_id == config.portfolio_id,
+    for config in configs:
+        portfolio = config.portfolio
+        enqueue_at, boundary = scheduled_enqueue_window(local_date, settings, portfolio.execution_boundary)
+        if (
+            not enqueue_at <= now < boundary
+            or portfolio.id in liquidated_ids
+            or not supports_automation(portfolio.agent.harness)
+            or not is_due_on(config, local_date)
+            or _active_run(session, portfolio.id) is not None
+        ):
+            continue
+        existing = session.scalar(
+            select(EvaluationRun.id)
+            .where(
+                EvaluationRun.portfolio_id == portfolio.id,
                 EvaluationRun.trigger_kind == "scheduled",
                 EvaluationRun.scheduled_for == local_date,
             )
-        ).first()
-        if existing is not None:
-            if batch is not None and existing.meta_batch_id is None and existing.harness == batch.harness:
-                existing.meta_batch_id = batch.id
-            continue
-        if (
-            not config.enabled
-            or config.portfolio.status != "active"
-            or (batch is not None and config.portfolio.agent.harness != batch.harness)
-            or not supports_automation(config.portfolio.agent.harness)
-            or _active_run(session, config.portfolio_id) is not None
-        ):
-            continue
-        session.add(
-            _new_run(
-                config,
-                settings,
-                trigger_kind="scheduled",
-                scheduled_for=local_date,
-                meta_batch_id=batch.id if batch is not None else None,
-            )
+            .limit(1)
         )
+        if existing is None:
+            session.add(_new_run(config, settings, trigger_kind="scheduled", scheduled_for=local_date))
     session.flush()
 
 
-def _queue_meta_targets(
-    session: Session,
-    batch: MetaBatch,
-    settings: EvaluatorSettings,
-    target_ids: list[int] | None = None,
-) -> list[int]:
-    if target_ids is None:
-        target_ids = [int(value) for value in batch.target_portfolio_ids]
-    if not target_ids:
-        return []
-    configs = session.scalars(
-        select(PortfolioEvaluatorConfig)
-        .where(PortfolioEvaluatorConfig.portfolio_id.in_(target_ids))
-        .options(
-            selectinload(PortfolioEvaluatorConfig.portfolio)
-            .selectinload(Portfolio.agent)
-            .selectinload(Agent.model)
-            .selectinload(ModelDefinition.capabilities),
-            selectinload(PortfolioEvaluatorConfig.portfolio).selectinload(Portfolio.prompt),
-        )
-    ).all()
-    by_id = {config.portfolio_id: config for config in configs}
-    pending: list[int] = []
-    for portfolio_id in target_ids:
-        config = by_id.get(portfolio_id)
-        if (
-            config is None
-            or not config.enabled
-            or config.portfolio.status != "active"
-            or config.portfolio.prompt.context_scope != "arena"
-            or config.portfolio.agent.harness != batch.harness
-            or not supports_automation(config.portfolio.agent.harness)
-        ):
-            continue
-        existing = session.scalars(
-            select(EvaluationRun).where(
-                EvaluationRun.portfolio_id == portfolio_id,
-                EvaluationRun.trigger_kind == "scheduled",
-                EvaluationRun.scheduled_for == batch.session_date,
-            )
-        ).first()
-        if existing is not None:
-            if existing.meta_batch_id is None and existing.harness == batch.harness:
-                existing.meta_batch_id = batch.id
-            continue
-        if _active_run(session, portfolio_id) is not None:
-            pending.append(portfolio_id)
-            continue
-        session.add(
-            _new_run(
-                config,
-                settings,
-                trigger_kind="scheduled",
-                scheduled_for=batch.session_date,
-                meta_batch_id=batch.id,
-            )
-        )
-    return pending
-
-
-def _reconcile_pending_meta_targets(
-    session: Session,
-    settings: EvaluatorSettings,
-) -> None:
-    batches = session.scalars(
-        select(MetaBatch)
-        .where(MetaBatch.status == "ready")
-        .order_by(MetaBatch.session_date, MetaBatch.id)
-        .with_for_update(skip_locked=True)
-    ).all()
-    for batch in batches:
-        pending = [int(value) for value in batch.pending_target_portfolio_ids]
-        if pending:
-            batch.pending_target_portfolio_ids = _queue_meta_targets(
-                session,
-                batch,
-                settings,
-                pending,
-            )
-    session.flush()
-
-
-def _advance_meta_batches(
-    session: Session,
-    settings: EvaluatorSettings,
-    now: datetime,
-) -> None:
-    batches = session.scalars(
-        select(MetaBatch)
-        .where(MetaBatch.status == "waiting")
-        .order_by(MetaBatch.session_date, MetaBatch.id)
-        .with_for_update(skip_locked=True)
-    ).all()
-    for batch in batches:
-        if not sources_are_terminal(session, batch, now):
-            continue
-        snapshot = build_snapshot(session, batch, now)
-        batch.snapshot = snapshot
-        batch.snapshot_sha256 = snapshot_hash(snapshot)
-        batch.sources_finished_at = now
-        usable_count = snapshot["counts"]["source_total"] - snapshot["counts"]["missing_total"]
-        batch.status = "ready" if usable_count > 0 else "insufficient"
-        if batch.status == "ready":
-            try:
-                targets = session.scalars(
-                    select(Portfolio).where(Portfolio.id.in_(batch.target_portfolio_ids))
-                ).all()
-                for portfolio in targets:
-                    packet = source_packet_for(
-                        snapshot,
-                        harness=portfolio.agent.harness,
-                        mode=portfolio.prompt_mode,
-                        direction=portfolio.direction,
-                    )
-                    if has_usable_sources(packet):
-                        render_source_packet(packet)
-            except RuntimeError as exc:
-                batch.status = "failed"
-                batch.error = str(exc)
-            else:
-                batch.pending_target_portfolio_ids = _queue_meta_targets(session, batch, settings)
-    session.flush()
+def _automation_enabled(run: EvaluationRun) -> bool:
+    config = run.portfolio.evaluator_config
+    return bool(config and config.enabled and run.portfolio.version.evaluation_enabled)
 
 
 def _recover_stale_runs(session: Session, now: datetime) -> None:
@@ -965,7 +722,11 @@ def _recover_stale_runs(session: Session, now: datetime) -> None:
             run.status = "cancelled"
             run.finished_at = now
             run.error = "Cancelled after the worker lease expired."
-        elif run.attempt_count < run.max_attempts:
+        elif (
+            run.attempt_count < run.max_attempts
+            and get_settings(session).enabled
+            and _automation_enabled(run)
+        ):
             run.status = "queued"
             run.worker_id = None
             run.lease_expires_at = None
@@ -978,20 +739,15 @@ def _recover_stale_runs(session: Session, now: datetime) -> None:
             run.error = "Worker lease expired and no further attempt is available."
 
 
-def _cancel_archived_queued_runs(session: Session, now: datetime) -> None:
+def _cancel_disabled_queued_runs(session: Session, now: datetime) -> None:
     runs = session.scalars(
-        select(EvaluationRun)
-        .join(EvaluationRun.portfolio)
-        .where(
-            EvaluationRun.status == "queued",
-            Portfolio.status != "active",
-        )
-        .with_for_update(skip_locked=True)
+        select(EvaluationRun).where(EvaluationRun.status == "queued").with_for_update(skip_locked=True)
     ).all()
     for run in runs:
-        run.status = "cancelled"
-        run.finished_at = now
-        run.error = "Cancelled because the portfolio was archived."
+        if not _automation_enabled(run):
+            run.status = "cancelled"
+            run.finished_at = now
+            run.error = "Cancelled because version or portfolio evaluation was disabled."
 
 
 def _cancel_liquidated_queued_runs(
@@ -1030,7 +786,6 @@ def claim_runs(
             select(Portfolio)
             .join(PortfolioEvaluatorConfig)
             .where(
-                Portfolio.status == "active",
                 Portfolio.prompt_mode == "managed",
                 Portfolio.direction == "short",
                 PortfolioEvaluatorConfig.enabled.is_(True),
@@ -1043,11 +798,9 @@ def claim_runs(
     # instances and prevents manual/scheduled enqueue races.
     settings = get_settings(session, lock=True)
     _recover_stale_runs(session, current_time)
-    _cancel_archived_queued_runs(session, current_time)
+    _cancel_disabled_queued_runs(session, current_time)
     _cancel_liquidated_queued_runs(session, liquidated_ids, current_time)
     _enqueue_scheduled(session, settings, current_time, liquidated_ids)
-    _advance_meta_batches(session, settings, current_time)
-    _reconcile_pending_meta_targets(session, settings)
 
     claimed: list[EvaluationRun] = []
     if settings.enabled:
@@ -1066,13 +819,9 @@ def claim_runs(
                 _run_query()
                 .join(EvaluationRun.portfolio)
                 .where(EvaluationRun.status == "queued", EvaluationRun.harness == harness)
-                .where(Portfolio.status == "active")
-                .where(
-                    ~(
-                        Portfolio.prompt.has(Prompt.context_scope == "arena")
-                        & EvaluationRun.meta_batch.has(MetaBatch.status == "waiting")
-                    )
-                )
+                .join(Portfolio.version)
+                .join(Portfolio.evaluator_config)
+                .where(ArenaVersion.evaluation_enabled.is_(True), PortfolioEvaluatorConfig.enabled.is_(True))
                 .order_by(EvaluationRun.created_at, EvaluationRun.id)
                 .limit(claim_limit)
                 .with_for_update(skip_locked=True)
@@ -1086,31 +835,9 @@ def claim_runs(
                     select(Prompt.id).where(Prompt.id.in_(prompt_ids)).order_by(Prompt.id).with_for_update()
                 ).all()
             for run in rows:
-                if run.portfolio.prompt.context_scope == "arena":
-                    batch = session.get(MetaBatch, run.meta_batch_id)
-                    if batch is None or batch.status != "ready" or batch.snapshot is None:
-                        run.status = "failed"
-                        run.error = "Arena-synthesis run has no ready frozen source batch"
-                        run.finished_at = current_time
-                        continue
-                    packet = source_packet_for(
-                        batch.snapshot,
-                        harness=run.harness,
-                        mode=run.portfolio.prompt_mode,
-                        direction=run.portfolio.direction,
-                    )
-                    if not has_usable_sources(packet):
-                        run.status = "skipped"
-                        run.error = NO_META_SOURCES
-                        run.finished_at = current_time
-                        continue
-                    try:
-                        render_source_packet(packet)
-                    except RuntimeError as exc:
-                        run.status = "failed"
-                        run.error = str(exc)
-                        run.finished_at = current_time
-                        continue
+                session.refresh(run.portfolio.prompt, ["current_version_id"])
+                session.expire(run.portfolio.prompt, ["current_version"])
+                run.prompt_version_id = run.portfolio.prompt.current_version_id
                 run.status = "running"
                 run.attempt_count += 1
                 run.worker_id = worker_id
@@ -1178,13 +905,6 @@ def submit_run(
         raise AdminOpError(409, f"Evaluation run is {run.status}, not running")
     if run.lease_expires_at is None or current_time >= run.lease_expires_at:
         raise AdminOpError(409, "Evaluation run lease expired")
-    if run.portfolio.status != "active":
-        run.status = "skipped"
-        run.error = "Portfolio was archived before evaluation submission."
-        run.finished_at = current_time
-        run.lease_expires_at = None
-        session.commit()
-        raise AdminOpError(409, "Portfolio is archived")
     if liquidated_before_submit:
         run.status = "skipped"
         run.error = "Short portfolio liquidated before evaluation submission."
@@ -1196,18 +916,13 @@ def submit_run(
             "Reset this liquidated short portfolio before submitting an allocation.",
         )
 
+    # Manual decisions lock the same portfolio before checking their boundary.
+    # Take that lock after the run lock so a concurrent manual submission cannot
+    # pass the duplicate check while this run is constructing its result.
+    admin_ops.writable_portfolio(session, run.portfolio_id, lock=True)
     allocation_policy = admin_ops.get_app_settings(session)[f"{run.portfolio.prompt_mode}_allocation_policy"]
     normalized = admin_ops._normalize_positions(allocation_policy, positions)
-    uses_frozen_meta_session = (
-        run.portfolio.prompt.context_scope == "arena"
-        and run.meta_batch_id is not None
-        and run.scheduled_for is not None
-    )
-    effective = (
-        run.scheduled_for
-        if run.trigger_kind == "scheduled" or uses_frozen_meta_session
-        else effective_date_for(current_time)
-    )
+    effective = run.scheduled_for or effective_date_for(current_time, run.execution_boundary)
     assert effective is not None
     if run.portfolio.prompt_mode == "managed":
         allocation = session.scalars(
@@ -1275,6 +990,7 @@ def fail_run(
     now: datetime | None = None,
 ) -> dict:
     current_time = now or datetime.now(UTC)
+    settings = get_settings(session, lock=True)
     run = _load_run(session, run_id, lock=True)
     if run.status in FINISHED_STATUSES:
         return run_out(run)
@@ -1284,7 +1000,7 @@ def fail_run(
     if cancelled or run.status == "cancel_requested":
         run.status = "cancelled"
         run.finished_at = current_time
-    elif run.attempt_count < run.max_attempts:
+    elif run.attempt_count < run.max_attempts and settings.enabled and _automation_enabled(run):
         run.status = "queued"
     else:
         run.status = "failed"
@@ -1326,12 +1042,15 @@ def heartbeat(
     return {"ok": True, "server_time": current_time.isoformat()}
 
 
-def _encode_cursor(run: EvaluationRun, portfolio_id: int | None, status: str | None) -> str:
+def _encode_cursor(
+    run: EvaluationRun, portfolio_id: int | None, status: str | None, version_id: int | None
+) -> str:
     payload = json.dumps(
         {
             "created_at": run.created_at.isoformat(),
             "id": run.id,
             "portfolio_id": portfolio_id,
+            "version_id": version_id,
             "status": status,
         },
         separators=(",", ":"),
@@ -1343,10 +1062,15 @@ def _decode_cursor(
     cursor: str,
     portfolio_id: int | None,
     status: str | None,
+    version_id: int | None,
 ) -> tuple[datetime, int]:
     try:
         payload = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-        if payload.get("portfolio_id") != portfolio_id or payload.get("status") != status:
+        if (
+            payload.get("portfolio_id") != portfolio_id
+            or payload.get("status") != status
+            or payload.get("version_id") != version_id
+        ):
             raise ValueError
         created_at = datetime.fromisoformat(payload["created_at"])
         if created_at.tzinfo is None:
@@ -1360,6 +1084,7 @@ def list_runs(
     session: Session,
     *,
     portfolio_id: int | None = None,
+    version_id: int | None = None,
     status: str | None = None,
     cursor: str | None = None,
     limit: int = 50,
@@ -1377,12 +1102,14 @@ def list_runs(
         raise AdminOpError(422, "Invalid evaluation-run status")
     limit = max(1, min(limit, 100))
     query = _run_query()
+    if version_id is not None:
+        query = query.join(EvaluationRun.portfolio).where(Portfolio.version_id == version_id)
     if portfolio_id is not None:
         query = query.where(EvaluationRun.portfolio_id == portfolio_id)
     if status is not None:
         query = query.where(EvaluationRun.status == status)
     if cursor is not None:
-        cursor_time, cursor_id = _decode_cursor(cursor, portfolio_id, status)
+        cursor_time, cursor_id = _decode_cursor(cursor, portfolio_id, status, version_id)
         query = query.where(
             or_(
                 EvaluationRun.created_at < cursor_time,
@@ -1396,5 +1123,7 @@ def list_runs(
     rows = rows[:limit]
     return {
         "items": [run_out(run) for run in rows],
-        "next_cursor": _encode_cursor(rows[-1], portfolio_id, status) if has_more and rows else None,
+        "next_cursor": _encode_cursor(rows[-1], portfolio_id, status, version_id)
+        if has_more and rows
+        else None,
     }

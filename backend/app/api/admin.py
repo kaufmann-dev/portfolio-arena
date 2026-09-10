@@ -17,10 +17,10 @@ from ..schemas import (
     AgentPatch,
     AllocationCreate,
     AllocationUpdate,
+    ArenaVersionCreate,
+    ArenaVersionPatch,
     EvaluationRunsCreate,
     EvaluatorSettingsUpdate,
-    MetaPortfolioSetCreate,
-    MetaPortfolioSetPatch,
     ModelCreate,
     ModelPatch,
     PortfolioCreate,
@@ -37,7 +37,7 @@ from ..services import admin_ops, evaluator, price_cache
 from ..services.admin_ops import AdminOpError
 from ..services.harnesses import harnesses_out
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
-from ..services.trading_calendar import effective_date_for
+from ..services.trading_calendar import boundary_value, effective_date_for
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +120,8 @@ def create_agent(body: AgentCreate, session: Session = Depends(get_session)):
 
 
 @router.get("/admin/agents")
-def list_agents(
-    status: str | None = Query(default="all"),
-    session: Session = Depends(get_session),
-):
-    return _run(admin_ops.list_agents, session, status=status)
+def list_agents(session: Session = Depends(get_session)):
+    return _run(admin_ops.list_agents, session)
 
 
 @router.patch("/agents/{agent_id}")
@@ -140,16 +137,6 @@ def patch_agent(agent_id: int, body: AgentPatch, session: Session = Depends(get_
     )
 
 
-@router.post("/admin/agents/{agent_id}/archive")
-def archive_agent(agent_id: int, session: Session = Depends(get_session)):
-    return _run(admin_ops.archive_agent, session, agent_id)
-
-
-@router.post("/admin/agents/{agent_id}/unarchive")
-def unarchive_agent(agent_id: int, session: Session = Depends(get_session)):
-    return _run(admin_ops.unarchive_agent, session, agent_id)
-
-
 @router.delete("/agents/{agent_id}")
 def delete_agent(agent_id: int, session: Session = Depends(get_session)):
     return _run(admin_ops.delete_agent, session, agent_id)
@@ -159,11 +146,8 @@ def delete_agent(agent_id: int, session: Session = Depends(get_session)):
 
 
 @router.get("/admin/prompts")
-def list_prompts(
-    status: str | None = None,
-    session: Session = Depends(get_session),
-):
-    return _run(admin_ops.list_prompts, session, status=status)
+def list_prompts(session: Session = Depends(get_session)):
+    return _run(admin_ops.list_prompts, session)
 
 
 @router.post("/admin/prompts", status_code=201)
@@ -172,7 +156,6 @@ def create_prompt(body: PromptCreate, session: Session = Depends(get_session)):
         admin_ops.create_prompt,
         session,
         name=body.name,
-        context_scope=body.context_scope,
         mode=body.mode,
         direction=body.direction,
         managed_long_text=body.managed_long_text,
@@ -199,16 +182,6 @@ def patch_prompt(prompt_id: int, body: PromptPatch, session: Session = Depends(g
         rebuilt_short_text=body.rebuilt_short_text,
         notes=body.notes,
     )
-
-
-@router.post("/admin/prompts/{prompt_id}/archive")
-def archive_prompt(prompt_id: int, session: Session = Depends(get_session)):
-    return _run(admin_ops.archive_prompt, session, prompt_id)
-
-
-@router.post("/admin/prompts/{prompt_id}/unarchive")
-def unarchive_prompt(prompt_id: int, session: Session = Depends(get_session)):
-    return _run(admin_ops.unarchive_prompt, session, prompt_id)
 
 
 @router.get("/admin/prompts/{prompt_id}/versions")
@@ -257,18 +230,19 @@ def symbol_resolution(symbol: str):
 
 
 @router.get("/effective-date")
-def effective_date_preview():
-    """What the entry form shows before submitting."""
+def effective_date_preview(portfolio_id: int, session: Session = Depends(get_session)):
+    portfolio = _run(admin_ops.writable_portfolio, session, portfolio_id)
     now = datetime.now(UTC)
-    return {"entered_at": now.isoformat(), "effective_date": effective_date_for(now).isoformat()}
+    day = effective_date_for(now, portfolio.execution_boundary)
+    return {"entered_at": now.isoformat(), "effective_at": boundary_value(day, portfolio.execution_boundary)}
 
 
 # --- Portfolios & allocations -------------------------------------------------
 
 
 @router.get("/admin/portfolios")
-def list_portfolios(session: Session = Depends(get_session)):
-    return admin_ops.list_portfolios(session)
+def list_portfolios(version_id: int | None = None, session: Session = Depends(get_session)):
+    return _run(admin_ops.list_portfolios, session, version_id=version_id)
 
 
 @router.post("/portfolios", status_code=201)
@@ -282,36 +256,8 @@ def create_portfolio(body: PortfolioCreate, session: Session = Depends(get_sessi
         prompt_mode=body.prompt_mode,
         direction=body.direction,
         slug=body.slug,
-        cost_bps=body.cost_bps,
-    )
-
-
-@router.post("/admin/meta-portfolio-sets", status_code=201)
-def create_meta_portfolio_set(
-    body: MetaPortfolioSetCreate,
-    session: Session = Depends(get_session),
-):
-    return _run(
-        admin_ops.create_meta_portfolio_set,
-        session,
-        family_name=body.family_name,
-        variant_label=body.variant_label,
-        agent_id=body.agent_id,
-        prompt_id=body.prompt_id,
-    )
-
-
-@router.patch("/admin/meta-portfolio-sets/{meta_set_id}")
-def patch_meta_portfolio_set(
-    meta_set_id: int,
-    body: MetaPortfolioSetPatch,
-    session: Session = Depends(get_session),
-):
-    return _run(
-        admin_ops.update_meta_portfolio_set,
-        session,
-        meta_set_id,
-        agent_id=body.agent_id,
+        version_id=body.version_id,
+        execution_boundary=body.execution_boundary,
     )
 
 
@@ -322,12 +268,12 @@ def patch_portfolio(portfolio_id: int, body: PortfolioPatch, session: Session = 
         session,
         portfolio_id,
         name=body.name,
-        status=body.status,
         agent_id=body.agent_id,
         prompt_id=body.prompt_id,
         prompt_mode=body.prompt_mode,
         direction=body.direction,
-        cost_bps=body.cost_bps,
+        version_id=body.version_id,
+        execution_boundary=body.execution_boundary,
     )
 
 
@@ -348,6 +294,7 @@ def portfolio_admin_detail(portfolio_id: int, session: Session = Depends(get_ses
 
 @router.get("/evaluation-runs")
 def evaluation_runs(
+    version_id: int | None = None,
     portfolio_id: int | None = None,
     status: str | None = None,
     cursor: str | None = None,
@@ -358,6 +305,7 @@ def evaluation_runs(
         evaluator.list_runs,
         session,
         portfolio_id=portfolio_id,
+        version_id=version_id,
         status=status,
         cursor=cursor,
         limit=limit,
@@ -365,8 +313,8 @@ def evaluation_runs(
 
 
 @router.get("/evaluator")
-def evaluator_dashboard(session: Session = Depends(get_session)):
-    return evaluator.get_dashboard(session)
+def evaluator_dashboard(version_id: int | None = None, session: Session = Depends(get_session)):
+    return _run(evaluator.get_dashboard, session, version_id=version_id)
 
 
 @router.put("/evaluator/settings")
@@ -463,3 +411,23 @@ def put_app_settings(body: SettingsUpdate, session: Session = Depends(get_sessio
 def clear_price_cache(session: Session = Depends(get_session)):
     deleted = price_cache.clear_cache(session)
     return {"deleted": deleted}
+
+
+@router.delete("/admin/prompts/{prompt_id}")
+def delete_prompt(prompt_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.delete_prompt, session, prompt_id)
+
+
+@router.post("/admin/versions", status_code=201)
+def create_version(body: ArenaVersionCreate, session: Session = Depends(get_session)):
+    return _run(admin_ops.create_version, session, **body.model_dump())
+
+
+@router.patch("/admin/versions/{version_id}")
+def update_version(version_id: int, body: ArenaVersionPatch, session: Session = Depends(get_session)):
+    return _run(admin_ops.update_version, session, version_id, **body.model_dump())
+
+
+@router.delete("/admin/versions/{version_id}")
+def delete_version(version_id: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.delete_version, session, version_id)

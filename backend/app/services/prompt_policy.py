@@ -94,8 +94,9 @@ Reassess every holding and credible candidate using current evidence and current
 holding must re-earn its place. Use the portfolio history and notes to update each thesis, but do not
 give an existing position an automatic retention advantage. Do not target either low or high
 turnover. Change holdings or target weights when the current evidence indicates that another
-allocation should materially improve strategy-aligned prospective excess return after transaction
-costs. Do not trade solely because of ordinary price noise, repeated information, or small or
+allocation should materially improve strategy-aligned prospective excess return.
+Do not trade solely because of ordinary price noise,
+repeated information, or small or
 unstable ranking differences.
 
 Direction instructions:

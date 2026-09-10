@@ -75,6 +75,7 @@ class TestCreatePortfolioPrompt:
         resp = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Bad Mode",
                 "agent_id": sample_agent["id"],
                 "prompt_id": sample_prompt["id"],
@@ -89,6 +90,7 @@ class TestCreatePortfolioPrompt:
         resp = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Bad Prompt",
                 "agent_id": sample_agent["id"],
                 "prompt_id": 999999,
@@ -107,6 +109,7 @@ class TestCreatePortfolioPrompt:
         sample_prompt,
     ):
         base = {
+            "version_id": 1,
             "agent_id": sample_agent["id"],
             "prompt_id": sample_prompt["id"],
             "prompt_mode": "managed",
@@ -142,7 +145,7 @@ class TestCreatePortfolioPrompt:
     def test_created_portfolio_carries_prompt(self, client, sample_portfolio):
         row = next(
             p
-            for p in client.get("/api/arena/managed?direction=long").json()["portfolios"]
+            for p in client.get("/api/arena/managed?version_id=1&direction=long").json()["portfolios"]
             if p["id"] == sample_portfolio["id"]
         )
         assert row["prompt"]["slug"] == "weekly-manager-v1"
@@ -170,6 +173,7 @@ class TestCreatePortfolioPrompt:
         response = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Unsupported prompt mode",
                 "agent_id": sample_agent["id"],
                 "prompt_id": prompt["id"],
@@ -204,6 +208,7 @@ class TestCreatePortfolioPrompt:
         response = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Unsupported prompt direction",
                 "agent_id": sample_agent["id"],
                 "prompt_id": prompt["id"],
@@ -238,6 +243,7 @@ class TestEditPortfolio:
         portfolio = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Mode transition",
                 "agent_id": sample_agent["id"],
                 "prompt_id": managed_prompt["id"],
@@ -296,6 +302,7 @@ class TestEditPortfolio:
         portfolio = client.post(
             "/api/portfolios",
             json={
+                "version_id": 1,
                 "name": "Direction transition",
                 "agent_id": sample_agent["id"],
                 "prompt_id": long_prompt["id"],
@@ -328,7 +335,7 @@ class TestEditPortfolio:
         assert simultaneous.json()["prompt_id"] == short_prompt["id"]
         assert simultaneous.json()["direction"] == "short"
 
-    def test_patch_updates_name_agent_cost(
+    def test_patch_updates_name_and_agent(
         self,
         client,
         admin_headers,
@@ -347,20 +354,18 @@ class TestEditPortfolio:
 
         resp = client.patch(
             f"/api/portfolios/{sample_portfolio['id']}",
-            json={"name": "Renamed Weekly", "agent_id": other["id"], "cost_bps": 25},
+            json={"name": "Renamed Weekly", "agent_id": other["id"]},
             headers=admin_headers,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["name"] == "Renamed Weekly"
         assert body["agent_id"] == other["id"]
-        assert body["cost_bps"] == 25
 
-        rows = client.get("/api/arena/managed?direction=long").json()["portfolios"]
+        rows = client.get("/api/arena/managed?version_id=1&direction=long").json()["portfolios"]
         row = next(p for p in rows if p["id"] == sample_portfolio["id"])
         assert row["name"] == "Renamed Weekly"
         assert row["agent"]["id"] == other["id"]
-        assert row["cost_bps"] == 25
 
     def test_patch_reserves_only_the_synthetic_spy_display_name(
         self,
@@ -432,7 +437,7 @@ class TestEditPortfolio:
 
         row = next(
             p
-            for p in client.get("/api/arena/managed?direction=long").json()["portfolios"]
+            for p in client.get("/api/arena/managed?version_id=1&direction=long").json()["portfolios"]
             if p["id"] == sample_portfolio["id"]
         )
         assert row["prompt"]["id"] == other["id"]

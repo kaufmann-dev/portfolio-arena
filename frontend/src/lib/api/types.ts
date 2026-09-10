@@ -1,3 +1,18 @@
+export type ExecutionBoundary = "open" | "close";
+export interface Boundary {
+  timestamp: string;
+  phase: ExecutionBoundary;
+}
+export interface ArenaVersion {
+  id: number;
+  name: string;
+  evaluation_enabled: boolean;
+  created_at: string;
+}
+export interface VersionsResponse {
+  versions: ArenaVersion[];
+}
+
 export interface Ref {
   id: number;
   slug: string;
@@ -24,7 +39,6 @@ export interface PromptRef {
   id: number;
   slug: string;
   name: string;
-  context_scope: PromptContextScope;
   mode: PromptAvailability;
   direction: DirectionAvailability;
   configurable: boolean;
@@ -33,24 +47,19 @@ export interface PromptRef {
 
 export type PromptMode = "managed" | "rebuilt";
 export type PromptAvailability = PromptMode | "both";
-export type PromptContextScope = "portfolio" | "arena";
 export type Direction = "long" | "short";
 export type DirectionAvailability = Direction | "both";
 export type MarketDataStatus = "fresh" | "updating" | "stale" | "unavailable";
 export type ArenaTrack = PromptMode;
-export type RebuiltView = "common" | "tuned" | "signal";
-export type RebuiltObjective = "canonical" | "max_alpha" | "max_information_ratio" | "max_sharpe";
-export type CostBasis = "net" | "gross";
 export type EvidenceState = "pending" | "inconclusive" | "positive" | "negative";
 
 export interface MarketDataSnapshot {
-  as_of: string | null;
-  target_as_of: string;
+  as_of: Boundary | null;
+  target_as_of: Boundary;
   market_data_status: MarketDataStatus;
 }
 
 export interface AppSettings {
-  default_cost_bps: number;
   managed_allocation_policy: AllocationPolicy;
   rebuilt_allocation_policy: AllocationPolicy;
   managed_wrapper_prompt: string;
@@ -61,14 +70,13 @@ export interface AppSettings {
 
 export interface Metrics {
   has_data: boolean;
-  start_date?: string;
-  end_date?: string;
+  start_at?: Boundary | null;
+  end_at?: Boundary | null;
   itd_return?: number | null;
   spy_return?: number | null;
   ann_volatility?: number | null;
   sharpe?: number | null;
   max_drawdown?: number | null;
-  cost_drag_pct?: number | null;
   turnover_pct?: number | null;
   r1m?: number | null;
   r3m?: number | null;
@@ -77,7 +85,8 @@ export interface Metrics {
 }
 
 export interface SeriesPoint {
-  date: string;
+  timestamp: string;
+  phase: ExecutionBoundary;
   nav: number;
 }
 
@@ -91,12 +100,11 @@ export interface AllocationOut {
   id: number;
   portfolio_id: number;
   entered_at: string;
-  effective_date: string;
-  applied_date: string | null;
+  effective_at: Boundary;
+  applied_at: Boundary | null;
   locked: boolean;
   note: string;
   turnover_pct: number | null;
-  cost: number | null;
   positions: PositionOut[];
 }
 
@@ -118,13 +126,15 @@ export interface PortfolioResetResult {
 }
 
 export interface AdminPortfolio extends Ref {
-  status: "active" | "archived";
+  execution_locked: boolean;
+  timing_editable: boolean;
+  version_id: number;
+  version: ArenaVersion;
+  execution_boundary: ExecutionBoundary;
   prompt_mode: PromptMode;
   direction: Direction;
-  cost_bps: number;
   agent: AgentRef;
-  prompt: Ref & { context_scope: PromptContextScope; status: "active" | "archived" };
-  meta_set_id: number | null;
+  prompt: Ref;
   allocation_count: number;
   signal_count: number;
   evaluation_run_count: number;
@@ -132,19 +142,17 @@ export interface AdminPortfolio extends Ref {
   structure_editable: boolean;
   structure_blocker: string | null;
   prompt_editable: boolean;
-  restore_blocker: string | null;
 }
 
 export interface AdminPortfoliosResponse {
   portfolios: AdminPortfolio[];
-  meta_sets: MetaPortfolioSetCreated[];
 }
 
 export interface SignalOut {
   id: number;
   portfolio_id: number;
   entered_at: string;
-  effective_date: string;
+  effective_at: Boundary;
   locked: boolean;
   note: string;
   provenance?: "integrated" | "browser_admin" | "mcp";
@@ -153,8 +161,8 @@ export interface SignalOut {
 
 export interface AlphaMetrics {
   has_data: boolean;
-  start_date?: string | null;
-  end_date?: string | null;
+  start_at?: Boundary | null;
+  end_at?: Boundary | null;
   itd_return?: number | null;
   spy_return?: number | null;
   mean_daily_alpha?: number | null;
@@ -168,7 +176,6 @@ export interface AlphaMetrics {
   information_ratio?: number | null;
   max_drawdown?: number | null;
   turnover_pct?: number | null;
-  cost_drag_pct?: number | null;
   complete_count?: number;
   open_count?: number;
   completion_ratio?: number | null;
@@ -181,6 +188,9 @@ export interface AlphaMetrics {
 }
 
 export interface ArenaPortfolioBase {
+  version_id: number;
+  version: ArenaVersion;
+  execution_boundary: ExecutionBoundary;
   id: number;
   kind: PromptMode;
   slug: string;
@@ -188,16 +198,14 @@ export interface ArenaPortfolioBase {
   direction: Direction;
   agent: AgentRef;
   prompt: PromptRef;
-  status: "active" | "archived";
   is_liquidated: boolean;
-  liquidated_at: string | null;
+  liquidated_at: Boundary | null;
 }
 
 export interface ManagedArenaPortfolio extends ArenaPortfolioBase {
   kind: "managed";
   prompt_mode: "managed";
-  cost_bps: number;
-  inception: string | null;
+  inception: Boundary | null;
   age_days: number | null;
   allocation_count: number;
   metrics: Metrics & AlphaMetrics;
@@ -212,16 +220,6 @@ export interface ManagedArenaPortfolio extends ArenaPortfolioBase {
 
 export interface RebuiltPolicy {
   horizon: number;
-  exposure_pct: number;
-  objective_score?: number | null;
-  scoring_start?: string | null;
-  scoring_end?: string | null;
-}
-
-export interface RebuiltAggregatePolicy {
-  horizon: number;
-  exposure_pct: number;
-  provisional: boolean;
 }
 
 export interface SignalHorizon {
@@ -251,12 +249,10 @@ export interface RebuiltCompletion {
 }
 
 export interface RebuiltArenaPortfolio extends ArenaPortfolioBase {
+  inception: Boundary | null;
   kind: "rebuilt";
   prompt_mode: "rebuilt";
-  cost_bps: number;
   rank: number | null;
-  founding_v2: boolean;
-  common_admitted: boolean;
   selected_policy: RebuiltPolicy | null;
   evidence: EvidenceState;
   rank_score: number | null;
@@ -276,8 +272,7 @@ export interface BenchmarkArenaPortfolio {
   name: string;
   direction: Direction;
   is_liquidated: boolean;
-  liquidated_at: string | null;
-  status: "reference";
+  liquidated_at: Boundary | null;
   rank: null;
   evidence: EvidenceState;
   rank_score: null;
@@ -288,58 +283,19 @@ export interface BenchmarkArenaPortfolio {
 export interface ManagedArenaResponse {
   track: "managed";
   direction: Direction;
-  as_of: string | null;
+  as_of: Boundary | null;
   market_data_status: MarketDataStatus;
   ranking: Record<string, unknown>;
   portfolios: (ManagedArenaPortfolio | BenchmarkArenaPortfolio)[];
 }
 
-export type MetaBatchStatus = "waiting" | "ready" | "insufficient" | "failed";
-
-export interface MetaBatchSummary {
-  id: number;
-  harness: string;
-  harness_name: string;
-  session_date: string;
-  status: MetaBatchStatus;
-  snapshot_sha256: string | null;
-  sources_finished_at: string | null;
-  created_at: string;
-  updated_at: string;
-  source_count: number;
-  due_count: number;
-  terminal_count: number;
-  success_count: number;
-  fallback_count: number;
-  missing_count: number;
-  target_count: number;
-  error: string | null;
-}
-
-export interface ManagedMetaResponse extends ManagedArenaResponse {
-  batches: MetaBatchSummary[];
-}
-
-export interface RebuiltMetaResponse extends RebuiltArenaResponse {
-  batches: MetaBatchSummary[];
-}
-
 export interface RebuiltArenaResponse {
   track: "rebuilt";
   direction: Direction;
-  as_of: string | null;
+  as_of: Boundary | null;
   market_data_status: MarketDataStatus;
-  context: RebuiltAnalysisContext;
-  common_policy: RebuiltPolicy | null;
   ranking: Record<string, unknown>;
   portfolios: (RebuiltArenaPortfolio | BenchmarkArenaPortfolio)[];
-}
-
-export interface RebuiltAnalysisContext {
-  view: RebuiltView;
-  objective: RebuiltObjective;
-  cost_basis: CostBasis;
-  horizon: number | null;
 }
 
 export interface ManagedPortfolioDetail extends ManagedArenaPortfolio {
@@ -355,16 +311,15 @@ export interface ManagedPortfolioDetail extends ManagedArenaPortfolio {
 export interface ManagedPortfolioDetailResponse {
   track: "managed";
   direction: Direction;
-  as_of: string | null;
+  as_of: Boundary | null;
   market_data_status: MarketDataStatus;
-  context: null;
   portfolio: ManagedPortfolioDetail;
 }
 
 export interface ActiveCohort {
   signal_id: number;
-  start_date: string;
-  end_date: string | null;
+  start_at: Boundary;
+  end_at: Boundary | null;
   age_sessions: number;
   positions: PositionOut[];
 }
@@ -374,12 +329,10 @@ export interface RebuiltPortfolioDetail extends RebuiltArenaPortfolio {
   execution_context_notice?: string | null;
   series: SeriesPoint[];
   spy_series: SeriesPoint[];
-  aggregate_policy: RebuiltAggregatePolicy | null;
   holdings: AggregateHolding[];
   active_cohorts: ActiveCohort[];
   signals: SignalOut[];
   signals_next_cursor: number | null;
-  policy_matrix: PolicyMatrixCell[];
   signal_horizons: SignalHorizon[];
   error: string | null;
 }
@@ -387,16 +340,15 @@ export interface RebuiltPortfolioDetail extends RebuiltArenaPortfolio {
 export interface RebuiltPortfolioDetailResponse {
   track: "rebuilt";
   direction: Direction;
-  as_of: string | null;
+  as_of: Boundary | null;
   market_data_status: MarketDataStatus;
-  context: RebuiltAnalysisContext;
   portfolio: RebuiltPortfolioDetail;
 }
 
 export type PortfolioAnalysisResponse = ManagedPortfolioDetailResponse | RebuiltPortfolioDetailResponse;
 
 export interface AdminPortfolioDetailResponse {
-  as_of: string | null;
+  as_of: Boundary | null;
   market_data_status: MarketDataStatus;
   portfolio: ManagedPortfolioDetail | RebuiltPortfolioDetail;
 }
@@ -404,21 +356,16 @@ export interface AdminPortfolioDetailResponse {
 export type ArenaPortfolio = ManagedArenaPortfolio | RebuiltArenaPortfolio;
 
 export interface PortfolioRefOut {
+  version_id: number;
+  version: ArenaVersion;
+  execution_boundary: ExecutionBoundary;
   id: number;
   slug: string;
   name: string;
   direction: Direction;
-  status: "active" | "archived";
   prompt_mode: PromptMode;
-  context_scope: PromptContextScope;
   is_liquidated?: boolean;
-  liquidated_at?: string | null;
-}
-
-export interface PolicyMatrixCell {
-  horizon: number;
-  exposure_pct: number;
-  metrics: AlphaMetrics;
+  liquidated_at?: Boundary | null;
 }
 
 export interface AggregateHolding {
@@ -435,7 +382,6 @@ export interface PromptOut {
   id: number;
   slug: string;
   name: string;
-  context_scope: PromptContextScope;
   mode: PromptAvailability;
   direction: DirectionAvailability;
   managed_long_text: string | null;
@@ -449,8 +395,9 @@ export interface PromptOut {
 }
 
 export interface AdminPrompt extends PromptOut {
-  status: "active" | "archived";
-  archived_at: string | null;
+  evaluation_run_count: number;
+  can_delete: boolean;
+  delete_blocker: string | null;
   created_at: string;
   updated_at: string;
   current_version: number;
@@ -500,21 +447,13 @@ export interface AgentOut {
   harness: HarnessRef | null;
   execution_model_id: string | null;
   reasoning_effort: string | null;
-  status: "active" | "archived";
-  archived_at: string | null;
   portfolio_count?: number;
   portfolios?: PortfolioRefOut[];
 }
 
 export interface AdminAgent extends AgentOut {
   portfolio_count: number;
-  active_portfolio_count: number;
-  archived_portfolio_count: number;
   evaluation_run_count: number;
-  can_archive: boolean;
-  archive_blocker: string | null;
-  can_restore: boolean;
-  restore_blocker: string | null;
   can_delete: boolean;
   delete_blocker: string | null;
 }
@@ -557,47 +496,19 @@ export interface ModelDefinition extends Ref {
 }
 
 export interface CompareEntry {
+  execution_boundary: ExecutionBoundary;
   slug: string;
   name: string;
   kind: "managed" | "rebuilt" | "benchmark";
   series: SeriesPoint[];
 }
 
-export interface MetaCompareResponse extends CompareResponse {
-  batches: MetaBatchSummary[];
-}
-
-export interface MetaPortfolioSetMember {
-  id: number;
-  slug: string;
-  name: string;
-  prompt_mode: PromptMode;
-  direction: Direction;
-  cost_bps: number;
-  evaluator: {
-    enabled: boolean;
-    weekdays: number[];
-  };
-}
-
-export interface MetaPortfolioSetCreated {
-  id: number;
-  slug: string;
-  family_name: string;
-  variant_label: string | null;
-  agent_id: number;
-  prompt_id: number;
-  created_at: string;
-  portfolios: MetaPortfolioSetMember[];
-}
-
 export interface CompareResponse {
   track: ArenaTrack;
   direction: Direction;
-  as_of: string | null;
+  as_of: Boundary | null;
   market_data_status: MarketDataStatus;
-  start: string | null;
-  context: RebuiltAnalysisContext | null;
+  start: Boundary | null;
   series: CompareEntry[];
   spy_series: SeriesPoint[];
 }
@@ -639,15 +550,18 @@ export interface EvaluatorSettings {
   attempt_timeout_seconds: number;
   max_attempts: number;
   queue_before_close_minutes: number;
+  queue_before_open_minutes: number;
   updated_at: string;
 }
 
 export interface EvaluatorPortfolioRef extends Ref {
-  status: "active" | "archived";
+  version_id: number;
+  version: ArenaVersion;
+  execution_boundary: ExecutionBoundary;
   prompt_mode: PromptMode;
   direction: Direction;
   is_liquidated: boolean;
-  liquidated_at: string | null;
+  liquidated_at: Boundary | null;
 }
 
 export interface PortfolioEvaluatorConfig {
@@ -688,8 +602,10 @@ export interface EvaluatorDashboard {
 
 export interface EvaluationRun {
   id: number;
-  meta_batch_id: number | null;
-  portfolio: Ref & { direction: Direction };
+  portfolio: Ref & { direction: Direction; version_id: number; execution_boundary: ExecutionBoundary };
+  execution_boundary: ExecutionBoundary;
+  prompt_version_id: number | null;
+  scheduled_boundary: Boundary | null;
   agent: AgentOut;
   model: Ref;
   trigger_kind: EvaluationTriggerKind;

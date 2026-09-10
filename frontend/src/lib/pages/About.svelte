@@ -2,7 +2,7 @@
   import { Tabs } from "bits-ui";
 
   import EvidenceBadge from "../components/EvidenceBadge.svelte";
-  import { link } from "../stores/router.svelte";
+  import { link, versionHref } from "../stores/router.svelte";
 
   type Tab = "overview" | "rules" | "mcp";
   let tab = $state<Tab>("overview");
@@ -51,154 +51,105 @@
           >
           It is a deterministic paper-trading experiment, not a brokerage account or investment advice. Every result
           on the
-          <a href="/" onclick={(event) => link(event, "/")}>arena</a>
+          <a href={versionHref("/")} onclick={(event) => link(event, "/")}>arena</a>
           is reconstructed from recorded decisions and market data.
         </p>
 
-        <h2 class="flush">Two separate tracks</h2>
+        <h2>Arena versions</h2>
+        <p>
+          Versions group each experiment’s portfolios, models, and prompts. Switch versions to revisit earlier
+          results. Pausing evaluation stops new evaluations while recorded portfolios remain visible and
+          continue tracking prices. Multiple versions can evaluate at once.
+        </p>
+        <h2>Two tracks</h2>
         <div class="track-grid">
           <section>
-            <span>Default track</span>
             <h3>Rebuilt</h3>
             <p>
-              Each evaluation produces a complete, independent signal without seeing prior signals, holdings,
-              notes, performance, turnover, or costs. Signals can arrive every trading day. The arena tests
-              every holding period from 1–20 sessions and every total exposure from 10–100%.
+              Every evaluation starts with an independent signal. Each portfolio selects its own holding
+              horizon from H0.5 to H20 in half-session increments, at 100% target exposure.
             </p>
           </section>
           <section>
-            <span>Stateful track</span>
             <h3>Managed</h3>
             <p>
-              Each evaluation receives the portfolio's current state and can rebalance it. This preserves the
-              long-running managed experiment while ranking its SPY-relative daily alpha with the same
-              evidence-first standard.
+              Each evaluation receives the portfolio’s holdings, allocation history, notes, and performance
+              before deciding its next allocation.
             </p>
           </section>
         </div>
-
+        <h2>Portfolio tuned comparison</h2>
         <p>
-          Strategy prompts explicitly support <strong>Managed</strong>, <strong>Rebuilt</strong>, or
-          <strong>Both</strong> tracks. A Both prompt stores separate Managed and Rebuilt strategy text; each evaluation
-          receives only the text for its portfolio's selected track.
+          The rebuilt Arena selects the horizon with the highest search-adjusted lower 95% confidence bound on
+          portfolio alpha. Ties choose the shorter horizon. The Signal Alpha matrix shows direct signal
+          evidence for all 40 horizons, with each portfolio’s selected horizon highlighted.
         </p>
-
-        <h2>Three rebuilt views</h2>
-        <ol>
-          <li>
-            <strong>Common policy</strong> selects one holding period and exposure level from an equal-weight meta-portfolio,
-            then applies that pair to every eligible rebuilt portfolio.
-          </li>
-          <li>
-            <strong>Portfolio tuned</strong> selects the best policy separately for each portfolio.
-          </li>
-          <li>
-            <strong>Signal Alpha</strong> compares the direct completed-signal evidence at a selected holding period
-            and exposes the full 20-horizon matrix.
-          </li>
-        </ol>
-
         <p>
-          Long and short books are evaluated separately. SPY is the sole underlying benchmark: long results
-          compare with buy-and-hold SPY, while short results compare with the synthetic Short SPY reference
-          calculated from daily −1× SPY returns. The benchmark appears as a pinned row, so it cannot be
-          mistaken for an AI portfolio stored in the database.
-        </p>
-
-        <p class="muted">
-          Nothing here is investment advice. The project measures language-model decision quality under
-          explicit rules.
+          Long and short portfolios are ranked separately. Long results compare with buy-and-hold SPY; short
+          results compare with a synthetic daily −1× SPY reference that resets at the close.
         </p>
       </Tabs.Content>
-
       <Tabs.Content class="tab-panel about-tab-panel" value="rules">
-        <h2 class="flush">Signal and allocation timing</h2>
+        <h2 class="flush">Opening and closing prices</h2>
+        <p>
+          Each portfolio evaluates before either market open or market close and trades at that boundary. Its
+          timing is permanent after the first decision. Both opening and closing marks appear in charts, after
+          the market-data delay.
+        </p>
         <ul>
           <li>
-            A browser or MCP submission takes effect at the first market close strictly after the server
-            receives it.
+            Manual decisions take effect at the first future matching boundary. Scheduled evaluations retain
+            their scheduled session and opening or closing price even if they finish late.
           </li>
           <li>
-            Integrated scheduled evaluations target their configured trading session. Market holidays shift
-            weekday schedules to the next trading session.
+            Schedules follow New York exchange time, including daylight-saving changes, holidays, and early
+            closes. Decisions lock at their effective boundary.
           </li>
           <li>
-            Managed allocation positions lock at their effective close. A rebuilt signal becomes completely
-            immutable at that close; pending entries can be corrected or deleted.
+            H0.5 advances one boundary: open to that day’s close, or close to the next trading day’s open. H1
+            advances two boundaries. Weekends and holidays add no steps.
           </li>
         </ul>
-
-        <h2>Rebuilt cohort construction</h2>
-        <ul>
-          <li>
-            A signal held for H sessions contributes <code>exposure ÷ H</code> percent to each active daily cohort.
-            Any unused sleeve stays in the direction-matched SPY benchmark.
-          </li>
-          <li>
-            Warm-up days and missing signal sessions use SPY. Active cohorts are marked to market only through
-            observed sessions; future results are never assumed.
-          </li>
-          <li>
-            At every market close, the aggregate target is recomputed and rebalanced from the active
-            exposure/H cohort sleeves. Any unused allocation remains in the direction-matched benchmark.
-          </li>
-          <li>
-            Net results apply the configured transaction cost to actual aggregate turnover from that
-            rebalancing, including changes to the benchmark sleeve. Gross results omit those costs.
-          </li>
-          <li>
-            A horizon becomes eligible after at least two completed cohorts and a completion ratio of at least
-            50%. A portfolio is admitted to the Common-policy meta-portfolio only after H20 passes that gate;
-            until then it remains in H20 incubation.
-          </li>
-        </ul>
-
+        <h2>Portfolio construction</h2>
+        <p>
+          Daily signals receive 1 ÷ ceil(H) of the portfolio. Unused sleeves follow the direction-matched SPY
+          reference. Entries and expiries trade at their own boundaries; additional chart marks do not trigger
+          rebalancing. Transaction costs are not deducted; turnover remains visible.
+        </p>
+        <p>
+          A horizon requires at least two completed cohorts and a completion ratio of at least 50% before
+          ranking. Pending horizons remain unranked.
+        </p>
         <h2>Evidence and ranking</h2>
-        <ul>
-          <li>
-            Signal Alpha converts a signal's total return relative to SPY into a comparable mean daily alpha
-            for its holding period. Constructed policies use strategy daily return minus SPY daily return.
-          </li>
-          <li>
-            Confidence intervals use Newey–West/HAC standard errors. Rebuilt horizons use lag H−1, while
-            managed portfolios use an automatic bounded bandwidth.
-          </li>
-          <li>
-            The 95% intervals use fixed Bonferroni families: 20 tests for Canonical and Signal Alpha, and 200
-            tests for optimized policy searches. Rankings use the adjusted lower endpoint, rewarding robust
-            evidence rather than the largest point estimate.
-          </li>
-          <li>
-            <EvidenceBadge state="pending" compact /> lacks enough eligible observations;
-            <EvidenceBadge state="inconclusive" compact /> includes zero;
-            <EvidenceBadge state="positive" compact /> is entirely above zero; and
-            <EvidenceBadge state="negative" compact /> is entirely below zero.
-          </li>
-        </ul>
-
-        <h2>Market-data rules</h2>
-        <ul>
-          <li>
-            Long and short books are separate. Each uses USD-denominated equities and ETFs, with gross signal
-            weights summing to 100%.
-          </li>
-          <li>Massive split-adjusted daily closes and dividend adjustments; base currency USD.</li>
-          <li>
-            NAVs are recomputed on request from immutable inputs and cached price series—nothing is
-            snapshotted.
-          </li>
-          <li>
-            Missing prices carry forward with visible stale-data and frozen-symbol flags; nothing is guessed
-            silently.
-          </li>
-          <li>
-            If short losses exhaust a book's capital, its NAV is liquidated at zero. A liquidated managed
-            portfolio stops accepting new allocations and evaluator runs until its history is reset. A
-            liquidated rebuilt policy does not stop independent daily signals used by other policies and
-            future cohorts.
-          </li>
-          <li>Daily closes only. Sharpe ratios use a zero risk-free rate and are labeled accordingly.</li>
-        </ul>
+        <p>
+          Risk and ranking statistics use non-overlapping full-session returns: open to open after an opening
+          update and close to close after a closing update. Annualization uses 252 trading sessions. Total
+          returns include the entire investment history.
+        </p>
+        <p>
+          Confidence intervals use Newey–West/HAC standard errors with a 40-horizon search correction. Rebuilt
+          daily correlation uses ceil(H) − 1 lags. Rankings favor the adjusted lower confidence bound.
+        </p>
+        <p>
+          <EvidenceBadge state="pending" compact /> means insufficient evidence; <EvidenceBadge
+            state="inconclusive"
+            compact
+          /> includes zero; <EvidenceBadge state="positive" compact /> is entirely above zero; <EvidenceBadge
+            state="negative"
+            compact
+          /> is entirely below zero.
+        </p>
+        <h2>Market data</h2>
+        <p>
+          Portfolios use USD-denominated equities and ETFs. Opening and closing prices receive consistent
+          split and dividend adjustments. Missing opening prices are never replaced by closing prices;
+          unpriceable decisions remain pending or unavailable.
+        </p>
+        <p>
+          NAVs are reconstructed from recorded decisions and cached market data. If a short book exhausts its
+          capital, its NAV is liquidated at zero. A liquidated managed portfolio cannot submit new allocations
+          until reset; rebuilt signals continue independently.
+        </p>
       </Tabs.Content>
 
       <Tabs.Content class="tab-panel about-tab-panel" value="mcp">
@@ -213,24 +164,24 @@
         <h2 class="flush">Core portfolio tools</h2>
         <ul class="tools">
           <li>
-            <code>get_arena_overview(direction)</code> — separate Managed and Rebuilt summaries for one long or
-            short direction.
+            <code>get_arena_overview(version_id, direction)</code> — separate Managed and Rebuilt summaries for
+            one long or short direction.
           </li>
           <li>
-            <code>get_rebuilt_analysis(direction, ...)</code> — Common, Portfolio tuned, or Signal Alpha results
-            for a chosen direction, objective, cost basis, and valid horizon.
+            <code>get_rebuilt_analysis(version_id, direction)</code> — portfolio tuned rankings and all 40 Signal
+            Alpha horizons for one version and direction.
           </li>
           <li>
             <code>get_portfolio(slug_or_id)</code> — selected track strategy text, prompt support mode, allocation
-            policy, and effective date, including the whole-book direction. Rebuilt responses intentionally exclude
-            all prior signal state and performance.
+            policy, and effective boundary, including the whole-book direction. Rebuilt responses intentionally
+            exclude all prior signal state and performance.
           </li>
           <li>
             <code>create_allocation(portfolio_id, positions, note?)</code> — managed portfolios only.
           </li>
           <li>
             <code>create_signal(portfolio_id, positions, note?)</code> — rebuilt portfolios only; creates one independent
-            next-session signal.
+            signal at the next matching boundary.
           </li>
           <li>
             <code>update_signal(signal_id, positions?, note?)</code> and
@@ -240,10 +191,10 @@
 
         <h2>Catalog and operations</h2>
         <p>
-          Additional tools manage portfolios, agents, models, active prompts, evaluator settings and runs,
-          validate symbols, inspect the applicable Managed or Rebuilt prompt text, and page through evaluator
-          audit history. Archived prompt content and immutable version recovery remain browser-admin-only.
-          Mode or direction changes require an empty history; reset the portfolio before switching.
+          Additional tools manage portfolios, agents, models, prompts, evaluator settings and runs, validate
+          symbols, inspect the applicable Managed or Rebuilt prompt text, and page through evaluator audit
+          history. Prompt revision history and revision restoration remain browser-admin-only. Execution
+          timing locks permanently after the first decision, including after a reset.
         </p>
 
         <h2>Connecting</h2>
@@ -303,8 +254,7 @@
     line-height: 1.72;
   }
 
-  ul,
-  ol {
+  ul {
     padding-left: 22px;
   }
 
@@ -319,14 +269,6 @@
   .track-grid section {
     padding: 16px;
     background: var(--bg-raised);
-  }
-
-  .track-grid span {
-    color: var(--text-tertiary);
-    font-size: 9px;
-    font-weight: 750;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   .track-grid p {

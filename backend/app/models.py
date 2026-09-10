@@ -103,15 +103,6 @@ class Agent(Base):
     harness: Mapped[str | None] = mapped_column(Text, nullable=True)
     reasoning_effort: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('active', 'archived')",
-            name="agents_status_check",
-        ),
-        CheckConstraint(
-            "(status = 'active' AND archived_at IS NULL) OR "
-            "(status = 'archived' AND archived_at IS NOT NULL)",
-            name="agents_archive_state_check",
-        ),
         ForeignKeyConstraint(
             ["model_id", "harness"],
             ["model_harness_capabilities.model_id", "model_harness_capabilities.harness"],
@@ -123,19 +114,15 @@ class Agent(Base):
             func.coalesce(harness, ""),
             func.coalesce(reasoning_effort, ""),
             unique=True,
-            postgresql_where="status = 'active'",
         ),
     )
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     model: Mapped[ModelDefinition] = relationship(back_populates="agents")
     portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="agent")
-    meta_portfolio_sets: Mapped[list["MetaPortfolioSet"]] = relationship(back_populates="agent")
     evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(back_populates="agent")
 
 
@@ -143,27 +130,9 @@ class Prompt(Base):
     """Stable strategy identity whose editable fields live in immutable versions."""
 
     __tablename__ = "prompts"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('active', 'archived')",
-            name="prompts_status_check",
-        ),
-        CheckConstraint(
-            "(status = 'active' AND archived_at IS NULL) OR "
-            "(status = 'archived' AND archived_at IS NOT NULL)",
-            name="prompts_archive_state_check",
-        ),
-        CheckConstraint(
-            "context_scope IN ('portfolio', 'arena')",
-            name="prompts_context_scope_check",
-        ),
-    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    context_scope: Mapped[str] = mapped_column(Text, nullable=False, server_default="portfolio")
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     current_version_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey(
@@ -195,7 +164,6 @@ class Prompt(Base):
         passive_deletes=True,
     )
     portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="prompt")
-    meta_portfolio_sets: Mapped[list["MetaPortfolioSet"]] = relationship(back_populates="prompt")
 
     @property
     def name(self) -> str:
@@ -327,43 +295,22 @@ class PromptVersion(Base):
         return text
 
 
-class MetaPortfolioSet(Base):
-    """One atomic four-cell family of arena-synthesis portfolios."""
+class ArenaVersion(Base):
+    """One independently scheduled group of portfolio experiments."""
 
-    __tablename__ = "meta_portfolio_sets"
-
+    __tablename__ = "arena_versions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    family_name: Mapped[str] = mapped_column(Text, nullable=False)
-    variant_label: Mapped[str | None] = mapped_column(Text, nullable=True)
-    agent_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("agents.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    prompt_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("prompts.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    evaluation_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-
-    agent: Mapped[Agent] = relationship(back_populates="meta_portfolio_sets")
-    prompt: Mapped[Prompt] = relationship(back_populates="meta_portfolio_sets")
-    portfolios: Mapped[list["Portfolio"]] = relationship(
-        back_populates="meta_set",
-        passive_deletes=True,
-        order_by="Portfolio.id",
-    )
+    portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="version", passive_deletes=True)
 
 
 class Portfolio(Base):
     __tablename__ = "portfolios"
     __table_args__ = (
-        CheckConstraint("status IN ('active', 'archived')", name="portfolios_status_check"),
-        CheckConstraint("cost_bps >= 0", name="portfolios_cost_bps_check"),
         CheckConstraint(
             "prompt_mode IN ('managed', 'rebuilt')",
             name="portfolios_prompt_mode_check",
@@ -372,12 +319,10 @@ class Portfolio(Base):
             "direction IN ('long', 'short')",
             name="portfolios_direction_check",
         ),
-        UniqueConstraint(
-            "meta_set_id",
-            "prompt_mode",
-            "direction",
-            name="portfolios_meta_set_cell_key",
+        CheckConstraint(
+            "execution_boundary IN ('open', 'close')", name="portfolios_execution_boundary_check"
         ),
+        Index("idx_portfolios_version_id", "version_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -385,23 +330,18 @@ class Portfolio(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
     prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"), nullable=False)
-    meta_set_id: Mapped[int | None] = mapped_column(
-        Integer,
-        ForeignKey("meta_portfolio_sets.id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    version_id: Mapped[int] = mapped_column(Integer, ForeignKey("arena_versions.id"), nullable=False)
+    execution_boundary: Mapped[str] = mapped_column(Text, nullable=False, server_default="close")
+    execution_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    version: Mapped["ArenaVersion"] = relationship(back_populates="portfolios")
     prompt_mode: Mapped[str] = mapped_column(Text, nullable=False)
     direction: Mapped[str] = mapped_column(Text, nullable=False)
-    cost_bps: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
-    founding_v2: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     agent: Mapped[Agent] = relationship(back_populates="portfolios")
     prompt: Mapped[Prompt] = relationship(back_populates="portfolios")
-    meta_set: Mapped[MetaPortfolioSet | None] = relationship(back_populates="portfolios")
     allocations: Mapped[list["Allocation"]] = relationship(
         back_populates="portfolio",
         cascade="all, delete-orphan",
@@ -429,7 +369,7 @@ class Portfolio(Base):
 class Allocation(Base):
     """One row per decision (initial or rebalance).
 
-    Locked (= effective_date's close has passed) is derived, never stored;
+    Locked (= the portfolio's effective boundary has passed) is derived, never stored;
     once locked, positions and effective_date are frozen — note remains editable.
     """
 
@@ -476,7 +416,7 @@ class Position(Base):
 
 
 class Signal(Base):
-    """One independent rebuilt-portfolio signal for one effective close."""
+    """One independent rebuilt-portfolio signal for one effective trading boundary."""
 
     __tablename__ = "signals"
     __table_args__ = (
@@ -533,43 +473,6 @@ class SignalPosition(Base):
     signal: Mapped[Signal] = relationship(back_populates="positions")
 
 
-class MetaBatch(Base):
-    """Frozen normal inputs shared by one harness's meta runs for one session."""
-
-    __tablename__ = "meta_batches"
-    __table_args__ = (
-        UniqueConstraint("session_date", "harness", name="meta_batches_session_harness_key"),
-        CheckConstraint(
-            "status IN ('waiting', 'ready', 'insufficient', 'failed')",
-            name="meta_batches_status_check",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    session_date: Mapped[date] = mapped_column(Date, nullable=False)
-    # Like the frozen portfolio IDs, this identity survives deletion of its source.
-    harness: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="waiting")
-    source_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    due_source_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    target_portfolio_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    pending_target_portfolio_ids: Mapped[list[int]] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
-    snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    snapshot_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sources_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
-
-    evaluation_runs: Mapped[list["EvaluationRun"]] = relationship(back_populates="meta_batch")
-
-
 class EvaluationRun(Base):
     __tablename__ = "evaluation_runs"
     __table_args__ = (
@@ -582,6 +485,9 @@ class EvaluationRun(Base):
             "trigger_kind IN ('scheduled', 'manual', 'retry')",
             name="evaluation_runs_trigger_kind_check",
         ),
+        CheckConstraint(
+            "execution_boundary IN ('open', 'close')", name="evaluation_runs_execution_boundary_check"
+        ),
         CheckConstraint("attempt_count >= 0", name="evaluation_runs_attempt_count_check"),
         CheckConstraint("max_attempts BETWEEN 1 AND 5", name="evaluation_runs_max_attempts_check"),
         CheckConstraint("timeout_seconds BETWEEN 60 AND 7200", name="evaluation_runs_timeout_check"),
@@ -590,7 +496,6 @@ class EvaluationRun(Base):
             name="evaluation_runs_result_exclusive_check",
         ),
         Index("idx_evaluation_runs_scheduled_id", "scheduled_for", "id"),
-        Index("idx_evaluation_runs_meta_batch_id", "meta_batch_id"),
         Index(
             "evaluation_runs_portfolio_session_key",
             "portfolio_id",
@@ -612,11 +517,11 @@ class EvaluationRun(Base):
     )
     agent_id: Mapped[int] = mapped_column(Integer, ForeignKey("agents.id"), nullable=False)
     model_id: Mapped[int] = mapped_column(Integer, ForeignKey("model_definitions.id"), nullable=False)
-    meta_batch_id: Mapped[int | None] = mapped_column(
-        Integer,
-        ForeignKey("meta_batches.id", ondelete="SET NULL"),
-        nullable=True,
+    execution_boundary: Mapped[str] = mapped_column(Text, nullable=False, server_default="close")
+    prompt_version_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("prompt_versions.id"), nullable=True
     )
+    prompt_version: Mapped[PromptVersion | None] = relationship()
     scheduled_for: Mapped[date | None] = mapped_column(Date, nullable=True)
     trigger_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
     retry_of_run_id: Mapped[int | None] = mapped_column(
@@ -652,7 +557,6 @@ class EvaluationRun(Base):
     portfolio: Mapped[Portfolio] = relationship(back_populates="evaluation_runs")
     agent: Mapped[Agent] = relationship(back_populates="evaluation_runs")
     model: Mapped[ModelDefinition] = relationship(back_populates="evaluation_runs")
-    meta_batch: Mapped[MetaBatch | None] = relationship(back_populates="evaluation_runs")
     allocation: Mapped[Allocation | None] = relationship()
     signal: Mapped[Signal | None] = relationship()
 
@@ -678,6 +582,9 @@ class EvaluatorSettings(Base):
             name="evaluator_settings_attempts_check",
         ),
         CheckConstraint(
+            "queue_before_open_minutes BETWEEN 15 AND 240", name="evaluator_settings_open_queue_check"
+        ),
+        CheckConstraint(
             "queue_before_close_minutes BETWEEN 15 AND 240",
             name="evaluator_settings_queue_check",
         ),
@@ -689,6 +596,7 @@ class EvaluatorSettings(Base):
     poll_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")
     attempt_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1500")
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
+    queue_before_open_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")
     queue_before_close_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -750,7 +658,7 @@ class ApiKey(Base):
 
 
 class PriceCache(Base):
-    """Daily total-return close series per USD-denominated equity or ETF."""
+    """Daily total-return opening and closing prices per USD equity or ETF."""
 
     __tablename__ = "price_cache"
     __table_args__ = (Index("idx_price_cache_fetched_at", "fetched_at"),)

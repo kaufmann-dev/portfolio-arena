@@ -89,8 +89,6 @@ def agent_out(agent: Agent, *, portfolio_count: int | None = None) -> dict:
         ),
         "execution_model_id": capability.execution_model_id if capability else None,
         "reasoning_effort": agent.reasoning_effort,
-        "status": agent.status,
-        "archived_at": agent.archived_at.isoformat() if agent.archived_at is not None else None,
     }
     if portfolio_count is not None:
         result["portfolio_count"] = portfolio_count

@@ -1,13 +1,14 @@
-import type { MarketDataStatus } from "./api/types";
+import { fmtDate } from "./format";
+import type { Boundary, MarketDataStatus } from "./api/types";
 
 export interface MarketDataSource {
-  as_of: string | null;
+  as_of: Boundary | null;
   market_data_status: MarketDataStatus;
 }
 
 export interface CombinedMarketData {
   status: MarketDataStatus;
-  asOf: string | null;
+  asOf: Boundary | null;
 }
 
 export interface MarketDataWarningContent {
@@ -25,7 +26,7 @@ const MARKET_DATA_SEVERITY: Record<MarketDataStatus, number> = {
 
 export function combineMarketData(...sources: (MarketDataSource | null | undefined)[]): CombinedMarketData {
   let status: MarketDataStatus = "fresh";
-  let asOf: string | null | undefined;
+  let asOf: Boundary | null | undefined;
 
   for (const source of sources) {
     if (!source) continue;
@@ -38,7 +39,7 @@ export function combineMarketData(...sources: (MarketDataSource | null | undefin
       asOf = source.as_of;
     } else if (asOf !== null && source.as_of === null) {
       asOf = null;
-    } else if (asOf !== null && source.as_of !== null && source.as_of < asOf) {
+    } else if (asOf !== null && source.as_of !== null && source.as_of.timestamp < asOf.timestamp) {
       asOf = source.as_of;
     }
   }
@@ -48,14 +49,14 @@ export function combineMarketData(...sources: (MarketDataSource | null | undefin
 
 export function marketDataWarning(
   status: MarketDataStatus,
-  asOf: string | null,
-  targetAsOf: string | null = null,
+  asOf: Boundary | null,
+  targetAsOf: Boundary | null = null,
 ): MarketDataWarningContent | null {
   if (status === "updating") {
     return {
-      title: targetAsOf ? `Updating ${targetAsOf} close` : "Updating latest close",
+      title: targetAsOf ? `Updating ${fmtDate(targetAsOf)}` : "Updating latest prices",
       message: asOf
-        ? `Valuations remain on the complete ${asOf} snapshot and will refresh automatically.`
+        ? `Valuations remain on the complete ${fmtDate(asOf)} snapshot and will refresh automatically.`
         : "Valuations will appear automatically as soon as the complete snapshot is ready.",
       role: "status",
     };
@@ -65,7 +66,7 @@ export function marketDataWarning(
   return {
     title: "Market data incomplete",
     message: asOf
-      ? `Some required prices are unavailable. Displayed valuations use data through the ${asOf} close and may be incomplete.`
+      ? `Some required prices are unavailable. Displayed valuations use data through the ${fmtDate(asOf)} and may be incomplete.`
       : "Required prices are unavailable, so a complete valuation cannot be displayed.",
     role: "alert",
   };

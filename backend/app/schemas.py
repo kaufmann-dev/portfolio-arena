@@ -70,7 +70,6 @@ class PromptCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None
-    context_scope: Literal["portfolio", "arena"] = "portfolio"
     mode: Literal["managed", "rebuilt", "both"]
     direction: Literal["long", "short", "both"]
     managed_long_text: str | None = None
@@ -136,42 +135,30 @@ class SignalUpdate(BaseModel):
 
 
 class PortfolioCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version_id: int
+    execution_boundary: Literal["open", "close"] = "close"
     name: str = Field(min_length=1, max_length=200)
     slug: str | None = None
     agent_id: int
     prompt_id: int
     prompt_mode: Literal["managed", "rebuilt"]
     direction: Literal["long", "short"]
-    cost_bps: int | None = Field(default=None, ge=0)
-
-
-class MetaPortfolioSetCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    family_name: str = Field(min_length=1, max_length=180)
-    variant_label: str | None = Field(default=None, min_length=1, max_length=80)
-    agent_id: int
-    prompt_id: int
-
-
-class MetaPortfolioSetPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    agent_id: int
 
 
 class PortfolioPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version_id: int | None = None
+    execution_boundary: Literal["open", "close"] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    status: str | None = Field(default=None, pattern="^(active|archived)$")
     agent_id: int | None = None
     prompt_id: int | None = None
     prompt_mode: Literal["managed", "rebuilt"] | None = None
     direction: Literal["long", "short"] | None = None
-    cost_bps: int | None = Field(default=None, ge=0)
 
 
 class SettingsUpdate(BaseModel):
-    default_cost_bps: int = Field(ge=0)
+    model_config = ConfigDict(extra="forbid")
     managed_wrapper_prompt: str = Field(min_length=1)
     rebuilt_wrapper_prompt: str = Field(min_length=1)
     long_direction_instructions: str = Field(min_length=1)
@@ -204,6 +191,7 @@ class EvaluatorSettingsUpdate(BaseModel):
     poll_seconds: int = Field(ge=10, le=300)
     attempt_timeout_seconds: int = Field(ge=60, le=7200)
     max_attempts: int = Field(ge=1, le=5)
+    queue_before_open_minutes: int = Field(ge=15, le=240)
     queue_before_close_minutes: int = Field(ge=15, le=240)
 
 
@@ -258,3 +246,14 @@ class EvaluatorRunFailIn(BaseModel):
 
 class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+
+
+class ArenaVersionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ArenaVersionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    evaluation_enabled: bool | None = None

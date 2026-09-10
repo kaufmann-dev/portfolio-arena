@@ -194,6 +194,7 @@ def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, 
                     agent_id=agent_id,
                     prompt_id=sample_prompt["id"],
                     prompt_mode="managed",
+                    version_id=1,
                     direction="long",
                 )
                 for index in range(3)

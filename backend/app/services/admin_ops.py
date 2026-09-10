@@ -2,7 +2,7 @@
 
 Every experiment-integrity rule lives here exactly once: server-set entry
 times, computed effective dates (no backdating), position and signal locking
-after the effective close, mode separation, and slug uniqueness. Functions own their
+after the effective boundary, mode separation, and slug uniqueness. Functions own their
 `session.commit()` and raise `AdminOpError` on any rule violation; callers
 translate that into their transport's error shape (HTTP status / tool error).
 """
@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from ..models import (
     Agent,
     Allocation,
+    ArenaVersion,
     EvaluationRun,
     EvaluatorSettings,
-    MetaPortfolioSet,
     ModelDefinition,
     ModelHarnessCapability,
     Portfolio,
@@ -30,7 +30,6 @@ from ..models import (
     SignalPosition,
 )
 from ..seed import (
-    DEFAULT_COST_BPS_KEY,
     LONG_DIRECTION_INSTRUCTIONS_KEY,
     MANAGED_MAX_POSITION_WEIGHT_PCT_KEY,
     MANAGED_MIN_POSITION_WEIGHT_PCT_KEY,
@@ -85,19 +84,10 @@ from .symbols import (
 )
 from .trading_calendar import effective_date_for, is_locked
 
-DEFAULT_COST_BPS_FALLBACK = 10
 MANAGED_MIN_POSITION_WEIGHT_PCT_FALLBACK = 10.0
 MANAGED_MAX_POSITION_WEIGHT_PCT_FALLBACK = 25.0
 REBUILT_MIN_POSITION_WEIGHT_PCT_FALLBACK = 10.0
 REBUILT_MAX_POSITION_WEIGHT_PCT_FALLBACK = 100.0
-PROMPT_CONTEXT_SCOPES = {"portfolio", "arena"}
-META_PORTFOLIO_COST_BPS = 10
-META_PORTFOLIO_CELLS = (
-    ("Core", "managed", "long"),
-    ("Pulse", "rebuilt", "long"),
-    ("Shadow", "managed", "short"),
-    ("Probe", "rebuilt", "short"),
-)
 
 
 def unique_slug(session: Session, model, wanted: str) -> str:
@@ -118,11 +108,6 @@ def _validate_prompt_mode(prompt_mode: str) -> None:
 def _validate_direction(direction: str) -> None:
     if direction not in PROMPT_DIRECTIONS:
         raise AdminOpError(422, "Direction must be 'long' or 'short'.")
-
-
-def _validate_prompt_context_scope(context_scope: str) -> None:
-    if context_scope not in PROMPT_CONTEXT_SCOPES:
-        raise AdminOpError(422, "Prompt context scope must be 'portfolio' or 'arena'.")
 
 
 # --- Models and agents ------------------------------------------------------
@@ -257,7 +242,6 @@ def _profile_exists(
     exclude_agent_id: int | None = None,
 ) -> bool:
     query = select(Agent.id).where(
-        Agent.status == "active",
         Agent.model_id == model_id,
         Agent.harness.is_(None) if harness is None else Agent.harness == harness,
         Agent.reasoning_effort.is_(None)
@@ -269,18 +253,10 @@ def _profile_exists(
     return session.scalar(query.limit(1)) is not None
 
 
-def _active_agent_for_assignment(
-    session: Session,
-    agent_id: int,
-    *,
-    inactive_status_code: int = 422,
-    inactive_message: str = "Archived agents cannot be assigned to portfolios",
-) -> Agent:
+def _agent_for_assignment(session: Session, agent_id: int) -> Agent:
     agent = session.scalars(select(Agent).where(Agent.id == agent_id).with_for_update()).first()
     if agent is None:
         raise AdminOpError(422, "Agent not found")
-    if agent.status != "active":
-        raise AdminOpError(inactive_status_code, inactive_message)
     return agent
 
 
@@ -340,8 +316,6 @@ def update_agent(
     agent = load_agent(session, agent_id, lock=True)
     if agent is None:
         raise AdminOpError(404, "Agent not found")
-    if agent.status != "active":
-        raise AdminOpError(409, "Unarchive this agent before editing it")
     target_model_id = model_id if model_id is not None else agent.model_id
     model, _, clean_effort = validate_agent_profile(
         session,
@@ -376,158 +350,40 @@ def update_agent(
     return agent_out(agent)
 
 
-def _agent_usage(
-    session: Session,
-) -> tuple[
-    dict[int, dict[str, int]],
-    dict[int, int],
-    dict[tuple[int, str | None, str | None], int],
-]:
-    portfolio_usage: dict[int, dict[str, int]] = {}
-    for agent_id, status, count in session.execute(
-        select(Portfolio.agent_id, Portfolio.status, func.count()).group_by(
-            Portfolio.agent_id,
-            Portfolio.status,
-        )
-    ):
-        portfolio_usage.setdefault(agent_id, {"active": 0, "archived": 0})[status] = int(count)
-    run_usage = {
-        agent_id: int(count)
-        for agent_id, count in session.execute(
-            select(EvaluationRun.agent_id, func.count()).group_by(EvaluationRun.agent_id)
-        )
-    }
-    active_profile_owners = {
-        (model_id, harness, reasoning_effort): agent_id
-        for agent_id, model_id, harness, reasoning_effort in session.execute(
-            select(Agent.id, Agent.model_id, Agent.harness, Agent.reasoning_effort).where(
-                Agent.status == "active"
-            )
-        )
-    }
-    return portfolio_usage, run_usage, active_profile_owners
+def _agent_usage(session: Session) -> tuple[dict[int, int], dict[int, int]]:
+    return (
+        dict(session.execute(select(Portfolio.agent_id, func.count()).group_by(Portfolio.agent_id)).all()),
+        dict(
+            session.execute(
+                select(EvaluationRun.agent_id, func.count()).group_by(EvaluationRun.agent_id)
+            ).all()
+        ),
+    )
 
 
-def _admin_agent_out(
-    agent: Agent,
-    portfolio_usage: dict[int, dict[str, int]],
-    run_usage: dict[int, int],
-    active_profile_owners: dict[tuple[int, str | None, str | None], int],
-) -> dict:
-    usage = portfolio_usage.get(agent.id, {"active": 0, "archived": 0})
-    active_count = usage["active"]
-    archived_count = usage["archived"]
+def _admin_agent_out(agent: Agent, portfolio_usage: dict[int, int], run_usage: dict[int, int]) -> dict:
+    portfolio_count = portfolio_usage.get(agent.id, 0)
     run_count = run_usage.get(agent.id, 0)
-    total_count = active_count + archived_count
-    active_profile_owner = active_profile_owners.get((agent.model_id, agent.harness, agent.reasoning_effort))
-    delete_references = []
-    if active_count:
-        delete_references.append(f"{active_count} active portfolio(s)")
-    if archived_count:
-        delete_references.append(f"{archived_count} archived portfolio(s)")
-    if run_count:
-        delete_references.append(f"{run_count} evaluation run(s)")
     return {
-        **agent_out(agent, portfolio_count=total_count),
-        "active_portfolio_count": active_count,
-        "archived_portfolio_count": archived_count,
+        **agent_out(agent, portfolio_count=portfolio_count),
         "evaluation_run_count": run_count,
-        "can_archive": agent.status == "active" and active_count == 0,
-        "archive_blocker": (
-            f"{active_count} active portfolio(s) must be archived or reassigned first."
-            if agent.status == "active" and active_count
-            else None
-        ),
-        "can_restore": agent.status == "archived" and active_profile_owner is None,
-        "restore_blocker": (
-            "An active agent already uses this execution profile. Archive it before restoring this agent."
-            if agent.status == "archived" and active_profile_owner is not None
-            else None
-        ),
-        "can_delete": not delete_references,
+        "can_delete": not (portfolio_count or run_count),
         "delete_blocker": (
-            f"Cannot permanently delete: {', '.join(delete_references)} preserve history."
-            if delete_references
+            f"{portfolio_count} portfolio(s) and {run_count} evaluation run(s) preserve history."
+            if portfolio_count or run_count
             else None
         ),
     }
 
 
-def list_agents(session: Session, *, status: str | None = None) -> dict:
-    if status not in {None, "active", "archived", "all"}:
-        raise AdminOpError(422, "Agent status must be active, archived, or all")
-    query = (
+def list_agents(session: Session) -> dict:
+    agents = session.scalars(
         select(Agent)
         .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
-        .order_by(Agent.status, Agent.slug)
-    )
-    if status not in {None, "all"}:
-        query = query.where(Agent.status == status)
-    agents = session.scalars(query).all()
-    portfolio_usage, run_usage, active_profile_owners = _agent_usage(session)
-    return {
-        "agents": [
-            _admin_agent_out(agent, portfolio_usage, run_usage, active_profile_owners) for agent in agents
-        ]
-    }
-
-
-def archive_agent(session: Session, agent_id: int) -> dict:
-    agent = session.scalars(
-        select(Agent)
-        .where(Agent.id == agent_id)
-        .options(selectinload(Agent.model).selectinload(ModelDefinition.capabilities))
-        .with_for_update()
-    ).first()
-    if agent is None:
-        raise AdminOpError(404, "Agent not found")
-    active_count = int(
-        session.scalar(
-            select(func.count())
-            .select_from(Portfolio)
-            .where(
-                Portfolio.agent_id == agent.id,
-                Portfolio.status == "active",
-            )
-        )
-        or 0
-    )
-    if active_count:
-        raise AdminOpError(
-            409,
-            f"{active_count} active portfolio(s) must be archived or reassigned first.",
-        )
-    if agent.status == "active":
-        agent.status = "archived"
-        agent.archived_at = datetime.now(UTC)
-        session.commit()
-    portfolio_usage, run_usage, active_profile_owners = _agent_usage(session)
-    return _admin_agent_out(agent, portfolio_usage, run_usage, active_profile_owners)
-
-
-def unarchive_agent(session: Session, agent_id: int) -> dict:
-    agent = load_agent(session, agent_id, lock=True)
-    if agent is None:
-        raise AdminOpError(404, "Agent not found")
-    if agent.status == "archived":
-        _lock_agent_profile_namespace(session, agent.model_id)
-        if _profile_exists(
-            session,
-            model_id=agent.model_id,
-            harness=agent.harness,
-            reasoning_effort=agent.reasoning_effort,
-            exclude_agent_id=agent.id,
-        ):
-            raise AdminOpError(
-                409,
-                "An active agent with this execution profile already exists. "
-                "Archive it before restoring this agent.",
-            )
-        agent.status = "active"
-        agent.archived_at = None
-        session.commit()
-    portfolio_usage, run_usage, active_profile_owners = _agent_usage(session)
-    return _admin_agent_out(agent, portfolio_usage, run_usage, active_profile_owners)
+        .order_by(Agent.slug)
+    ).all()
+    portfolio_usage, run_usage = _agent_usage(session)
+    return {"agents": [_admin_agent_out(agent, portfolio_usage, run_usage) for agent in agents]}
 
 
 def delete_agent(session: Session, agent_id: int) -> dict:
@@ -554,7 +410,6 @@ def prompt_out(prompt: Prompt, settings: dict) -> dict:
     return {
         "id": prompt.id,
         "slug": prompt.slug,
-        "context_scope": prompt.context_scope,
         "name": prompt.name,
         "mode": prompt.mode,
         "direction": prompt.direction,
@@ -591,6 +446,7 @@ def _admin_prompt_out(
     version_count: int,
     portfolio_count: int,
     settings: dict,
+    evaluation_run_count: int = 0,
 ) -> dict:
     current = prompt.current_version
     if current is None:
@@ -598,14 +454,16 @@ def _admin_prompt_out(
     return {
         "id": prompt.id,
         "slug": prompt.slug,
-        "context_scope": prompt.context_scope,
-        "status": prompt.status,
-        "archived_at": prompt.archived_at.isoformat() if prompt.archived_at is not None else None,
         "created_at": prompt.created_at.isoformat(),
         "updated_at": prompt.updated_at.isoformat(),
         "current_version": current.version,
         "version_count": version_count,
         "portfolio_count": portfolio_count,
+        "evaluation_run_count": evaluation_run_count,
+        "can_delete": not (portfolio_count or evaluation_run_count),
+        "delete_blocker": "This prompt is used by a portfolio or evaluation run."
+        if portfolio_count or evaluation_run_count
+        else None,
         "name": current.name,
         "mode": current.mode,
         "direction": current.direction,
@@ -630,50 +488,39 @@ def _prompt_counts(session: Session, prompt_id: int) -> tuple[int, int]:
 
 def _admin_prompt_with_counts(session: Session, prompt: Prompt) -> dict:
     version_count, portfolio_count = _prompt_counts(session, prompt.id)
+    run_count = (
+        session.scalar(
+            select(func.count())
+            .select_from(EvaluationRun)
+            .join(PromptVersion, EvaluationRun.prompt_version_id == PromptVersion.id)
+            .where(PromptVersion.prompt_id == prompt.id)
+        )
+        or 0
+    )
     return _admin_prompt_out(
         prompt,
         version_count=version_count,
         portfolio_count=portfolio_count,
+        evaluation_run_count=run_count,
         settings=get_app_settings(session),
     )
 
 
-def list_prompts(session: Session, *, status: str | None = None) -> dict:
-    if status is not None and status not in {"all", "active", "archived"}:
-        raise AdminOpError(422, "Prompt status must be 'all', 'active', or 'archived'.")
-    query = select(Prompt).order_by(Prompt.slug)
-    if status in {"active", "archived"}:
-        query = query.where(Prompt.status == status)
-    prompts = session.scalars(query).all()
-    prompt_ids = [prompt.id for prompt in prompts]
-    if not prompt_ids:
-        return {"prompts": []}
-    version_counts = dict(
-        session.execute(
-            select(PromptVersion.prompt_id, func.count())
-            .where(PromptVersion.prompt_id.in_(prompt_ids))
-            .group_by(PromptVersion.prompt_id)
-        ).all()
-    )
-    portfolio_counts = dict(
-        session.execute(
-            select(Portfolio.prompt_id, func.count())
-            .where(Portfolio.prompt_id.in_(prompt_ids))
-            .group_by(Portfolio.prompt_id)
-        ).all()
-    )
-    settings = get_app_settings(session)
-    return {
-        "prompts": [
-            _admin_prompt_out(
-                prompt,
-                version_count=version_counts.get(prompt.id, 0),
-                portfolio_count=portfolio_counts.get(prompt.id, 0),
-                settings=settings,
-            )
-            for prompt in prompts
-        ]
-    }
+def list_prompts(session: Session) -> dict:
+    prompts = session.scalars(select(Prompt).order_by(Prompt.slug)).all()
+    return {"prompts": [_admin_prompt_with_counts(session, prompt) for prompt in prompts]}
+
+
+def delete_prompt(session: Session, prompt_id: int) -> dict:
+    prompt = _locked_prompt(session, prompt_id)
+    if not _admin_prompt_with_counts(session, prompt)["can_delete"]:
+        raise AdminOpError(409, "This prompt is still referenced by a portfolio or evaluation run.")
+    prompt.current_version = None
+    prompt.current_version_id = None
+    session.flush()
+    session.delete(prompt)
+    session.commit()
+    return {"ok": True}
 
 
 def list_prompt_versions(session: Session, prompt_id: int) -> dict:
@@ -699,9 +546,9 @@ def _locked_prompt(session: Session, prompt_id: int) -> Prompt:
     return prompt
 
 
-def _active_prompt_for_portfolio(session: Session, prompt_id: int) -> Prompt:
+def _prompt_for_portfolio(session: Session, prompt_id: int) -> Prompt:
     prompt = session.scalars(select(Prompt).where(Prompt.id == prompt_id).with_for_update(of=Prompt)).first()
-    if prompt is None or prompt.status != "active":
+    if prompt is None:
         raise AdminOpError(422, "Prompt not found")
     return prompt
 
@@ -766,7 +613,7 @@ def _ensure_prompt_mode_preserves_references(
         detail = ", ".join(f"{count} {mode}" for mode, count in references)
         raise AdminOpError(
             409,
-            f"Prompt mode cannot remove text used by existing active or archived portfolios ({detail}).",
+            f"Prompt mode cannot remove text used by existing portfolios ({detail}).",
         )
 
 
@@ -794,8 +641,7 @@ def _ensure_prompt_direction_preserves_references(
         detail = ", ".join(f"{count} {direction}" for direction, count in references)
         raise AdminOpError(
             409,
-            "Prompt direction cannot remove support used by existing active or archived "
-            f"portfolios ({detail}).",
+            f"Prompt direction cannot remove support used by existing portfolios ({detail}).",
         )
 
 
@@ -863,13 +709,11 @@ def create_prompt(
     managed_short_text: str | None,
     rebuilt_long_text: str | None,
     rebuilt_short_text: str | None,
-    context_scope: str = "portfolio",
     slug: str | None = None,
     notes: str = "",
 ) -> dict:
     if not name.strip():
         raise AdminOpError(422, "Prompt name is required")
-    _validate_prompt_context_scope(context_scope)
     _validate_prompt_direction(direction)
     _validate_prompt_text_contract(
         mode,
@@ -881,9 +725,6 @@ def create_prompt(
     )
     prompt = Prompt(
         slug=unique_slug(session, Prompt, slug or name),
-        context_scope=context_scope,
-        status="active",
-        archived_at=None,
         current_version_id=None,
     )
     session.add(prompt)
@@ -927,8 +768,6 @@ def update_prompt(
     notes: str | None = None,
 ) -> dict:
     prompt = _locked_prompt(session, prompt_id)
-    if prompt.status != "active":
-        raise AdminOpError(409, "Archived prompts cannot be updated.")
     _ensure_prompt_has_no_running_evaluation(session, prompt_id)
     current = prompt.current_version
     if current is None:
@@ -983,14 +822,8 @@ def update_prompt(
         or next_notes != current.notes
     )
     if not changed:
-        version_count, portfolio_count = _prompt_counts(session, prompt.id)
         session.commit()
-        return _admin_prompt_out(
-            prompt,
-            version_count=version_count,
-            portfolio_count=portfolio_count,
-            settings=get_app_settings(session),
-        )
+        return _admin_prompt_with_counts(session, prompt)
 
     _append_prompt_version(
         session,
@@ -1004,34 +837,6 @@ def update_prompt(
         rebuilt_short_text=next_texts["rebuilt_short_text"],
         notes=next_notes,
     )
-    session.commit()
-    return _admin_prompt_with_counts(session, prompt)
-
-
-def archive_prompt(session: Session, prompt_id: int) -> dict:
-    prompt = _locked_prompt(session, prompt_id)
-    active_count = session.scalar(
-        select(func.count())
-        .select_from(Portfolio)
-        .where(
-            Portfolio.prompt_id == prompt_id,
-            Portfolio.status == "active",
-        )
-    )
-    if active_count:
-        raise AdminOpError(409, "Archive every portfolio using this prompt before archiving the prompt.")
-    if prompt.status == "active":
-        prompt.status = "archived"
-        prompt.archived_at = datetime.now(UTC)
-    session.commit()
-    return _admin_prompt_with_counts(session, prompt)
-
-
-def unarchive_prompt(session: Session, prompt_id: int) -> dict:
-    prompt = _locked_prompt(session, prompt_id)
-    if prompt.status == "archived":
-        prompt.status = "active"
-        prompt.archived_at = None
     session.commit()
     return _admin_prompt_with_counts(session, prompt)
 
@@ -1082,19 +887,116 @@ def restore_prompt_version(
 # --- Portfolios -------------------------------------------------------------
 
 
-def list_portfolios(session: Session) -> dict:
-    """Complete admin inventory, independent of market data and ranking eligibility."""
-    portfolios = session.scalars(
+def version_out(version: ArenaVersion) -> dict:
+    return {
+        "id": version.id,
+        "name": version.name,
+        "evaluation_enabled": version.evaluation_enabled,
+        "created_at": version.created_at.isoformat(),
+    }
+
+
+def list_versions(session: Session) -> dict:
+    return {
+        "versions": [
+            version_out(version)
+            for version in session.scalars(select(ArenaVersion).order_by(ArenaVersion.id.desc()))
+        ]
+    }
+
+
+def _version(session: Session, version_id: int, *, lock: bool = False) -> ArenaVersion:
+    query = select(ArenaVersion).where(ArenaVersion.id == version_id)
+    if lock:
+        query = query.with_for_update()
+    version = session.scalar(query)
+    if version is None:
+        raise AdminOpError(404, "Arena version not found")
+    return version
+
+
+def create_version(session: Session, *, name: str) -> dict:
+    if not name.strip():
+        raise AdminOpError(422, "Version name is required")
+    version = ArenaVersion(name=name.strip(), evaluation_enabled=False)
+    session.add(version)
+    session.commit()
+    return version_out(version)
+
+
+def update_version(
+    session: Session, version_id: int, *, name: str | None = None, evaluation_enabled: bool | None = None
+) -> dict:
+    # The same lock serializes queue creation, claims, and version pausing.
+    session.scalar(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update())
+    version = _version(session, version_id, lock=True)
+    if name is not None:
+        if not name.strip():
+            raise AdminOpError(422, "Version name is required")
+        version.name = name.strip()
+    if evaluation_enabled is not None:
+        version.evaluation_enabled = evaluation_enabled
+        if not evaluation_enabled:
+            now = datetime.now(UTC)
+            runs = session.scalars(
+                select(EvaluationRun)
+                .where(
+                    EvaluationRun.portfolio_id.in_(
+                        select(Portfolio.id).where(Portfolio.version_id == version_id)
+                    ),
+                    EvaluationRun.status == "queued",
+                )
+                .with_for_update()
+            ).all()
+            for run in runs:
+                run.status = "cancelled"
+                run.finished_at = now
+                run.error = "Cancelled because this Arena version was paused."
+    session.commit()
+    return version_out(version)
+
+
+def delete_version(session: Session, version_id: int) -> dict:
+    version = _version(session, version_id, lock=True)
+    if session.scalar(select(Portfolio.id).where(Portfolio.version_id == version_id).limit(1)) is not None:
+        raise AdminOpError(409, "Delete or move every portfolio before deleting this version.")
+    session.delete(version)
+    session.commit()
+    return {"ok": True}
+
+
+def _portfolio_identity_out(portfolio: Portfolio) -> dict:
+    return {
+        "id": portfolio.id,
+        "slug": portfolio.slug,
+        "name": portfolio.name,
+        "version_id": portfolio.version_id,
+        "version": version_out(portfolio.version),
+        "agent_id": portfolio.agent_id,
+        "prompt_id": portfolio.prompt_id,
+        "prompt_mode": portfolio.prompt_mode,
+        "direction": portfolio.direction,
+        "execution_boundary": portfolio.execution_boundary,
+        "execution_locked": portfolio.execution_locked,
+    }
+
+
+def list_portfolios(session: Session, *, version_id: int | None = None) -> dict:
+    query = (
         select(Portfolio)
         .options(
             selectinload(Portfolio.agent)
             .selectinload(Agent.model)
             .selectinload(ModelDefinition.capabilities),
             selectinload(Portfolio.prompt),
-            selectinload(Portfolio.meta_set),
+            selectinload(Portfolio.version),
         )
         .order_by(func.lower(Portfolio.name), Portfolio.id)
-    ).all()
+    )
+    if version_id is not None:
+        _version(session, version_id)
+        query = query.where(Portfolio.version_id == version_id)
+    portfolios = session.scalars(query).all()
     counts = {
         model: dict(
             session.execute(select(model.portfolio_id, func.count()).group_by(model.portfolio_id)).all()
@@ -1108,63 +1010,38 @@ def list_portfolios(session: Session) -> dict:
             .group_by(EvaluationRun.portfolio_id)
         ).all()
     )
-    running = set(
-        session.scalars(
-            select(EvaluationRun.portfolio_id).where(
-                EvaluationRun.status.in_({"running", "cancel_requested"})
-            )
-        ).all()
-    )
     rows = []
     for portfolio in portfolios:
         allocation_count = counts[Allocation].get(portfolio.id, 0)
         signal_count = counts[Signal].get(portfolio.id, 0)
-        structure_blocker = None
-        if portfolio.meta_set_id is not None:
-            structure_blocker = "Track and direction belong to the Meta family."
-        elif active_runs.get(portfolio.id):
-            structure_blocker = "Wait for active evaluations to stop before changing track or direction."
-        elif allocation_count or signal_count or portfolio.founding_v2:
-            structure_blocker = "Reset portfolio history before changing track or direction."
-        restore_blockers = []
-        if portfolio.agent.status != "active":
-            restore_blockers.append("Restore or replace the archived agent first.")
-        if portfolio.prompt.status != "active":
-            restore_blockers.append("Restore or replace the archived prompt first.")
+        active_count = active_runs.get(portfolio.id, 0)
+        structure_blocker = (
+            "Wait for active evaluations to stop."
+            if active_count
+            else "Reset portfolio history before changing track or direction."
+            if allocation_count or signal_count
+            else None
+        )
         rows.append(
             {
-                "id": portfolio.id,
-                "slug": portfolio.slug,
-                "name": portfolio.name,
-                "status": portfolio.status,
-                "prompt_mode": portfolio.prompt_mode,
-                "direction": portfolio.direction,
-                "cost_bps": portfolio.cost_bps,
+                **_portfolio_identity_out(portfolio),
                 "agent": agent_out(portfolio.agent),
                 "prompt": {
                     "id": portfolio.prompt.id,
                     "slug": portfolio.prompt.slug,
                     "name": portfolio.prompt.name,
-                    "context_scope": portfolio.prompt.context_scope,
-                    "status": portfolio.prompt.status,
                 },
-                "meta_set_id": portfolio.meta_set_id,
                 "allocation_count": allocation_count,
                 "signal_count": signal_count,
                 "evaluation_run_count": counts[EvaluationRun].get(portfolio.id, 0),
-                "active_run_count": active_runs.get(portfolio.id, 0),
+                "active_run_count": active_count,
                 "structure_editable": structure_blocker is None,
                 "structure_blocker": structure_blocker,
-                "prompt_editable": portfolio.meta_set_id is None and portfolio.id not in running,
-                "restore_blocker": " ".join(restore_blockers) or None,
+                "prompt_editable": not active_count,
+                "timing_editable": not portfolio.execution_locked and not active_count,
             }
         )
-    meta_sets = session.scalars(
-        select(MetaPortfolioSet)
-        .options(selectinload(MetaPortfolioSet.portfolios).selectinload(Portfolio.evaluator_config))
-        .order_by(MetaPortfolioSet.family_name, MetaPortfolioSet.id)
-    ).all()
-    return {"portfolios": rows, "meta_sets": [_meta_portfolio_set_out(meta_set) for meta_set in meta_sets]}
+    return {"portfolios": rows}
 
 
 def writable_portfolio(session: Session, portfolio_id: int, *, lock: bool = False) -> Portfolio:
@@ -1188,11 +1065,6 @@ def _lock_portfolio_lifecycle(session: Session, portfolio_id: int) -> Portfolio:
         .with_for_update()
     ).all()
     return writable_portfolio(session, portfolio_id, lock=True)
-
-
-def _default_cost_bps(session: Session) -> int:
-    setting = session.get(Setting, DEFAULT_COST_BPS_KEY)
-    return int(setting.value) if setting else DEFAULT_COST_BPS_FALLBACK
 
 
 def _disable_portfolio_automation(
@@ -1228,18 +1100,18 @@ def create_portfolio(
     prompt_id: int,
     prompt_mode: str,
     direction: str,
+    version_id: int,
+    execution_boundary: str = "close",
     slug: str | None = None,
-    cost_bps: int | None = None,
 ) -> dict:
+    session.scalar(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update())
     _validate_prompt_mode(prompt_mode)
     _validate_direction(direction)
-    agent = _active_agent_for_assignment(session, agent_id)
-    prompt = _active_prompt_for_portfolio(session, prompt_id)
-    if prompt.context_scope != "portfolio":
-        raise AdminOpError(
-            422,
-            "Arena-scoped prompts can only be used through meta portfolio set creation.",
-        )
+    if execution_boundary not in {"open", "close"}:
+        raise AdminOpError(422, "Execution boundary must be open or close")
+    version = _version(session, version_id, lock=True)
+    agent = _agent_for_assignment(session, agent_id)
+    prompt = _prompt_for_portfolio(session, prompt_id)
     _ensure_prompt_supports_portfolio_mode(prompt, prompt_mode)
     _ensure_prompt_supports_portfolio_direction(prompt, direction)
     clean_name = name.strip()
@@ -1248,7 +1120,6 @@ def create_portfolio(
     requested_slug = slugify(slug or clean_name)
     if clean_name.casefold() == "spy" or requested_slug == "spy":
         raise AdminOpError(409, "SPY is reserved for the synthetic benchmark reference.")
-
     portfolio = Portfolio(
         slug=unique_slug(session, Portfolio, requested_slug),
         name=clean_name,
@@ -1256,170 +1127,13 @@ def create_portfolio(
         prompt_id=prompt.id,
         prompt_mode=prompt_mode,
         direction=direction,
-        cost_bps=_default_cost_bps(session) if cost_bps is None else cost_bps,
+        version=version,
+        execution_boundary=execution_boundary,
+        execution_locked=False,
     )
     session.add(portfolio)
     session.commit()
-    return {
-        "id": portfolio.id,
-        "slug": portfolio.slug,
-        "name": portfolio.name,
-        "prompt_mode": portfolio.prompt_mode,
-        "direction": portfolio.direction,
-        "cost_bps": portfolio.cost_bps,
-    }
-
-
-def _meta_portfolio_set_out(meta_set: MetaPortfolioSet) -> dict:
-    return {
-        "id": meta_set.id,
-        "slug": meta_set.slug,
-        "family_name": meta_set.family_name,
-        "variant_label": meta_set.variant_label,
-        "agent_id": meta_set.agent_id,
-        "prompt_id": meta_set.prompt_id,
-        "created_at": meta_set.created_at.isoformat(),
-        "portfolios": [
-            {
-                "id": portfolio.id,
-                "slug": portfolio.slug,
-                "name": portfolio.name,
-                "prompt_mode": portfolio.prompt_mode,
-                "direction": portfolio.direction,
-                "cost_bps": portfolio.cost_bps,
-                "evaluator": {
-                    "enabled": portfolio.evaluator_config.enabled,
-                    "weekdays": portfolio.evaluator_config.weekdays,
-                },
-            }
-            for portfolio in meta_set.portfolios
-        ],
-    }
-
-
-def _automation_agent(session: Session, agent_id: int) -> Agent:
-    agent = _active_agent_for_assignment(session, agent_id)
-    if not supports_automation(agent.harness):
-        raise AdminOpError(422, "The selected agent does not support integrated automation.")
-    return agent
-
-
-def create_meta_portfolio_set(
-    session: Session,
-    *,
-    family_name: str,
-    variant_label: str | None = None,
-    agent_id: int,
-    prompt_id: int,
-) -> dict:
-    """Atomically create and automate all four synthesis cells for one family."""
-    clean_family_name = family_name.strip()
-    if not clean_family_name:
-        raise AdminOpError(422, "Meta portfolio family name is required.")
-    if len(clean_family_name) > 180:
-        raise AdminOpError(422, "Meta portfolio family name must be at most 180 characters.")
-    clean_variant_label = variant_label.strip() if variant_label is not None else None
-    if variant_label is not None and not clean_variant_label:
-        raise AdminOpError(422, "Meta portfolio variant label cannot be blank.")
-    if clean_variant_label is not None and len(clean_variant_label) > 80:
-        raise AdminOpError(422, "Meta portfolio variant label must be at most 80 characters.")
-
-    # Serialize identity checks and creation so two concurrent requests cannot
-    # each pass the friendly conflict checks before inserting.
-    session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
-
-    agent = _automation_agent(session, agent_id)
-
-    prompt = _active_prompt_for_portfolio(session, prompt_id)
-    if prompt.context_scope != "arena":
-        raise AdminOpError(422, "Meta portfolio sets require an arena-scoped prompt.")
-    if prompt.mode != "both" or prompt.direction != "both":
-        raise AdminOpError(
-            422,
-            "Meta portfolio sets require a prompt supporting managed and rebuilt, long and short.",
-        )
-
-    identity_name = f"{clean_family_name} {clean_variant_label}" if clean_variant_label else clean_family_name
-    family_slug = slugify(identity_name)
-    if session.scalar(select(MetaPortfolioSet.id).where(MetaPortfolioSet.slug == family_slug)):
-        raise AdminOpError(409, "A meta portfolio set with this family and variant already exists.")
-
-    members = [
-        {
-            "name": " ".join(value for value in (clean_family_name, suffix, clean_variant_label) if value),
-            "prompt_mode": prompt_mode,
-            "direction": direction,
-        }
-        for suffix, prompt_mode, direction in META_PORTFOLIO_CELLS
-    ]
-    if any(len(member["name"]) > 200 for member in members):
-        raise AdminOpError(422, "Meta portfolio member names must be at most 200 characters.")
-    for member in members:
-        member["slug"] = slugify(member["name"])
-    member_slugs = [member["slug"] for member in members]
-    member_names = [member["name"].casefold() for member in members]
-    conflicting_portfolio = session.scalar(
-        select(Portfolio.id).where(
-            (Portfolio.slug.in_(member_slugs)) | (func.lower(Portfolio.name).in_(member_names))
-        )
-    )
-    if conflicting_portfolio is not None:
-        raise AdminOpError(409, "One or more meta portfolio member identities already exist.")
-
-    meta_set = MetaPortfolioSet(
-        slug=family_slug,
-        family_name=clean_family_name,
-        variant_label=clean_variant_label,
-        agent_id=agent.id,
-        prompt_id=prompt.id,
-    )
-    session.add(meta_set)
-    session.flush()
-    for member in members:
-        portfolio = Portfolio(
-            slug=member["slug"],
-            name=member["name"],
-            agent_id=agent.id,
-            prompt_id=prompt.id,
-            meta_set_id=meta_set.id,
-            prompt_mode=member["prompt_mode"],
-            direction=member["direction"],
-            cost_bps=META_PORTFOLIO_COST_BPS,
-        )
-        portfolio.evaluator_config = PortfolioEvaluatorConfig(
-            enabled=True,
-            weekdays=[0, 1, 2, 3, 4],
-        )
-        session.add(portfolio)
-
-    session.commit()
-    return _meta_portfolio_set_out(meta_set)
-
-
-def update_meta_portfolio_set(
-    session: Session,
-    meta_set_id: int,
-    *,
-    agent_id: int,
-) -> dict:
-    """Atomically reassign every cell in a synthesis family for future runs."""
-    session.scalars(select(EvaluatorSettings).where(EvaluatorSettings.id == 1).with_for_update()).one()
-    meta_set = session.scalars(
-        select(MetaPortfolioSet)
-        .where(MetaPortfolioSet.id == meta_set_id)
-        .options(
-            selectinload(MetaPortfolioSet.portfolios).selectinload(Portfolio.evaluator_config),
-        )
-        .with_for_update()
-    ).first()
-    if meta_set is None:
-        raise AdminOpError(404, "Meta portfolio set not found")
-    agent = _automation_agent(session, agent_id)
-    meta_set.agent = agent
-    for portfolio in meta_set.portfolios:
-        portfolio.agent = agent
-    session.commit()
-    return _meta_portfolio_set_out(meta_set)
+    return _portfolio_identity_out(portfolio)
 
 
 def update_portfolio(
@@ -1427,182 +1141,83 @@ def update_portfolio(
     portfolio_id: int,
     *,
     name: str | None = None,
-    status: str | None = None,
     agent_id: int | None = None,
     prompt_id: int | None = None,
     prompt_mode: str | None = None,
     direction: str | None = None,
-    cost_bps: int | None = None,
+    version_id: int | None = None,
+    execution_boundary: str | None = None,
 ) -> dict:
     portfolio = _lock_portfolio_lifecycle(session, portfolio_id)
-    if prompt_mode is not None:
-        _validate_prompt_mode(prompt_mode)
-    if direction is not None:
-        _validate_direction(direction)
-    final_prompt_mode = prompt_mode if prompt_mode is not None else portfolio.prompt_mode
-    final_direction = direction if direction is not None else portfolio.direction
-    if prompt_id is not None and prompt_id != portfolio.prompt_id:
-        final_prompt = _active_prompt_for_portfolio(session, prompt_id)
-    else:
-        final_prompt = portfolio.prompt
-    if portfolio.meta_set_id is None:
-        if final_prompt.context_scope != "portfolio":
-            raise AdminOpError(
-                422,
-                "Arena-scoped prompts can only be used through meta portfolio set creation.",
-            )
-    else:
-        meta_set = session.get(MetaPortfolioSet, portfolio.meta_set_id)
-        if meta_set is None:
-            raise RuntimeError(f"Portfolio {portfolio.id} references a missing meta portfolio set")
-        if (
-            final_prompt.id != meta_set.prompt_id
-            or final_prompt_mode != portfolio.prompt_mode
-            or final_direction != portfolio.direction
-            or (agent_id is not None and agent_id != meta_set.agent_id)
-        ):
-            raise AdminOpError(
-                409,
-                "A meta portfolio's prompt, mode, direction, and agent are managed by its set. "
-                f"Use update_meta_portfolio_set(meta_set_id={meta_set.id}, agent_id=...) "
-                "to reassign the family's agent.",
-            )
-    _ensure_prompt_supports_portfolio_mode(final_prompt, final_prompt_mode)
-    _ensure_prompt_supports_portfolio_direction(final_prompt, final_direction)
-    changing_prompt = prompt_id is not None and prompt_id != portfolio.prompt_id
-    if name is not None:
-        clean_name = name.strip()
-        if not clean_name:
-            raise AdminOpError(422, "Portfolio name is required")
-        if clean_name.casefold() == "spy":
-            raise AdminOpError(409, "SPY is reserved for the synthetic benchmark reference.")
-        portfolio.name = clean_name
-    if status is not None:
-        if status not in {"active", "archived"}:
-            raise AdminOpError(422, "Portfolio status must be active or archived")
-        if status == "active":
-            selected_agent_id = agent_id if agent_id is not None else portfolio.agent_id
-            _active_agent_for_assignment(
-                session,
-                selected_agent_id,
-                inactive_status_code=409,
-                inactive_message="Choose an active agent before unarchiving this portfolio",
-            )
-            if final_prompt.status != "active":
-                raise AdminOpError(
-                    409, "Restore or replace the archived prompt before unarchiving this portfolio"
-                )
-        else:
-            _disable_portfolio_automation(
-                session, [portfolio.id], "Cancelled because the portfolio was archived."
-            )
-            for run in session.scalars(
-                select(EvaluationRun)
-                .where(
-                    EvaluationRun.portfolio_id == portfolio.id,
-                    EvaluationRun.status == "running",
-                )
-                .with_for_update()
-            ).all():
-                run.status = "cancel_requested"
-                run.error = "Cancellation requested because the portfolio was archived."
-        portfolio.status = status
-    if agent_id is not None:
-        agent = (
-            session.get(Agent, agent_id)
-            if agent_id == portfolio.agent_id and status != "active"
-            else _active_agent_for_assignment(session, agent_id)
-        )
-        if agent is None:
-            raise AdminOpError(422, "Agent not found")
-        portfolio.agent_id = agent_id
-        if not supports_automation(agent.harness):
-            _disable_portfolio_automation(
-                session,
-                [portfolio.id],
-                "Cancelled because the portfolio was reassigned to an Agent without integrated automation.",
-            )
-    if prompt_id is not None:
-        portfolio.prompt_id = prompt_id
-    changing_mode = prompt_mode is not None and prompt_mode != portfolio.prompt_mode
-    changing_direction = direction is not None and direction != portfolio.direction
-    if changing_prompt:
-        running_count = session.scalar(
+    mode = prompt_mode if prompt_mode is not None else portfolio.prompt_mode
+    direction = direction if direction is not None else portfolio.direction
+    _validate_prompt_mode(mode)
+    _validate_direction(direction)
+    active_count = (
+        session.scalar(
             select(func.count())
             .select_from(EvaluationRun)
             .where(
-                EvaluationRun.portfolio_id == portfolio.id,
-                EvaluationRun.status.in_({"running", "cancel_requested"}),
+                EvaluationRun.portfolio_id == portfolio_id,
+                EvaluationRun.status.in_({"queued", "running", "cancel_requested"}),
             )
         )
-        if running_count:
+        or 0
+    )
+    structural_change = mode != portfolio.prompt_mode or direction != portfolio.direction
+    assignment_change = (
+        (agent_id is not None and agent_id != portfolio.agent_id)
+        or (prompt_id is not None and prompt_id != portfolio.prompt_id)
+        or (version_id is not None and version_id != portfolio.version_id)
+        or (execution_boundary is not None and execution_boundary != portfolio.execution_boundary)
+    )
+    if active_count and (structural_change or assignment_change):
+        raise AdminOpError(
+            409, "Wait for active evaluations to stop before changing portfolio configuration."
+        )
+    if structural_change and any(
+        session.scalar(select(model.id).where(model.portfolio_id == portfolio_id).limit(1))
+        for model in (Allocation, Signal)
+    ):
+        raise AdminOpError(409, "Reset the portfolio's history before changing its prompt mode or direction.")
+    if execution_boundary is not None and execution_boundary != portfolio.execution_boundary:
+        if execution_boundary not in {"open", "close"}:
+            raise AdminOpError(422, "Execution boundary must be open or close")
+        if portfolio.execution_locked:
             raise AdminOpError(
-                409,
-                "Wait for the active evaluation to finish before changing its prompt.",
+                409, "Create a new portfolio to change execution timing after its first decision."
             )
-    if changing_mode or changing_direction:
-        allocation_count = int(
-            session.scalar(
-                select(func.count()).select_from(Allocation).where(Allocation.portfolio_id == portfolio.id)
+        portfolio.execution_boundary = execution_boundary
+    prompt = _prompt_for_portfolio(session, prompt_id) if prompt_id is not None else portfolio.prompt
+    _ensure_prompt_supports_portfolio_mode(prompt, mode)
+    _ensure_prompt_supports_portfolio_direction(prompt, direction)
+    if name is not None:
+        if not name.strip():
+            raise AdminOpError(422, "Portfolio name is required")
+        if name.strip().casefold() == "spy":
+            raise AdminOpError(409, "SPY is reserved for the synthetic benchmark reference.")
+        portfolio.name = name.strip()
+    if agent_id is not None:
+        agent = _agent_for_assignment(session, agent_id)
+        portfolio.agent_id = agent.id
+        if not supports_automation(agent.harness):
+            _disable_portfolio_automation(
+                session, [portfolio.id], "Agent does not support integrated automation."
             )
-            or 0
-        )
-        signal_count = int(
-            session.scalar(
-                select(func.count()).select_from(Signal).where(Signal.portfolio_id == portfolio.id)
-            )
-            or 0
-        )
-        active_run_count = int(
-            session.scalar(
-                select(func.count())
-                .select_from(EvaluationRun)
-                .where(
-                    EvaluationRun.portfolio_id == portfolio.id,
-                    EvaluationRun.status.in_({"queued", "running", "cancel_requested"}),
-                )
-            )
-            or 0
-        )
-        if allocation_count or signal_count or portfolio.founding_v2 or active_run_count:
-            raise AdminOpError(
-                409,
-                "Reset the portfolio's history before changing its prompt mode or direction.",
-            )
-    if changing_mode:
-        portfolio.prompt_mode = prompt_mode
-        portfolio.founding_v2 = False
-        if prompt_mode == "rebuilt" and portfolio.evaluator_config is not None:
-            portfolio.evaluator_config.weekdays = [0, 1, 2, 3, 4]
-    if changing_direction:
-        portfolio.direction = direction
-        portfolio.founding_v2 = False
-    if cost_bps is not None:
-        portfolio.cost_bps = cost_bps
+    if version_id is not None:
+        portfolio.version = _version(session, version_id, lock=True)
+    portfolio.prompt = prompt
+    if portfolio.prompt_mode != mode and mode == "rebuilt" and portfolio.evaluator_config is not None:
+        portfolio.evaluator_config.weekdays = [0, 1, 2, 3, 4]
+    portfolio.prompt_mode = mode
+    portfolio.direction = direction
     session.commit()
-    return {
-        "id": portfolio.id,
-        "slug": portfolio.slug,
-        "name": portfolio.name,
-        "status": portfolio.status,
-        "agent_id": portfolio.agent_id,
-        "prompt_id": portfolio.prompt_id,
-        "prompt_mode": portfolio.prompt_mode,
-        "direction": portfolio.direction,
-        "cost_bps": portfolio.cost_bps,
-    }
+    return _portfolio_identity_out(portfolio)
 
 
 def delete_portfolio(session: Session, portfolio_id: int) -> dict:
     portfolio = _lock_portfolio_lifecycle(session, portfolio_id)
-    meta_set_id = portfolio.meta_set_id
     session.delete(portfolio)
-    session.flush()
-    if (
-        meta_set_id is not None
-        and session.scalar(select(Portfolio.id).where(Portfolio.meta_set_id == meta_set_id).limit(1)) is None
-    ):
-        session.execute(delete(MetaPortfolioSet).where(MetaPortfolioSet.id == meta_set_id))
     session.commit()
     return {"ok": True}
 
@@ -1653,7 +1268,6 @@ def reset_portfolio(session: Session, portfolio_id: int) -> dict:
             or 0
         )
         session.execute(delete(Signal).where(Signal.portfolio_id == portfolio.id))
-    portfolio.founding_v2 = False
     session.commit()
     return {
         "ok": True,
@@ -1679,13 +1293,13 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
         same_direction = [
             portfolio
             for portfolio in portfolios
-            if portfolio.prompt_mode == "rebuilt" and portfolio.direction == match.direction
+            if portfolio.prompt_mode == "rebuilt"
+            and portfolio.direction == match.direction
+            and portfolio.version_id == match.version_id
         ]
         arena = compute_rebuilt_arena(
             session,
             same_direction,
-            view="tuned",
-            include_policy_matrix=True,
         )
         analysis = arena.by_portfolio_id.get(match.id)
         if analysis is None:
@@ -1698,8 +1312,6 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
                 arena,
                 allocation_policy,
                 direction_instructions,
-                view="tuned",
-                horizon=None,
                 admin=True,
                 wrapper_prompt=wrapper_prompt,
             ),
@@ -1785,6 +1397,7 @@ def _new_allocation(
     entered_at: datetime,
     effective_date: date,
 ) -> Allocation:
+    portfolio.execution_locked = True
     allocation = Allocation(
         portfolio_id=portfolio.id,
         entered_at=entered_at,
@@ -1797,19 +1410,17 @@ def _new_allocation(
 
 def create_allocation(session: Session, portfolio_id: int, positions: list[dict], note: str = "") -> dict:
     """Enter a new allocation. Entry time is server-set; the effective date is the
-    first market close strictly after it (no backdating). Rejects a clash if an
+    first matching market boundary strictly after it (no backdating). Rejects a clash if an
     allocation already takes effect that date — edit that one instead."""
-    portfolio = writable_portfolio(session, portfolio_id)
+    portfolio = writable_portfolio(session, portfolio_id, lock=True)
     if portfolio.prompt_mode != "managed":
         raise AdminOpError(409, "Rebuilt portfolios accept daily signals, not allocations.")
-    if portfolio.status != "active":
-        raise AdminOpError(409, "Unarchive the portfolio before adding allocations")
     _ensure_managed_not_liquidated(session, portfolio)
 
     policy = allocation_policy_out(get_app_settings(session), "managed")
     normalized = _normalize_positions(policy, positions)
     now = datetime.now(UTC)
-    effective = effective_date_for(now)
+    effective = effective_date_for(now, portfolio.execution_boundary)
     clash = session.scalars(
         select(Allocation).where(
             Allocation.portfolio_id == portfolio.id,
@@ -1833,7 +1444,7 @@ def update_allocation(
     positions: list[dict] | None = None,
     note: str | None = None,
 ) -> dict:
-    """Positions are frozen once the effective close has passed; the note stays
+    """Positions are frozen once the effective boundary has passed; the note stays
     editable forever."""
     allocation = session.scalars(
         select(Allocation)
@@ -1844,10 +1455,10 @@ def update_allocation(
         raise AdminOpError(404, "Allocation not found")
 
     if positions is not None:
-        if is_locked(allocation.effective_date, datetime.now(UTC)):
+        if is_locked(allocation.effective_date, datetime.now(UTC), allocation.portfolio.execution_boundary):
             raise AdminOpError(
                 403,
-                "Positions are frozen: the effective close has passed. Enter a new rebalance instead.",
+                "Positions are frozen: the effective boundary has passed. Enter a new rebalance instead.",
             )
         _ensure_managed_not_liquidated(session, allocation.portfolio)
         policy = allocation_policy_out(get_app_settings(session), "managed")
@@ -1869,8 +1480,8 @@ def delete_allocation(session: Session, allocation_id: int) -> dict:
     ).first()
     if allocation is None:
         raise AdminOpError(404, "Allocation not found")
-    if is_locked(allocation.effective_date, datetime.now(UTC)):
-        raise AdminOpError(403, "This allocation is locked: its effective close has passed.")
+    if is_locked(allocation.effective_date, datetime.now(UTC), allocation.portfolio.execution_boundary):
+        raise AdminOpError(403, "This allocation is locked: its effective boundary has passed.")
     session.delete(allocation)
     session.commit()
     return {"ok": True}
@@ -1903,6 +1514,7 @@ def _new_signal(
 ) -> Signal:
     if provenance not in SIGNAL_PROVENANCE:
         raise AdminOpError(422, "Invalid signal provenance.")
+    portfolio.execution_locked = True
     signal = Signal(
         portfolio_id=portfolio.id,
         entered_at=entered_at,
@@ -1929,17 +1541,15 @@ def create_signal(
     provenance: str = "mcp",
     now: datetime | None = None,
 ) -> dict:
-    """Create one independent rebuilt signal for the next future close."""
-    portfolio = writable_portfolio(session, portfolio_id)
+    """Create one independent rebuilt signal for the next future matching boundary."""
+    portfolio = writable_portfolio(session, portfolio_id, lock=True)
     if portfolio.prompt_mode != "rebuilt":
         raise AdminOpError(409, "Managed portfolios accept allocations, not daily signals.")
-    if portfolio.status != "active":
-        raise AdminOpError(409, "Unarchive the portfolio before adding signals.")
     if provenance not in {"browser_admin", "mcp"}:
         raise AdminOpError(422, "Only browser_admin or mcp provenance is accepted here.")
 
     current_time = now or datetime.now(UTC)
-    effective = effective_date_for(current_time)
+    effective = effective_date_for(current_time, portfolio.execution_boundary)
     policy = allocation_policy_out(get_app_settings(session), "rebuilt")
     normalized = _normalize_positions(policy, positions)
     clash = session.scalars(
@@ -1984,8 +1594,8 @@ def update_signal(
     ).first()
     if signal is None:
         raise AdminOpError(404, "Signal not found.")
-    if is_locked(signal.effective_date, current_time):
-        raise AdminOpError(403, "This signal is immutable: its effective close has passed.")
+    if is_locked(signal.effective_date, current_time, signal.portfolio.execution_boundary):
+        raise AdminOpError(403, "This signal is immutable: its effective boundary has passed.")
     if positions is not None:
         policy = allocation_policy_out(get_app_settings(session), "rebuilt")
         normalized = _normalize_positions(policy, positions)
@@ -2008,8 +1618,8 @@ def delete_signal(
     signal = session.scalars(select(Signal).where(Signal.id == signal_id).with_for_update()).first()
     if signal is None:
         raise AdminOpError(404, "Signal not found.")
-    if is_locked(signal.effective_date, current_time):
-        raise AdminOpError(403, "This signal is immutable: its effective close has passed.")
+    if is_locked(signal.effective_date, current_time, signal.portfolio.execution_boundary):
+        raise AdminOpError(403, "This signal is immutable: its effective boundary has passed.")
     session.delete(signal)
     session.commit()
     return {"ok": True}
@@ -2029,7 +1639,6 @@ def _setting_float(session: Session, key: str, fallback: float) -> float:
 
 def get_app_settings(session: Session) -> dict:
     return {
-        "default_cost_bps": _default_cost_bps(session),
         "managed_allocation_policy": allocation_policy_from_limits(
             _setting_float(
                 session,
@@ -2089,7 +1698,6 @@ def wrapper_prompt_for_portfolio(session: Session, portfolio: Portfolio) -> str:
 def update_app_settings(
     session: Session,
     *,
-    default_cost_bps: int,
     managed_allocation_policy: dict,
     rebuilt_allocation_policy: dict,
     managed_wrapper_prompt: str,
@@ -2097,8 +1705,6 @@ def update_app_settings(
     long_direction_instructions: str,
     short_direction_instructions: str,
 ) -> dict:
-    if default_cost_bps < 0:
-        raise AdminOpError(422, "Default cost bps cannot be negative")
     try:
         managed_policy = allocation_policy_from_limits(
             float(managed_allocation_policy["min_position_weight_pct"]),
@@ -2111,7 +1717,6 @@ def update_app_settings(
     except (KeyError, TypeError, ValueError) as exc:
         raise AdminOpError(422, str(exc)) from None
     values = {
-        DEFAULT_COST_BPS_KEY: str(default_cost_bps),
         MANAGED_MIN_POSITION_WEIGHT_PCT_KEY: str(managed_policy["min_position_weight_pct"]),
         MANAGED_MAX_POSITION_WEIGHT_PCT_KEY: str(managed_policy["max_position_weight_pct"]),
         REBUILT_MIN_POSITION_WEIGHT_PCT_KEY: str(rebuilt_policy["min_position_weight_pct"]),

@@ -1,19 +1,12 @@
-"""Orchestration: load allocations, ensure cached price series, run the
-valuation engine per portfolio, and shape metrics for the API.
+"""Version-scoped orchestration for deterministic open/close analytics.
 
-NAVs are never persisted. Exact-input computations are memoized in-process and
-otherwise recomputed deterministically from locked allocations + cached
-total-return series (corporate-action adjustments change retroactively, so
-recomputation is *more* correct than database snapshots).
+Only prices and decisions persist. Exact-input caches reuse pure computations;
+all public reads stay independent of evaluator enablement.
 """
 
 from __future__ import annotations
 
-import logging
-import math
-import time
-from bisect import bisect_left, bisect_right
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
@@ -25,39 +18,30 @@ from ..models import Agent, Allocation, ModelDefinition, Portfolio, Signal
 from . import price_cache
 from .analysis_cache import SingleFlightLru, fingerprint
 from .rebuilt import (
-    EXPOSURES,
     HORIZONS,
-    CostBasis,
-    Objective,
     PolicyResult,
-    RebuiltValuationError,
     SignalInput,
     evaluate_policy_grid,
-    hac_mean_statistics,
     prepare_market,
-    selected_objective_score,
+    signal_horizon_statistics,
 )
-from .trading_calendar import NY, close_at, is_trading_day
+from .trading_calendar import NY, boundary_at, boundary_value, is_trading_day
 from .valuation import (
-    FROZEN_AFTER_TRADING_DAYS,
     AllocationInput,
-    Direction,
+    Boundary,
     PositionInput,
     Series,
     ValuationError,
     ValuationResult,
+    boundary_date,
     build_calendar,
     compute_metrics,
     value_portfolio,
 )
 
-logger = logging.getLogger(__name__)
-
 SPY_SYMBOL = "SPY"
 MarketDataStatus = Literal["fresh", "updating", "stale", "unavailable"]
-AnalysisView = Literal["common", "tuned", "signal"]
-ANALYTICS_ENGINE_VERSION = 1
-COMMON_INCUBATION_POLICY = (20, 100)
+ANALYTICS_ENGINE_VERSION = 2
 
 
 @dataclass
@@ -70,11 +54,11 @@ class PortfolioValuation:
 
 @dataclass
 class ArenaValuations:
-    as_of: str | None
+    as_of: Boundary | None
     current_date: date
     market_data_status: MarketDataStatus
-    spy_series: Series  # raw total-return closes (for identical-window overlays)
-    calendar: list[str]
+    spy_series: Series
+    calendar: list[Boundary]
     by_portfolio_id: dict[int, PortfolioValuation] = field(default_factory=dict)
 
 
@@ -82,8 +66,8 @@ class ArenaValuations:
 class PriceSeriesLoad:
     series: dict[str, Series]
     status: MarketDataStatus
-    as_of: str | None
-    target_as_of: str
+    as_of: Boundary | None
+    target_as_of: Boundary
     stale_symbols: set[str] = field(default_factory=set)
     unavailable_symbols: set[str] = field(default_factory=set)
 
@@ -92,9 +76,8 @@ class PriceSeriesLoad:
 class RebuiltPortfolioAnalysis:
     portfolio: Portfolio
     signal_horizons: list[dict]
-    policies: dict[tuple[int, int], PolicyResult]
+    policies: dict[float, PolicyResult]
     selected: PolicyResult | None
-    policy_metrics: dict[tuple[int, int], dict] = field(default_factory=dict)
     error: str | None = None
     stale_data: bool = False
     frozen_symbols: list[str] = field(default_factory=list)
@@ -102,72 +85,15 @@ class RebuiltPortfolioAnalysis:
 
 @dataclass
 class RebuiltArena:
-    as_of: str | None
+    as_of: Boundary | None
     market_data_status: MarketDataStatus
     spy_series: Series
-    calendar: list[str]
-    objective: Objective
-    cost_basis: CostBasis
+    calendar: list[Boundary]
     by_portfolio_id: dict[int, RebuiltPortfolioAnalysis] = field(default_factory=dict)
-    common_by_direction: dict[Direction, CommonDirectionState] = field(default_factory=dict)
-
-    def common_for(self, direction: Direction) -> CommonDirectionState:
-        if direction not in ("long", "short"):
-            raise ValueError("direction must be long or short")
-        return self.common_by_direction.get(direction, CommonDirectionState())
 
 
-@dataclass
-class _CommonCandidate:
-    metrics: dict
-    member_metrics: dict[int, dict]
-    member_series: dict[int, Series]
-    meta_series: Series
-    spy_series: Series
-
-
-@dataclass
-class CommonDirectionState:
-    policy: dict | None = None
-    member_ids: set[int] = field(default_factory=set)
-    member_metrics: dict[int, dict] = field(default_factory=dict)
-    member_series: dict[int, Series] = field(default_factory=dict)
-    spy_series: Series = field(default_factory=list)
-    meta_series: Series = field(default_factory=list)
-
-
-@dataclass
-class _ManagedComputation:
-    result: ValuationResult | None
-    metrics: dict
-    error: str | None = None
-
-
-@dataclass
-class _CachedRebuiltPortfolio:
-    signal_horizons: list[dict]
-    policies: dict[tuple[int, int], PolicyResult]
-    selected_pair: tuple[int, int] | None
-    policy_metrics: dict[tuple[int, int], dict]
-    error: str | None
-    stale_data: bool
-    frozen_symbols: list[str]
-
-
-@dataclass
-class _CachedRebuiltArena:
-    as_of: str | None
-    market_data_status: MarketDataStatus
-    spy_series: Series
-    calendar: list[str]
-    objective: Objective
-    cost_basis: CostBasis
-    by_portfolio_id: dict[int, _CachedRebuiltPortfolio]
-    common_by_direction: dict[Direction, CommonDirectionState]
-
-
-_managed_cache: SingleFlightLru[str, _ManagedComputation] = SingleFlightLru(max_entries=256)
-_rebuilt_cache: SingleFlightLru[str, _CachedRebuiltArena] = SingleFlightLru(max_entries=16)
+_managed_cache: SingleFlightLru[str, tuple] = SingleFlightLru(max_entries=256)
+_rebuilt_cache: SingleFlightLru[str, tuple] = SingleFlightLru(max_entries=256)
 
 
 def clear_analysis_caches() -> None:
@@ -176,93 +102,89 @@ def clear_analysis_caches() -> None:
 
 
 def pricing_requirements(allocations: list[Allocation]) -> dict[str, date]:
-    """Earliest date each Massive series must cover for deterministic valuation."""
-    earliest_allocation = min(allocation.effective_date for allocation in allocations)
-    requirements = {SPY_SYMBOL: earliest_allocation}
+    requirements = {SPY_SYMBOL: min(allocation.effective_date for allocation in allocations)}
     for allocation in allocations:
         for position in allocation.positions:
-            current = requirements.get(position.symbol)
-            if current is None or allocation.effective_date < current:
-                requirements[position.symbol] = allocation.effective_date
+            requirements[position.symbol] = min(
+                requirements.get(position.symbol, allocation.effective_date), allocation.effective_date
+            )
     return requirements
 
 
 def signal_pricing_requirements(signals: list[Signal], fallback_start: date) -> dict[str, date]:
-    requirements = {
-        SPY_SYMBOL: min(
-            (signal.effective_date for signal in signals),
-            default=fallback_start,
-        )
-    }
+    requirements = {SPY_SYMBOL: min((signal.effective_date for signal in signals), default=fallback_start)}
     for signal in signals:
         for position in signal.positions:
-            current = requirements.get(position.symbol)
-            if current is None or signal.effective_date < current:
-                requirements[position.symbol] = signal.effective_date
+            requirements[position.symbol] = min(
+                requirements.get(position.symbol, signal.effective_date), signal.effective_date
+            )
     return requirements
 
 
 def merge_pricing_requirements(*groups: dict[str, date]) -> dict[str, date]:
     merged: dict[str, date] = {}
     for group in groups:
-        for symbol, required_start in group.items():
-            current = merged.get(symbol)
-            if current is None or required_start < current:
-                merged[symbol] = required_start
+        for symbol, start in group.items():
+            merged[symbol] = min(merged.get(symbol, start), start)
     return merged
 
 
-def managed_readiness_symbols(portfolios: list[Portfolio], target: date) -> set[str]:
-    """Symbols whose latest managed allocations must print before publication."""
+def managed_readiness_symbols(
+    portfolios: list[Portfolio], target: date, target_phase: str = "close"
+) -> set[str]:
     symbols = {SPY_SYMBOL}
     for portfolio in portfolios:
-        eligible = [item for item in portfolio.allocations if item.effective_date <= target]
-        if not eligible:
-            continue
-        latest = max(eligible, key=lambda item: (item.effective_date, item.id))
-        symbols.update(position.symbol for position in latest.positions)
+        latest = max(
+            (
+                item
+                for item in portfolio.allocations
+                if item.effective_date < target
+                or (
+                    item.effective_date == target
+                    and (portfolio.execution_boundary == "open" or target_phase == "close")
+                )
+            ),
+            key=lambda item: (item.effective_date, item.id),
+            default=None,
+        )
+        if latest:
+            symbols.update(position.symbol for position in latest.positions)
     return symbols
 
 
 def rebuilt_readiness_symbols(portfolios: list[Portfolio], target: date) -> set[str]:
-    """Symbols in cohorts that can still affect an H1-H20 rebuilt policy."""
     symbols = {SPY_SYMBOL}
-    earliest_active = target
-    remaining_sessions = max(HORIZONS)
-    while remaining_sessions:
-        earliest_active -= timedelta(days=1)
-        if is_trading_day(earliest_active):
-            remaining_sessions -= 1
+    earliest = target
+    remaining = int(max(HORIZONS))
+    while remaining:
+        earliest -= timedelta(days=1)
+        if is_trading_day(earliest):
+            remaining -= 1
     for portfolio in portfolios:
         for signal in portfolio.signals:
-            if not earliest_active <= signal.effective_date <= target:
-                continue
-            symbols.update(position.symbol for position in signal.positions)
+            if earliest <= signal.effective_date <= target:
+                symbols.update(position.symbol for position in signal.positions)
     return symbols
 
 
 def global_pricing_requirements(
-    portfolios: list[Portfolio], target: date
+    portfolios: list[Portfolio], target: date, target_phase: str = "close"
 ) -> tuple[dict[str, date], set[str]]:
-    """All persisted price history plus the subset required for today's watermark."""
     managed = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "managed"]
     rebuilt = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "rebuilt"]
     allocations = [
-        allocation
-        for portfolio in managed
-        for allocation in portfolio.allocations
-        if allocation.effective_date <= target
+        item for portfolio in managed for item in portfolio.allocations if item.effective_date <= target
     ]
-    signals = [
-        signal for portfolio in rebuilt for signal in portfolio.signals if signal.effective_date <= target
-    ]
-    managed_requirements = pricing_requirements(allocations) if allocations else {}
-    rebuilt_requirements = signal_pricing_requirements(
-        signals,
-        fallback_start=target - timedelta(days=45),
+    signals = [item for portfolio in rebuilt for item in portfolio.signals if item.effective_date <= target]
+    requirements = merge_pricing_requirements(
+        pricing_requirements(allocations) if allocations else {},
+        signal_pricing_requirements(signals, target - timedelta(days=45))
+        if signals or not allocations
+        else {},
     )
-    requirements = merge_pricing_requirements(managed_requirements, rebuilt_requirements)
-    readiness = managed_readiness_symbols(managed, target) | rebuilt_readiness_symbols(rebuilt, target)
+    readiness = managed_readiness_symbols(managed, target, target_phase) | rebuilt_readiness_symbols(
+        rebuilt, target
+    )
     return requirements, readiness
 
 
@@ -272,1124 +194,232 @@ def load_price_series(
     readiness_symbols: set[str] | None = None,
     now: datetime | None = None,
 ) -> PriceSeriesLoad:
-    """Read a coherent cache snapshot without performing provider I/O."""
+    """Read a coherent version-local boundary watermark without provider I/O."""
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
-    symbols = sorted(required_starts)
-    latest_available = price_cache.latest_available_session(now)
-    if not symbols:
-        return PriceSeriesLoad(
-            series={},
-            status="fresh",
-            as_of=None,
-            target_as_of=latest_available.isoformat(),
-        )
-
-    entries = price_cache.get_cache_entries(session, symbols)
-    series: dict[str, Series] = {}
-    unavailable_symbols: set[str] = set()
-
-    for symbol in symbols:
-        entry = entries.get(symbol)
-        if not entry or not entry.covers(required_starts[symbol]):
-            if entry:
-                series[symbol] = entry.series
-            unavailable_symbols.add(symbol)
-            continue
-        series[symbol] = entry.series
-
-    readiness = set(readiness_symbols or symbols)
-    readiness.add(SPY_SYMBOL)
-    ready_dates: dict[str, date | None] = {}
+    target = price_cache.latest_available_boundary(now)
+    entries = price_cache.get_cache_entries(session, sorted(required_starts))
+    series = {symbol: price_cache.published_series(entry.series, now) for symbol, entry in entries.items()}
+    unavailable = {
+        symbol
+        for symbol, start in required_starts.items()
+        if symbol not in entries or not entries[symbol].covers(start)
+    }
+    readiness = set(readiness_symbols if readiness_symbols is not None else required_starts) | {SPY_SYMBOL}
+    observed: dict[str, dict[str, Boundary]] = {}
     for symbol in readiness:
-        entry = entries.get(symbol)
-        dates = [day for day in entry.dates if day <= latest_available] if entry else []
-        ready_dates[symbol] = dates[-1] if dates else None
-
-    available_ready_dates = [day for day in ready_dates.values() if day is not None]
-    coherent_date = min(available_ready_dates, default=None)
-    spy_date = ready_dates.get(SPY_SYMBOL)
-    lagging_symbols = {symbol for symbol, day in ready_dates.items() if day is None or day < latest_available}
-
-    status: MarketDataStatus
-    if unavailable_symbols:
-        status = "unavailable"
-    elif not lagging_symbols:
-        status = "fresh"
-    else:
-        publication_cutoff = close_at(latest_available) + timedelta(
-            minutes=MASSIVE_DATA_DELAY_MINUTES + MARKET_DATA_UPDATE_GRACE_MINUTES
-        )
-        status = "updating" if now < publication_cutoff else "stale"
-
-    # While a batch is being assembled, retain the last date common to every
-    # live symbol. After the SLA, advance with SPY and surface degraded data.
-    as_of_date = coherent_date if status == "updating" else spy_date
-
+        observed[symbol] = {
+            event["timestamp"]: event
+            for point in series.get(symbol, [])
+            for phase in ("open", "close")
+            if point.get(phase) is not None
+            and (event := boundary_value(date.fromisoformat(point["date"]), phase))["timestamp"]
+            <= target["timestamp"]
+        }
+    lagging = {symbol for symbol in readiness if target["timestamp"] not in observed[symbol]}
+    common = set.intersection(*(set(points) for points in observed.values())) if observed else set()
+    latest = max(common, default=None)
+    as_of = observed[SPY_SYMBOL].get(latest) if latest else None
+    deadline = boundary_at(date.fromisoformat(boundary_date(target)), target["phase"]) + timedelta(
+        minutes=MASSIVE_DATA_DELAY_MINUTES + MARKET_DATA_UPDATE_GRACE_MINUTES
+    )
+    status: MarketDataStatus = (
+        "unavailable"
+        if unavailable or not as_of
+        else "fresh"
+        if not lagging
+        else "updating"
+        if now < deadline
+        else "stale"
+    )
     return PriceSeriesLoad(
-        series=series,
-        status=status,
-        as_of=as_of_date.isoformat() if as_of_date is not None else None,
-        target_as_of=latest_available.isoformat(),
-        stale_symbols=lagging_symbols if status == "stale" else set(),
-        unavailable_symbols=unavailable_symbols,
+        series, status, as_of, target, lagging if status == "stale" else set(), unavailable
     )
 
 
-def _allocation_inputs(allocations: list[Allocation]) -> list[AllocationInput]:
-    return [
-        AllocationInput(
-            effective_date=allocation.effective_date.isoformat(),
-            positions=tuple(
-                PositionInput(
-                    symbol=position.symbol,
-                    weight_pct=float(position.weight_pct),
-                    note=position.note,
-                )
-                for position in allocation.positions
-            ),
-        )
-        for allocation in allocations
-    ]
+def load_portfolios(session: Session, version_id: int | None = None) -> list[Portfolio]:
+    query = select(Portfolio).options(
+        selectinload(Portfolio.agent).selectinload(Agent.model).selectinload(ModelDefinition.capabilities),
+        selectinload(Portfolio.prompt),
+        selectinload(Portfolio.version),
+        selectinload(Portfolio.allocations).selectinload(Allocation.positions),
+        selectinload(Portfolio.signals).selectinload(Signal.positions),
+    )
+    if version_id is not None:
+        query = query.where(Portfolio.version_id == version_id)
+    return list(session.scalars(query))
 
 
-def _price_points(series: dict[str, Series], symbols: set[str] | None = None) -> list[dict]:
-    selected = symbols if symbols is not None else set(series)
+def _inputs(items: list) -> list[dict]:
     return [
         {
-            "symbol": symbol,
-            "points": [[str(point.get("date")), point.get("close")] for point in series.get(symbol, [])],
+            "effective_date": item.effective_date.isoformat(),
+            "positions": tuple(
+                PositionInput(position.symbol, float(position.weight_pct), position.note)
+                for position in item.positions
+            ),
         }
-        for symbol in sorted(selected)
+        for item in items
     ]
 
 
-def _managed_cache_key(
-    portfolio: Portfolio,
-    allocation_inputs: list[AllocationInput],
-    series: dict[str, Series],
-    calendar: list[str],
-    as_of: str,
+def _cache_key(
+    portfolio: Portfolio, items: list, prices: dict[str, Series], calendar: list[Boundary], as_of: Boundary
 ) -> str:
-    symbols = {
-        SPY_SYMBOL,
-        *(position.symbol for allocation in allocation_inputs for position in allocation.positions),
-    }
+    symbols = {SPY_SYMBOL, *(position.symbol for item in items for position in item.positions)}
     return fingerprint(
         {
             "engine": ANALYTICS_ENGINE_VERSION,
-            "kind": "managed",
             "portfolio_id": portfolio.id,
+            "version_id": portfolio.version_id,
+            "mode": portfolio.prompt_mode,
             "direction": portfolio.direction,
-            "cost_bps": portfolio.cost_bps,
+            "execution_boundary": portfolio.execution_boundary,
             "as_of": as_of,
             "calendar": calendar,
-            "allocations": [
+            "decisions": [
                 {
-                    "effective_date": allocation.effective_date,
+                    "id": item.id,
+                    "date": item.effective_date.isoformat(),
                     "positions": [
-                        [position.symbol, position.weight_pct] for position in allocation.positions
+                        (position.symbol, float(position.weight_pct), position.note)
+                        for position in item.positions
                     ],
                 }
-                for allocation in allocation_inputs
+                for item in items
             ],
-            "prices": _price_points(series, symbols),
+            "prices": {symbol: prices.get(symbol, []) for symbol in sorted(symbols)},
         }
-    )
-
-
-def _current_holding_notes(portfolio: Portfolio, result: ValuationResult) -> ValuationResult:
-    latest_effective = max(
-        (applied.effective_date for applied in result.allocations if applied.applied_date is not None),
-        default=None,
-    )
-    allocation = next(
-        (item for item in portfolio.allocations if item.effective_date.isoformat() == latest_effective),
-        None,
-    )
-    notes = {position.symbol: position.note for position in allocation.positions} if allocation else {}
-    return replace(
-        result,
-        holdings=[replace(holding, note=notes.get(holding.symbol, "")) for holding in result.holdings],
-    )
-
-
-def load_portfolios(session: Session) -> list[Portfolio]:
-    return list(
-        session.scalars(
-            select(Portfolio).options(
-                selectinload(Portfolio.agent)
-                .selectinload(Agent.model)
-                .selectinload(ModelDefinition.capabilities),
-                selectinload(Portfolio.prompt),
-                selectinload(Portfolio.allocations).selectinload(Allocation.positions),
-                selectinload(Portfolio.signals).selectinload(Signal.positions),
-            )
-        )
     )
 
 
 def compute_valuations(
     session: Session, portfolios: list[Portfolio], now: datetime | None = None
 ) -> ArenaValuations:
-    """Value managed portfolios from their preserved allocation history."""
     portfolios = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "managed"]
     now = now or datetime.now(UTC)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
-    current_date = now.astimezone(NY).date()
-
-    def no_data(status: MarketDataStatus = "fresh") -> ArenaValuations:
-        empty = ArenaValuations(
-            as_of=None,
-            current_date=current_date,
-            market_data_status=status,
-            spy_series=[],
-            calendar=[],
-        )
-        for portfolio in portfolios:
-            empty.by_portfolio_id[portfolio.id] = PortfolioValuation(
-                portfolio=portfolio, result=None, metrics={"has_data": False}
-            )
-        return empty
-
     target = price_cache.latest_available_session(now)
-    all_allocations = [
-        allocation
-        for portfolio in portfolios
-        for allocation in portfolio.allocations
-        if allocation.effective_date <= target
+    allocations = [
+        item for portfolio in portfolios for item in portfolio.allocations if item.effective_date <= target
     ]
-    if not all_allocations:
-        return no_data()
-
-    requirements = pricing_requirements(all_allocations)
-    readiness = managed_readiness_symbols(portfolios, target)
-    price_load = load_price_series(session, requirements, readiness, now)
-    series = price_load.series
-
-    spy_series = series.get(SPY_SYMBOL) or []
-    as_of = price_load.as_of
-    if as_of is None:
-        return no_data(price_load.status)
-    calendar = build_calendar(spy_series, as_of)
-
-    valuations = ArenaValuations(
-        as_of=as_of,
-        current_date=current_date,
-        market_data_status=price_load.status,
-        spy_series=spy_series,
-        calendar=calendar,
-    )
-    for portfolio in portfolios:
-        if not portfolio.allocations:
-            valuations.by_portfolio_id[portfolio.id] = PortfolioValuation(
-                portfolio=portfolio, result=None, metrics={"has_data": False}
-            )
-            continue
-        allocation_inputs = _allocation_inputs(portfolio.allocations)
-        cache_key = _managed_cache_key(
-            portfolio,
-            allocation_inputs,
-            series,
-            calendar,
-            as_of,
+    if not allocations:
+        return ArenaValuations(
+            None,
+            now.astimezone(NY).date(),
+            "fresh",
+            [],
+            [],
+            {
+                portfolio.id: PortfolioValuation(portfolio, None, {"has_data": False})
+                for portfolio in portfolios
+            },
         )
+    requirements = pricing_requirements(allocations)
+    loaded = load_price_series(
+        session,
+        requirements,
+        managed_readiness_symbols(portfolios, target, price_cache.latest_available_boundary(now)["phase"]),
+        now,
+    )
+    spy = loaded.series.get(SPY_SYMBOL, [])
+    calendar = build_calendar(spy, loaded.as_of) if loaded.as_of else []
+    arena = ArenaValuations(loaded.as_of, now.astimezone(NY).date(), loaded.status, spy, calendar)
+    for portfolio in portfolios:
+        if not loaded.as_of or not portfolio.allocations:
+            arena.by_portfolio_id[portfolio.id] = PortfolioValuation(portfolio, None, {"has_data": False})
+            continue
 
-        def build(portfolio=portfolio, allocation_inputs=allocation_inputs) -> _ManagedComputation:
-            started = time.perf_counter()
+        def build(portfolio=portfolio):
             try:
                 result = value_portfolio(
-                    allocation_inputs,
-                    cost_bps=portfolio.cost_bps,
-                    prices=series,
-                    calendar=calendar,
-                    as_of=as_of,
-                    direction=portfolio.direction,
+                    [AllocationInput(**item) for item in _inputs(portfolio.allocations)],
+                    loaded.series,
+                    calendar,
+                    loaded.as_of,
+                    portfolio.direction,
+                    portfolio.execution_boundary,
                 )
-                return _ManagedComputation(
-                    result=result,
-                    metrics=compute_metrics(result, spy_series, direction=portfolio.direction),
-                )
+                return result, compute_metrics(result, spy, portfolio.direction), None
             except ValuationError as exc:
-                logger.warning("cannot value portfolio %s: %s", portfolio.slug, exc)
-                return _ManagedComputation(
-                    result=None,
-                    metrics={"has_data": False},
-                    error=str(exc),
-                )
-            finally:
-                logger.debug(
-                    "computed managed analytics portfolio=%s duration_ms=%.1f",
-                    portfolio.id,
-                    (time.perf_counter() - started) * 1000,
-                )
+                return None, {"has_data": False}, str(exc)
 
-        computation = _managed_cache.get_or_compute(cache_key, build)
-        result = (
-            _current_holding_notes(portfolio, computation.result) if computation.result is not None else None
+        result, metrics, error = _managed_cache.get_or_compute(
+            _cache_key(portfolio, portfolio.allocations, loaded.series, calendar, loaded.as_of), build
         )
-        valuations.by_portfolio_id[portfolio.id] = PortfolioValuation(
-            portfolio=portfolio,
-            result=result,
-            metrics=computation.metrics,
-            error=computation.error,
-        )
-        if result is not None:
-            if (result.stale_days or result.frozen_symbols) and valuations.market_data_status in (
-                "fresh",
-                "updating",
-            ):
-                valuations.market_data_status = "stale"
-        else:
-            valuations.by_portfolio_id[portfolio.id] = PortfolioValuation(
-                portfolio=portfolio,
-                result=None,
-                metrics=computation.metrics,
-                error=computation.error,
-            )
-            valuations.market_data_status = "unavailable"
-    return valuations
-
-
-def age_days(valuation: PortfolioValuation, current_date: date) -> int | None:
-    if not valuation.result or not valuation.result.series:
-        return None
-    inception = date.fromisoformat(valuation.result.series[0]["date"])
-    return (current_date - inception).days
-
-
-def downsample(series: Series, max_points: int = 60) -> list[float]:
-    """Sparkline values: evenly sampled NAVs, always keeping the endpoints."""
-    navs = [point["nav"] for point in series]
-    if len(navs) <= max_points:
-        return navs
-    step = (len(navs) - 1) / (max_points - 1)
-    return [navs[round(i * step)] for i in range(max_points)]
-
-
-def _signal_inputs(signals: list[Signal]) -> list[SignalInput]:
-    return [
-        SignalInput(
-            id=signal.id,
-            effective_date=signal.effective_date.isoformat(),
-            positions=tuple(
-                PositionInput(
-                    symbol=position.symbol,
-                    weight_pct=float(position.weight_pct),
-                    note=position.note,
-                )
-                for position in signal.positions
-            ),
-        )
-        for signal in signals
-    ]
-
-
-def _rankable_common_members(
-    analyses: dict[int, RebuiltPortfolioAnalysis],
-    direction: Direction,
-    exposures: tuple[int, ...] = EXPOSURES,
-) -> list[RebuiltPortfolioAnalysis]:
-    members = []
-    for analysis in analyses.values():
-        if analysis.portfolio.direction != direction:
-            continue
-        if analysis.portfolio.status != "active":
-            continue
-        if (
-            analysis.error is not None
-            or len(analysis.signal_horizons) != len(HORIZONS)
-            or any(
-                (horizon, exposure) not in analysis.policies for horizon in HORIZONS for exposure in exposures
-            )
-        ):
-            continue
-        if direction == "short" or not analysis.portfolio.founding_v2:
-            horizon_20 = next(item for item in analysis.signal_horizons if item["horizon"] == 20)
-            if not horizon_20["eligible"]:
-                continue
-        members.append(analysis)
-    return members
-
-
-def _common_admitted_member_ids(
-    analyses: dict[int, RebuiltPortfolioAnalysis],
-    direction: Direction,
-) -> set[int]:
-    admitted: set[int] = set()
-    for analysis in analyses.values():
-        if analysis.portfolio.direction != direction:
-            continue
-        if analysis.portfolio.status != "active":
-            continue
-        if direction == "long" and analysis.portfolio.founding_v2:
-            admitted.add(analysis.portfolio.id)
-            continue
-        horizon_20 = next(
-            (item for item in analysis.signal_horizons if item["horizon"] == 20),
-            None,
-        )
-        if horizon_20 and horizon_20["eligible"]:
-            admitted.add(analysis.portfolio.id)
-    return admitted
-
-
-def _daily_metrics(
-    strategy_returns: list[float],
-    spy_returns: list[float],
-    dates: list[str],
-    *,
-    baseline: str,
-    horizon: int,
-    family_size: int,
-    turnover_pct: float = 0.0,
-    cost_drag_pct: float = 0.0,
-) -> dict:
-    alphas = [strategy - spy for strategy, spy in zip(strategy_returns, spy_returns, strict=True)]
-    alpha_stats = hac_mean_statistics(alphas, lag=horizon - 1, family_size=family_size)
-    strategy_std = _std(strategy_returns)
-    alpha_std = _std(alphas)
-    mean_return = sum(strategy_returns) / len(strategy_returns)
-    nav = 100.0
-    spy_nav = 100.0
-    peak = nav
-    max_drawdown = 0.0
-    for strategy_return, spy_return in zip(strategy_returns, spy_returns, strict=True):
-        nav *= 1.0 + strategy_return
-        spy_nav *= 1.0 + spy_return
-        peak = max(peak, nav)
-        max_drawdown = min(max_drawdown, nav / peak - 1.0)
-    return {
-        "has_data": True,
-        "horizon": horizon,
-        "start_date": baseline,
-        "end_date": dates[-1],
-        "itd_return": nav / 100.0 - 1.0,
-        "spy_return": spy_nav / 100.0 - 1.0,
-        "cumulative_excess": (nav - spy_nav) / 100.0,
-        "ann_volatility": strategy_std * math.sqrt(252),
-        "sharpe": (mean_return / strategy_std * math.sqrt(252) if strategy_std > 0 else None),
-        "information_ratio": (
-            alpha_stats["mean_daily_alpha"] / alpha_std * math.sqrt(252) if alpha_std > 0 else None
-        ),
-        "max_drawdown": max_drawdown,
-        "turnover_pct": turnover_pct,
-        "cost_drag_pct": cost_drag_pct,
-        "eligible": True,
-        **alpha_stats,
-    }
-
-
-def _common_horizon_eligibility(
-    members: list[RebuiltPortfolioAnalysis],
-) -> dict[int, bool]:
-    eligibility = {}
-    for horizon in HORIZONS:
-        stats = [
-            next(item for item in member.signal_horizons if item["horizon"] == horizon) for member in members
-        ]
-        complete = sum(item["complete_count"] for item in stats)
-        open_count = sum(item["open_count"] for item in stats)
-        valid = complete + open_count
-        eligibility[horizon] = complete >= 2 and valid > 0 and complete / valid >= 0.5
-    return eligibility
-
-
-def _common_scoring_window(
-    members: list[RebuiltPortfolioAnalysis],
-    eligible_horizons: list[int],
-) -> tuple[str, list[str]] | None:
-    """One immutable scoring window shared by every candidate and member."""
-    longest = max(eligible_horizons)
-    population_dates = []
-    for member in members:
-        stats = next(item for item in member.signal_horizons if item["horizon"] == longest)
-        completed = stats.get("completed_cohorts") or []
-        if completed:
-            population_dates.append(completed[0]["end_date"])
-    baseline = max(population_dates, default=None)
-    if baseline is None:
-        return None
-    all_dates = {
-        point["date"]
-        for member in members
-        for point in member.policies[(longest, 100)].daily_returns
-        if point["date"] > baseline
-    }
-    return baseline, sorted(all_dates)
-
-
-def _member_returns_on_common_dates(
-    member: RebuiltPortfolioAnalysis,
-    horizon: int,
-    exposure: int,
-    dates: list[str],
-    spy_by_date: dict[str, float],
-) -> tuple[list[float], list[float]]:
-    policy = member.policies[(horizon, exposure)]
-    points = {point["date"]: point for point in policy.daily_returns}
-    # An admitted member without an observation on a shared date contributes
-    # SPY, exactly like a missing daily signal sleeve. A liquidated member's
-    # capital path remains at zero instead of being resurrected into SPY.
-    strategy = [
-        (
-            points[day]["return"]
-            if day in points
-            else -1.0
-            if policy.liquidated_at is not None and day == policy.liquidated_at
-            else 0.0
-            if policy.liquidated_at is not None and day > policy.liquidated_at
-            else spy_by_date[day]
-        )
-        for day in dates
-    ]
-    spy = [spy_by_date[day] for day in dates]
-    return strategy, spy
-
-
-def _compound_series(baseline: str, dates: list[str], returns: list[float]) -> Series:
-    nav = 100.0
-    series: Series = [{"date": baseline, "nav": nav}]
-    for day, daily_return in zip(dates, returns, strict=True):
-        nav *= 1.0 + daily_return
-        series.append({"date": day, "nav": nav})
-    return series
-
-
-def _window_cost_drag(policy: PolicyResult, dates: list[str]) -> float:
-    """Cost in base-100 percentage points over the selected return window."""
-    daily_by_date = {point["date"]: point for point in policy.daily_returns}
-    previous_nav: dict[str, float] = {}
-    for previous, current in zip(policy.series, policy.series[1:], strict=False):
-        previous_nav[current["date"]] = float(previous["nav"])
-    drag = 0.0
-    for day in dates:
-        point = daily_by_date.get(day)
-        if point is None:
-            continue
-        cost = float(point.get("cost") or 0.0)
-        base = previous_nav.get(day)
-        if base and base > 0:
-            drag += cost / base * 100.0
-    return drag
-
-
-def _common_candidate_data(
-    members: list[RebuiltPortfolioAnalysis],
-    horizon: int,
-    exposure: int,
-    family_size: int,
-    dates: list[str],
-    baseline: str,
-) -> _CommonCandidate | None:
-    spy_by_date = {
-        point["date"]: point["spy_return"]
-        for member in members
-        for point in member.policies[(horizon, exposure)].daily_returns
-        if point["date"] in dates and point.get("spy_return") is not None
-    }
-    usable_dates = [day for day in dates if day in spy_by_date]
-    if not usable_dates:
-        return None
-    member_metrics: dict[int, dict] = {}
-    member_series: dict[int, Series] = {}
-    member_returns = []
-    member_turnovers = []
-    member_cost_drags = []
-    prebaseline_liquidation = False
-    for member in members:
-        policy = member.policies[(horizon, exposure)]
-        strategy, spy = _member_returns_on_common_dates(
-            member,
-            horizon,
-            exposure,
-            usable_dates,
-            spy_by_date,
-        )
-        member_returns.append(strategy)
-        turnover = sum(
-            float(point.get("turnover_pct") or 0.0)
-            for point in policy.daily_returns
-            if point["date"] in usable_dates
-        )
-        cost_drag = _window_cost_drag(policy, usable_dates)
-        member_turnovers.append(turnover)
-        member_cost_drags.append(cost_drag)
-        metric_count = (
-            bisect_right(usable_dates, policy.liquidated_at)
-            if policy.liquidated_at is not None
-            else len(usable_dates)
-        )
-        if metric_count:
-            metrics = _daily_metrics(
-                strategy[:metric_count],
-                spy[:metric_count],
-                usable_dates[:metric_count],
-                baseline=baseline,
-                horizon=horizon,
-                family_size=family_size,
-                turnover_pct=turnover,
-                cost_drag_pct=cost_drag,
-            )
-        else:
-            metrics = {
-                "has_data": False,
-                "eligible": False,
-                "evidence": "pending",
-                "ci_lower": None,
-                "ci_upper": None,
-            }
-        metrics["liquidated_at"] = policy.liquidated_at
-        if policy.liquidated_at is not None and policy.liquidated_at <= baseline:
-            prebaseline_liquidation = True
-        if not policy.metrics.get("eligible"):
-            metrics.update(
-                {
-                    "eligible": False,
-                    "ci_lower": None,
-                    "ci_upper": None,
-                    "evidence": "pending",
-                }
-            )
-        member_metrics[member.portfolio.id] = metrics
-        member_series[member.portfolio.id] = (
-            [{"date": baseline, "nav": 0.0}] + [{"date": day, "nav": 0.0} for day in usable_dates]
-            if policy.liquidated_at is not None and policy.liquidated_at <= baseline
-            else _compound_series(baseline, usable_dates, strategy)
-        )
-    strategy_returns = [
-        sum(returns[index] for returns in member_returns) / len(member_returns)
-        for index in range(len(usable_dates))
-    ]
-    spy_returns = [spy_by_date[day] for day in usable_dates]
-    metrics = _daily_metrics(
-        strategy_returns,
-        spy_returns,
-        usable_dates,
-        baseline=baseline,
-        horizon=horizon,
-        family_size=family_size,
-        turnover_pct=sum(member_turnovers) / len(member_turnovers),
-        cost_drag_pct=sum(member_cost_drags) / len(member_cost_drags),
-    )
-    metrics["portfolio_count"] = len(members)
-    metrics["horizon"] = horizon
-    metrics["exposure_pct"] = exposure
-    if prebaseline_liquidation:
-        metrics.update(
-            {
-                "eligible": False,
-                "ci_lower": None,
-                "ci_upper": None,
-                "evidence": "pending",
-            }
-        )
-    return _CommonCandidate(
-        metrics=metrics,
-        member_metrics=member_metrics,
-        member_series=member_series,
-        meta_series=_compound_series(baseline, usable_dates, strategy_returns),
-        spy_series=_compound_series(baseline, usable_dates, spy_returns),
-    )
-
-
-def _common_candidate_metrics(
-    members: list[RebuiltPortfolioAnalysis],
-    horizon: int,
-    exposure: int,
-    family_size: int,
-    dates: list[str],
-    baseline: str,
-) -> tuple[dict, dict[int, dict]] | None:
-    """Return Common meta and member metrics for one candidate policy."""
-    if not dates:
-        return None
-    candidate = _common_candidate_data(
-        members,
-        horizon,
-        exposure,
-        family_size,
-        dates,
-        baseline,
-    )
-    if candidate is None:
-        return None
-    return candidate.metrics, candidate.member_metrics
-
-
-def _std(values: list[float]) -> float:
-    if len(values) < 2:
-        return 0.0
-    mean = sum(values) / len(values)
-    return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
-
-
-def _select_common_policy(
-    analyses: dict[int, RebuiltPortfolioAnalysis],
-    objective: Objective,
-    direction: Direction,
-) -> CommonDirectionState:
-    exposures = (100,) if objective == "canonical" else EXPOSURES
-    members = _rankable_common_members(analyses, direction, exposures)
-    selection = CommonDirectionState(member_ids=_common_admitted_member_ids(analyses, direction))
-    if not members:
-        return selection
-    horizon_eligibility = _common_horizon_eligibility(members)
-    eligible_horizons = [horizon for horizon, eligible in horizon_eligibility.items() if eligible]
-    if not eligible_horizons:
-        return selection
-    window = _common_scoring_window(members, eligible_horizons)
-    if window is None:
-        return selection
-    baseline, dates = window
-    if not dates:
-        return selection
-    eligible_pairs = [(horizon, exposure) for horizon in eligible_horizons for exposure in exposures]
-    family_size = len(HORIZONS) if objective == "canonical" else len(HORIZONS) * len(EXPOSURES)
-    candidates = [
-        candidate
-        for horizon, exposure in eligible_pairs
-        if (
-            candidate := _common_candidate_data(
-                members,
-                horizon,
-                exposure,
-                family_size,
-                dates,
-                baseline,
-            )
-        )
-        is not None
-    ]
-    candidates = [
-        candidate
-        for candidate in candidates
-        if candidate.metrics.get("eligible")
-        and selected_objective_score(candidate.metrics, objective) is not None
-    ]
-    if not candidates:
-        return selection
-    selected = max(
-        candidates,
-        key=lambda candidate: (
-            selected_objective_score(candidate.metrics, objective),
-            -candidate.metrics["exposure_pct"],
-            -candidate.metrics["horizon"],
-        ),
-    )
-    metrics = selected.metrics
-    selection.policy = {
-        "horizon": metrics["horizon"],
-        "exposure_pct": metrics["exposure_pct"],
-        "objective": objective,
-        "scoring_start": baseline,
-        "scoring_end": dates[-1],
-        "metrics": metrics,
-    }
-    selection.member_metrics = selected.member_metrics
-    selection.member_series = selected.member_series
-    selection.spy_series = selected.spy_series
-    selection.meta_series = selected.meta_series
-    return selection
-
-
-def extend_common_policy(
-    selection: CommonDirectionState,
-    analyses: dict[int, RebuiltPortfolioAnalysis],
-    objective: Objective,
-    direction: Direction,
-) -> CommonDirectionState:
-    """Apply an already-selected Common policy to additional portfolios.
-
-    The selection's policy and aggregate metrics remain those of its source
-    cohort.  This lets a separate comparison cohort use the Arena's Common
-    policy without influencing which policy the Arena selected.
-    """
-    if selection.policy is None or not selection.spy_series:
-        return selection
-
-    admitted = _common_admitted_member_ids(analyses, direction)
-    selection.member_ids.update(admitted)
-    if not admitted:
-        return selection
-
-    horizon = int(selection.policy["horizon"])
-    exposure = int(selection.policy["exposure_pct"])
-    baseline = str(selection.policy["scoring_start"])
-    dates = [point["date"] for point in selection.spy_series if point["date"] > baseline]
-    family_size = int(
-        (selection.policy.get("metrics") or {}).get(
-            "family_size",
-            len(HORIZONS) if objective == "canonical" else len(HORIZONS) * len(EXPOSURES),
-        )
-    )
-    for portfolio_id in sorted(admitted):
-        analysis = analyses.get(portfolio_id)
-        if analysis is None or (horizon, exposure) not in analysis.policies:
-            continue
-        candidate = _common_candidate_data(
-            [analysis],
-            horizon,
-            exposure,
-            family_size,
-            dates,
-            baseline,
-        )
-        if candidate is None:
-            continue
-        selection.member_metrics.update(candidate.member_metrics)
-        selection.member_series.update(candidate.member_series)
-    return selection
-
-
-def _rebuilt_market_flags(
-    portfolio: Portfolio,
-    series: dict[str, Series],
-    calendar: list[str],
-    as_of: str | None,
-) -> tuple[bool, list[str]]:
-    required_by_symbol: dict[str, set[str]] = {}
-    current_symbols: set[str] = set()
-    final_index = len(calendar) - 1
-    maximum_horizon = max(HORIZONS)
-    for signal in portfolio.signals:
-        start_index = bisect_left(calendar, signal.effective_date.isoformat())
-        if start_index > final_index:
-            continue
-        end_index = min(final_index, start_index + maximum_horizon)
-        required = calendar[start_index : end_index + 1]
-        for position in signal.positions:
-            if float(position.weight_pct) <= 0:
-                continue
-            required_by_symbol.setdefault(position.symbol, set()).update(required)
-            if end_index == final_index:
-                current_symbols.add(position.symbol)
-    if not required_by_symbol:
-        return False, []
-
-    frozen: list[str] = []
-    stale = False
-    frozen_threshold = (
-        calendar[-FROZEN_AFTER_TRADING_DAYS]
-        if len(calendar) >= FROZEN_AFTER_TRADING_DAYS
-        else (calendar[0] if calendar else None)
-    )
-    for symbol, required in required_by_symbol.items():
-        available = {
-            str(point["date"])
-            for point in series.get(symbol, [])
-            if point.get("close") is not None and (as_of is None or str(point["date"]) <= as_of)
-        }
-        last_print = max(available, default=None)
-        if last_print is None or any(day not in available for day in required):
-            stale = True
-        if symbol in current_symbols and (
-            last_print is None or (frozen_threshold is not None and last_print < frozen_threshold)
-        ):
-            frozen.append(symbol)
-    return stale, sorted(frozen)
-
-
-def _rebuilt_policy_pairs(
-    objective: Objective,
-    include_policy_matrix: bool,
-) -> tuple[tuple[int, int], ...]:
-    exposures = EXPOSURES if include_policy_matrix or objective != "canonical" else (100,)
-    return tuple((horizon, exposure) for horizon in HORIZONS for exposure in exposures)
-
-
-def _rebuilt_cache_key(
-    rebuilt: list[Portfolio],
-    price_load: PriceSeriesLoad,
-    calendar: list[str],
-    as_of: str | None,
-    *,
-    view: AnalysisView,
-    objective: Objective,
-    cost_basis: CostBasis,
-    horizon: int | None,
-    include_policy_matrix: bool,
-    common_source_ids: set[int] | None,
-) -> str:
-    return fingerprint(
-        {
-            "engine": ANALYTICS_ENGINE_VERSION,
-            "kind": "rebuilt",
-            "context": {
-                "view": view,
-                "objective": objective,
-                "cost_basis": cost_basis,
-                "horizon": horizon,
-                "include_policy_matrix": include_policy_matrix,
-                "common_source_ids": sorted(common_source_ids) if common_source_ids is not None else None,
-            },
-            "as_of": as_of,
-            "calendar": calendar,
-            "market_data": {
-                "status": price_load.status,
-                "stale": sorted(price_load.stale_symbols),
-                "unavailable": sorted(price_load.unavailable_symbols),
-                "prices": _price_points(price_load.series),
-            },
-            "portfolios": [
-                {
-                    "id": portfolio.id,
-                    "status": portfolio.status,
-                    "founding_v2": portfolio.founding_v2,
-                    "direction": portfolio.direction,
-                    "cost_bps": portfolio.cost_bps,
-                    "signals": [
-                        {
-                            "id": signal.id,
-                            "effective_date": signal.effective_date.isoformat(),
-                            "positions": [
-                                [position.symbol, float(position.weight_pct)] for position in signal.positions
-                            ],
-                        }
-                        for signal in portfolio.signals
-                    ],
-                }
-                for portfolio in sorted(rebuilt, key=lambda item: item.id)
-            ],
-        }
-    )
-
-
-def _compact_policy(policy: PolicyResult) -> PolicyResult:
-    return replace(
-        policy,
-        daily_returns=[],
-        metrics=dict(policy.metrics),
-    )
-
-
-def _cache_rebuilt_arena(
-    arena: RebuiltArena,
-    *,
-    view: AnalysisView,
-    horizon: int | None,
-    include_policy_matrix: bool,
-) -> _CachedRebuiltArena:
-    cached: dict[int, _CachedRebuiltPortfolio] = {}
-    for portfolio_id, analysis in arena.by_portfolio_id.items():
-        retained: set[tuple[int, int]] = set()
-        if analysis.selected is not None:
-            retained.add((analysis.selected.horizon, analysis.selected.exposure_pct))
-        common_policy = arena.common_for(analysis.portfolio.direction).policy
-        if common_policy is not None:
-            retained.add((common_policy["horizon"], common_policy["exposure_pct"]))
-        if view == "common":
-            retained.add(COMMON_INCUBATION_POLICY)
-        if view == "signal" and horizon is not None:
-            retained.add((horizon, 100))
-
-        policies = {
-            pair: _compact_policy(analysis.policies[pair]) for pair in retained if pair in analysis.policies
-        }
-        selected_pair = (
-            (analysis.selected.horizon, analysis.selected.exposure_pct)
-            if analysis.selected is not None
-            else None
-        )
-        cached[portfolio_id] = _CachedRebuiltPortfolio(
-            signal_horizons=[
-                {key: value for key, value in item.items() if key != "completed_cohorts"}
-                for item in analysis.signal_horizons
-            ],
-            policies=policies,
-            selected_pair=selected_pair,
-            policy_metrics=(
-                {pair: dict(policy.metrics) for pair, policy in analysis.policies.items()}
-                if include_policy_matrix
-                else {}
-            ),
-            error=analysis.error,
-            stale_data=analysis.stale_data,
-            frozen_symbols=list(analysis.frozen_symbols),
-        )
-    return _CachedRebuiltArena(
-        as_of=arena.as_of,
-        market_data_status=arena.market_data_status,
-        spy_series=arena.spy_series,
-        calendar=arena.calendar,
-        objective=arena.objective,
-        cost_basis=arena.cost_basis,
-        by_portfolio_id=cached,
-        common_by_direction=arena.common_by_direction,
-    )
-
-
-def _restore_rebuilt_arena(
-    cached: _CachedRebuiltArena,
-    portfolios: list[Portfolio],
-) -> RebuiltArena:
-    arena = RebuiltArena(
-        as_of=cached.as_of,
-        market_data_status=cached.market_data_status,
-        spy_series=cached.spy_series,
-        calendar=cached.calendar,
-        objective=cached.objective,
-        cost_basis=cached.cost_basis,
-        common_by_direction=cached.common_by_direction,
-    )
-    current = {portfolio.id: portfolio for portfolio in portfolios}
-    for portfolio_id, snapshot in cached.by_portfolio_id.items():
-        portfolio = current.get(portfolio_id)
-        if portfolio is None:
-            continue
-        arena.by_portfolio_id[portfolio_id] = RebuiltPortfolioAnalysis(
-            portfolio=portfolio,
-            signal_horizons=snapshot.signal_horizons,
-            policies=snapshot.policies,
-            selected=(
-                snapshot.policies.get(snapshot.selected_pair) if snapshot.selected_pair is not None else None
-            ),
-            policy_metrics=snapshot.policy_metrics,
-            error=snapshot.error,
-            stale_data=snapshot.stale_data,
-            frozen_symbols=snapshot.frozen_symbols,
-        )
+        arena.by_portfolio_id[portfolio.id] = PortfolioValuation(portfolio, result, metrics, error)
+        if error:
+            arena.market_data_status = "unavailable"
     return arena
 
 
 def compute_rebuilt_arena(
-    session: Session,
-    portfolios: list[Portfolio],
-    *,
-    view: AnalysisView,
-    objective: Objective = "canonical",
-    cost_basis: CostBasis = "net",
-    horizon: int | None = None,
-    include_policy_matrix: bool = False,
-    common_source_ids: set[int] | None = None,
-    now: datetime | None = None,
+    session: Session, portfolios: list[Portfolio], now: datetime | None = None
 ) -> RebuiltArena:
-    """Load prices once and evaluate every rebuilt portfolio deterministically."""
-    if view == "signal":
-        if horizon not in HORIZONS:
-            raise ValueError("signal view requires horizon between 1 and 20")
-    elif horizon is not None:
-        raise ValueError("horizon is valid only for signal view")
+    portfolios = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "rebuilt"]
     now = now or datetime.now(UTC)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
-    rebuilt = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "rebuilt"]
-    if common_source_ids is None:
-        common_source_ids = {
-            portfolio.id for portfolio in rebuilt if portfolio.prompt.context_scope == "portfolio"
-        }
     target = price_cache.latest_available_session(now)
     signals = [
-        signal for portfolio in rebuilt for signal in portfolio.signals if signal.effective_date <= target
+        item for portfolio in portfolios for item in portfolio.signals if item.effective_date <= target
     ]
-    requirements = signal_pricing_requirements(
-        signals,
-        fallback_start=now.astimezone(NY).date() - timedelta(days=45),
+    loaded = load_price_series(
+        session,
+        signal_pricing_requirements(signals, target - timedelta(days=45)),
+        rebuilt_readiness_symbols(portfolios, target),
+        now,
     )
-    readiness = rebuilt_readiness_symbols(rebuilt, target)
-    price_load = load_price_series(session, requirements, readiness, now)
-    spy_series = price_load.series.get(SPY_SYMBOL) or []
-    as_of = price_load.as_of
-    calendar = build_calendar(spy_series, as_of) if as_of is not None else []
-    cache_key = _rebuilt_cache_key(
-        rebuilt,
-        price_load,
-        calendar,
-        as_of,
-        view=view,
-        objective=objective,
-        cost_basis=cost_basis,
-        horizon=horizon,
-        include_policy_matrix=include_policy_matrix,
-        common_source_ids=common_source_ids,
-    )
+    spy = loaded.series.get(SPY_SYMBOL, [])
+    calendar = build_calendar(spy, loaded.as_of) if loaded.as_of else []
+    arena = RebuiltArena(loaded.as_of, loaded.status, spy, calendar)
+    market = prepare_market(loaded.series, calendar)
+    for portfolio in portfolios:
+        if not loaded.as_of:
+            pending_inputs = [
+                SignalInput(item.id, item.effective_date.isoformat(), ()) for item in portfolio.signals
+            ]
+            horizons = [signal_horizon_statistics(pending_inputs, {}, [], horizon) for horizon in HORIZONS]
+            arena.by_portfolio_id[portfolio.id] = RebuiltPortfolioAnalysis(portfolio, horizons, {}, None)
+            continue
 
-    def build() -> _CachedRebuiltArena:
-        started = time.perf_counter()
-        arena = RebuiltArena(
-            as_of=as_of,
-            market_data_status=price_load.status,
-            spy_series=spy_series,
-            calendar=calendar,
-            objective=objective,
-            cost_basis=cost_basis,
-        )
-        market = prepare_market(price_load.series, calendar)
-        policy_pairs = _rebuilt_policy_pairs(objective, include_policy_matrix)
-        for portfolio in rebuilt:
-            stale_data, frozen_symbols = _rebuilt_market_flags(
-                portfolio,
-                price_load.series,
-                calendar,
-                as_of,
-            )
+        def build(portfolio=portfolio):
             try:
-                horizon_stats, policies, selected = evaluate_policy_grid(
-                    _signal_inputs(portfolio.signals),
-                    price_load.series,
+                inputs = [
+                    SignalInput(item.id, **payload)
+                    for item, payload in zip(portfolio.signals, _inputs(portfolio.signals), strict=True)
+                ]
+                horizons, policies, selected = evaluate_policy_grid(
+                    inputs,
+                    loaded.series,
                     calendar,
-                    portfolio.cost_bps,
-                    cost_basis,
-                    objective,
                     portfolio.direction,
-                    policy_pairs=policy_pairs,
+                    portfolio.execution_boundary,
                     prepared_market=market,
                 )
-                policy_map = {(item.horizon, item.exposure_pct): item for item in policies}
-                arena.by_portfolio_id[portfolio.id] = RebuiltPortfolioAnalysis(
-                    portfolio=portfolio,
-                    signal_horizons=horizon_stats,
-                    policies=policy_map,
-                    selected=selected,
-                    policy_metrics={pair: item.metrics for pair, item in policy_map.items()},
-                    stale_data=stale_data,
-                    frozen_symbols=frozen_symbols,
-                )
-            except (ValueError, RebuiltValuationError) as exc:
-                logger.warning("cannot evaluate rebuilt portfolio %s: %s", portfolio.slug, exc)
-                arena.by_portfolio_id[portfolio.id] = RebuiltPortfolioAnalysis(
-                    portfolio=portfolio,
-                    signal_horizons=[],
-                    policies={},
-                    selected=None,
-                    error=str(exc),
-                    stale_data=stale_data,
-                    frozen_symbols=frozen_symbols,
-                )
-                arena.market_data_status = "unavailable"
-            if stale_data and arena.market_data_status in ("fresh", "updating"):
-                arena.market_data_status = "stale"
-        common_sources = {
-            portfolio_id: analysis
-            for portfolio_id, analysis in arena.by_portfolio_id.items()
-            if portfolio_id in common_source_ids
-        }
-        arena.common_by_direction = {}
-        for direction in ("long", "short"):
-            selection = _select_common_policy(common_sources, objective, direction)
-            comparison = {
-                portfolio_id: analysis
-                for portfolio_id, analysis in arena.by_portfolio_id.items()
-                if portfolio_id not in common_source_ids
-            }
-            extend_common_policy(selection, comparison, objective, direction)
-            arena.common_by_direction[direction] = selection
-        logger.info(
-            "computed rebuilt analytics portfolios=%d policies=%d view=%s matrix=%s duration_ms=%.1f",
-            len(rebuilt),
-            len(policy_pairs),
-            view,
-            include_policy_matrix,
-            (time.perf_counter() - started) * 1000,
-        )
-        return _cache_rebuilt_arena(
-            arena,
-            view=view,
-            horizon=horizon,
-            include_policy_matrix=include_policy_matrix,
-        )
+                return horizons, {policy.horizon: policy for policy in policies}, selected, None
+            except ValuationError as exc:
+                return [], {}, None, str(exc)
 
-    cached = _rebuilt_cache.get_or_compute(cache_key, build)
-    return _restore_rebuilt_arena(cached, rebuilt)
+        horizons, policies, selected, error = _rebuilt_cache.get_or_compute(
+            _cache_key(portfolio, portfolio.signals, loaded.series, calendar, loaded.as_of), build
+        )
+        arena.by_portfolio_id[portfolio.id] = RebuiltPortfolioAnalysis(
+            portfolio, horizons, policies, selected, error, loaded.status == "stale"
+        )
+        if error:
+            arena.market_data_status = "unavailable"
+    return arena
+
+
+def age_days(valuation: PortfolioValuation, current_date: date) -> int | None:
+    return (
+        (current_date - date.fromisoformat(boundary_date(valuation.result.series[0]))).days
+        if valuation.result and valuation.result.series
+        else None
+    )
+
+
+def downsample(series: Series, max_points: int = 60) -> list[float]:
+    navs = [point["nav"] for point in series]
+    if len(navs) <= max_points:
+        return navs
+    return [navs[round(index * (len(navs) - 1) / (max_points - 1))] for index in range(max_points)]

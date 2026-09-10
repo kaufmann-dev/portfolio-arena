@@ -1,14 +1,8 @@
 <script lang="ts">
   import { apiJson } from "../api/client";
-  import type {
-    DirectionAvailability,
-    PortfolioRefOut,
-    PromptAvailability,
-    PromptContextScope,
-    PromptOut,
-  } from "../api/types";
+  import type { DirectionAvailability, PortfolioRefOut, PromptAvailability, PromptOut } from "../api/types";
   import PortfolioRefTable from "../components/PortfolioRefTable.svelte";
-  import { link } from "../stores/router.svelte";
+  import { link, versionHref } from "../stores/router.svelte";
 
   interface Props {
     slug: string;
@@ -34,10 +28,6 @@
     if (direction === "both") return "Long + Short";
     return direction === "long" ? "Long only" : "Short only";
   }
-
-  function promptScopeLabel(scope: PromptContextScope): string {
-    return scope === "arena" ? "Arena synthesis" : "Portfolio strategy";
-  }
 </script>
 
 {#key slug}
@@ -48,12 +38,7 @@
     <article class="detail-page">
       <header class="detail-head">
         <nav class="crumbs" aria-label="Breadcrumb">
-          <a
-            href={data.prompt.context_scope === "arena" ? "/meta" : "/"}
-            onclick={(event) => link(event, data.prompt.context_scope === "arena" ? "/meta" : "/")}
-          >
-            {data.prompt.context_scope === "arena" ? "Meta Arena" : "Portfolio Arena"}
-          </a>
+          <a href={versionHref("/")} onclick={(event) => link(event, "/")}> Portfolio Arena </a>
           <span aria-hidden="true">/</span>
           <span>Prompt</span>
         </nav>
@@ -65,7 +50,6 @@
           <span aria-hidden="true">·</span>
           <span class="badge">{promptDirectionLabel(data.prompt.direction)}</span>
           <span aria-hidden="true">·</span>
-          <span class="badge">{promptScopeLabel(data.prompt.context_scope)}</span>
           <span aria-hidden="true">·</span>
           updated <span class="num">{data.prompt.updated_at.slice(0, 10)}</span>
         </p>

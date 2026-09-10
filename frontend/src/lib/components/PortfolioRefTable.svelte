@@ -10,7 +10,7 @@
   const { rows }: Props = $props();
 
   function portfolioHref(row: PortfolioRefOut): string {
-    return portfolioAnalysisHref(row.slug, row.prompt_mode, row.direction);
+    return portfolioAnalysisHref(row.slug, row.prompt_mode, row.direction, row.version_id);
   }
 </script>
 
@@ -23,8 +23,8 @@
         <th scope="col">Portfolio</th>
         <th scope="col">Direction</th>
         <th scope="col">Track</th>
-        <th scope="col">Scope</th>
-        <th scope="col">Status</th>
+        <th scope="col">Version</th>
+        <th scope="col">Execution</th>
         <th scope="col"><span class="visually-hidden">Actions</span></th>
       </tr>
     </thead>
@@ -36,9 +36,9 @@
           </th>
           <td><span class="badge">{row.direction}</span></td>
           <td><span class="badge">{row.prompt_mode}</span></td>
-          <td><span class="badge">{row.context_scope === "arena" ? "Meta" : "Arena"}</span></td>
+          <td><span class="badge">{row.version.name}</span></td>
           <td>
-            {row.status}
+            {row.execution_boundary === "open" ? "Open" : "Close"}
             {#if row.is_liquidated}
               <span class="badge neg"
                 >{row.prompt_mode === "rebuilt" ? "policy liquidated" : "liquidated"}</span

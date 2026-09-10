@@ -1,10 +1,8 @@
 """Arena orchestration tests."""
 
 from datetime import date
-from types import SimpleNamespace
 
 from app.models import Portfolio
-from app.services import arena
 from app.services.arena import PortfolioValuation, age_days
 from app.services.valuation import ValuationResult
 
@@ -13,7 +11,7 @@ def test_age_uses_current_calendar_date_instead_of_last_valued_close():
     valuation = PortfolioValuation(
         portfolio=Portfolio(),
         result=ValuationResult(
-            series=[{"date": "2026-07-27", "nav": 100.0}],
+            series=[{"timestamp": "2026-07-27T20:00:00+00:00", "phase": "close", "nav": 100.0}],
             allocations=[],
             holdings=[],
         ),
@@ -23,26 +21,17 @@ def test_age_uses_current_calendar_date_instead_of_last_valued_close():
     assert age_days(valuation, date(2026, 7, 29)) == 2
 
 
-def test_rebuilt_market_flags_ignore_prices_after_a_completed_h20_lifecycle():
-    calendar = [f"2026-07-{day:02d}" for day in range(1, 31)]
+def test_morning_readiness_uses_old_close_holdings_until_new_decision_executes():
+    from types import SimpleNamespace
+
+    from app.services.arena import managed_readiness_symbols
+
+    def allocation(day, identifier, symbol):
+        return SimpleNamespace(effective_date=day, id=identifier, positions=[SimpleNamespace(symbol=symbol)])
+
     portfolio = SimpleNamespace(
-        signals=[
-            SimpleNamespace(
-                effective_date=date(2026, 7, 1),
-                positions=[SimpleNamespace(symbol="AAPL", weight_pct=100)],
-            )
-        ]
+        execution_boundary="close",
+        allocations=[allocation(date(2026, 7, 27), 1, "AAPL"), allocation(date(2026, 7, 28), 2, "MSFT")],
     )
-    prices = {
-        "AAPL": [{"date": day, "close": 100.0} for day in calendar[:21]],
-    }
-
-    stale, frozen = arena._rebuilt_market_flags(
-        portfolio,
-        prices,
-        calendar,
-        calendar[-1],
-    )
-
-    assert stale is False
-    assert frozen == []
+    assert managed_readiness_symbols([portfolio], date(2026, 7, 28), "open") == {"SPY", "AAPL"}
+    assert managed_readiness_symbols([portfolio], date(2026, 7, 28), "close") == {"SPY", "MSFT"}

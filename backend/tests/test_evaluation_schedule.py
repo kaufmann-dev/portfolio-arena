@@ -47,3 +47,10 @@ def test_empty_weekday_selection_is_manual_only():
     )
 
     assert not is_due_on(manual, date(2026, 7, 6))
+
+
+def test_opening_queue_window_uses_its_independent_offset():
+    settings = EvaluatorSettings(id=1, queue_before_close_minutes=120, queue_before_open_minutes=60)
+    queue_at, opens_at = scheduled_enqueue_window(date(2026, 11, 27), settings, "open")
+    assert queue_at.astimezone(NY).time() == time(8, 30)
+    assert opens_at.astimezone(NY).time() == time(9, 30)
