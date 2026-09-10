@@ -30,7 +30,9 @@ from .valuation import (
 HORIZONS = tuple(step / 2 for step in range(1, 41))
 DIRECT_SEARCH_FAMILY_SIZE = len(HORIZONS)
 Evidence = Literal["pending", "inconclusive", "positive", "negative"]
-HorizonObjective = Literal["ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"]
+HorizonObjective = Literal[
+    "signal_mean_daily_alpha", "ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"
+]
 
 
 @dataclass(frozen=True)
@@ -461,6 +463,7 @@ def policy_metrics(
     )
     alphas = [point["alpha"] for point in result.daily_returns if point["alpha"] is not None]
     metrics.update(hac_mean_statistics(alphas, lag=math.ceil(result.horizon) - 1, family_size=family_size))
+    metrics["signal_mean_daily_alpha"] = completion["mean_daily_alpha"]
     metrics.update(
         {key: completion[key] for key in ("complete_count", "open_count", "completion_ratio", "eligible")}
     )
@@ -470,7 +473,7 @@ def policy_metrics(
 
 
 def select_policy(
-    candidates: list[PolicyResult], objective: HorizonObjective = "ci_lower"
+    candidates: list[PolicyResult], objective: HorizonObjective = "signal_mean_daily_alpha"
 ) -> PolicyResult | None:
     if objective not in get_args(HorizonObjective):
         raise ValueError("Unknown horizon optimization objective")

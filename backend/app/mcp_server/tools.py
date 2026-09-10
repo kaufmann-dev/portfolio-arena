@@ -163,7 +163,9 @@ def get_portfolio(slug_or_id: str) -> dict:
 
 
 @mcp.tool()
-def get_arena_overview(direction: str, version_id: int, objective: HorizonObjective = "ci_lower") -> dict:
+def get_arena_overview(
+    direction: str, version_id: int, objective: HorizonObjective = "signal_mean_daily_alpha"
+) -> dict:
     """Managed and portfolio-tuned rebuilt summaries within one Arena version and direction."""
     selected_direction = _direction(direction)
     with _session() as session:
@@ -210,7 +212,9 @@ def get_arena_overview(direction: str, version_id: int, objective: HorizonObject
 
 
 @mcp.tool()
-def get_rebuilt_analysis(direction: str, version_id: int, objective: HorizonObjective = "ci_lower") -> dict:
+def get_rebuilt_analysis(
+    direction: str, version_id: int, objective: HorizonObjective = "signal_mean_daily_alpha"
+) -> dict:
     """Portfolio-tuned rebuilt rankings and all H0.5–H20 signal alpha observations."""
     selected_direction = _direction(direction)
     with _session() as session:

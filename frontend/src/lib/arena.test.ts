@@ -23,7 +23,7 @@ describe("Arena version navigation", () => {
   });
   it("preserves track, direction and version in portfolio links", () => {
     expect(portfolioAnalysisHref("sample", "rebuilt", "short", 1)).toBe(
-      "/p/sample?track=rebuilt&direction=short&version=1&objective=ci_lower",
+      "/p/sample?track=rebuilt&direction=short&version=1&objective=signal_mean_daily_alpha",
     );
   });
   it("preserves the optimization objective only for rebuilt portfolio links", () => {
@@ -34,10 +34,10 @@ describe("Arena version navigation", () => {
       "/p/sample?track=managed&direction=long&version=2",
     );
   });
-  it("accepts the five objectives and defaults invalid URLs to adjusted lower 95%", () => {
+  it("accepts all six objectives and defaults invalid URLs to signal alpha", () => {
     for (const { value } of HORIZON_OBJECTIVES) expect(parseHorizonObjective(value)).toBe(value);
-    expect(parseHorizonObjective(null)).toBe("ci_lower");
-    expect(parseHorizonObjective("unknown")).toBe("ci_lower");
+    expect(parseHorizonObjective(null)).toBe("signal_mean_daily_alpha");
+    expect(parseHorizonObjective("unknown")).toBe("signal_mean_daily_alpha");
   });
   it("defaults unknown directions to long", () => {
     expect(parseDirection("short")).toBe("short");

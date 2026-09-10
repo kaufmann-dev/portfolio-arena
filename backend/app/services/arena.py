@@ -43,7 +43,7 @@ from .valuation import (
 
 SPY_SYMBOL = "SPY"
 MarketDataStatus = Literal["fresh", "updating", "stale", "unavailable"]
-ANALYTICS_ENGINE_VERSION = 2
+ANALYTICS_ENGINE_VERSION = 3
 
 
 @dataclass
@@ -92,7 +92,7 @@ class RebuiltArena:
     spy_series: Series
     calendar: list[Boundary]
     by_portfolio_id: dict[int, RebuiltPortfolioAnalysis] = field(default_factory=dict)
-    objective: HorizonObjective = "ci_lower"
+    objective: HorizonObjective = "signal_mean_daily_alpha"
 
 
 _managed_cache: SingleFlightLru[str, tuple] = SingleFlightLru(max_entries=256)
@@ -361,7 +361,7 @@ def compute_rebuilt_arena(
     portfolios: list[Portfolio],
     now: datetime | None = None,
     *,
-    objective: HorizonObjective = "ci_lower",
+    objective: HorizonObjective = "signal_mean_daily_alpha",
 ) -> RebuiltArena:
     portfolios = [portfolio for portfolio in portfolios if portfolio.prompt_mode == "rebuilt"]
     now = now or datetime.now(UTC)

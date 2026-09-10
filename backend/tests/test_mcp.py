@@ -143,6 +143,7 @@ class TestMcpTools:
         assert data["managed"]["portfolios"]
         assert data["managed"]["market_data_status"] == "fresh"
         assert data["rebuilt"]["portfolios"][0]["kind"] == "benchmark"
+        assert data["rebuilt"]["objective"] == "signal_mean_daily_alpha"
         # Curated: the token-heavy sparkline is stripped.
         assert all(
             "sparkline" not in row for row in data["managed"]["portfolios"] if row["kind"] != "benchmark"
@@ -503,3 +504,31 @@ class TestMcpTools:
         result = response.json()["result"]
         assert result["isError"]
         assert "not found" in result["content"][0]["text"].lower()
+
+
+def test_rebuilt_mcp_default_matches_public_signal_alpha(
+    client, mcp_headers, admin_headers, sample_agent, sample_prompt
+):
+    from datetime import date
+
+    from .test_v2_public_api import _create_rebuilt, _insert_signals, _row, _weekdays
+
+    portfolio = _create_rebuilt(client, admin_headers, sample_agent, sample_prompt, "MCP Signal Alpha")
+    _insert_signals(portfolio["id"], _weekdays(date(2026, 1, 5), 30))
+    default = _call_tool(client, mcp_headers, "get_rebuilt_analysis", {"version_id": 1, "direction": "long"})
+    explicit = _call_tool(
+        client,
+        mcp_headers,
+        "get_rebuilt_analysis",
+        {"version_id": 1, "direction": "long", "objective": "signal_mean_daily_alpha"},
+    )
+    assert default == explicit
+    assert default["objective"] == "signal_mean_daily_alpha"
+    public = client.get("/api/arena/rebuilt?version_id=1&direction=long").json()
+    row = _row(default, portfolio["slug"])
+    assert row["selected_policy"] is not None
+    assert row["metrics"] == _row(public, portfolio["slug"])["metrics"]
+    selected_signal = next(
+        item for item in row["signal_horizons"] if item["horizon"] == row["selected_policy"]["horizon"]
+    )
+    assert row["metrics"]["signal_mean_daily_alpha"] == selected_signal["mean_daily_alpha"]

@@ -1,15 +1,16 @@
 import type { ArenaVersion, Direction, HorizonObjective } from "./api/types";
 
 export const HORIZON_OBJECTIVES: { value: HorizonObjective; label: string }[] = [
+  { value: "signal_mean_daily_alpha", label: "Signal α/day" },
   { value: "ci_lower", label: "Adjusted lower 95%" },
   { value: "information_ratio", label: "Information ratio" },
   { value: "sharpe", label: "Sharpe" },
-  { value: "mean_daily_alpha", label: "Mean daily alpha" },
+  { value: "mean_daily_alpha", label: "Portfolio α/day" },
   { value: "hit_rate", label: "Hit rate" },
 ];
 
 export function parseHorizonObjective(value: string | null): HorizonObjective {
-  return HORIZON_OBJECTIVES.find((option) => option.value === value)?.value ?? "ci_lower";
+  return HORIZON_OBJECTIVES.find((option) => option.value === value)?.value ?? "signal_mean_daily_alpha";
 }
 
 export function horizonObjectiveLabel(value: HorizonObjective): string {
@@ -35,7 +36,7 @@ export function portfolioAnalysisHref(
   track: "managed" | "rebuilt",
   direction: Direction,
   versionId: number,
-  objective: HorizonObjective = "ci_lower",
+  objective: HorizonObjective = "signal_mean_daily_alpha",
 ): string {
   const query = new URLSearchParams({ track, direction, version: String(versionId) });
   if (track === "rebuilt") query.set("objective", objective);

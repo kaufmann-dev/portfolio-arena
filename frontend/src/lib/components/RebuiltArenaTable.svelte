@@ -3,14 +3,20 @@
 
   import type { BenchmarkArenaPortfolio, RebuiltArenaPortfolio, RebuiltArenaResponse } from "../api/types";
   import { portfolioAnalysisHref } from "../arena";
-  import { fmtDate, num, pct, pctPoints, pctSignClass } from "../format";
+  import { fmtDate, num, pct, pctSignClass } from "../format";
   import { link, versionHref } from "../stores/router.svelte";
   import EvidenceBadge from "./EvidenceBadge.svelte";
   import SelectField from "./ui/SelectField.svelte";
 
   type Row = RebuiltArenaResponse["portfolios"][number];
   type SortKey =
-    "rank_score" | "mean_daily_alpha" | "information_ratio" | "sharpe" | "hit_rate" | "completion_ratio";
+    | "rank_score"
+    | "signal_mean_daily_alpha"
+    | "mean_daily_alpha"
+    | "information_ratio"
+    | "sharpe"
+    | "hit_rate"
+    | "completion_ratio";
 
   interface Props {
     rows: Row[];
@@ -20,7 +26,8 @@
 
   const POLICY_SORT_OPTIONS: { value: SortKey; label: string }[] = [
     { value: "rank_score", label: "Adjusted lower 95%" },
-    { value: "mean_daily_alpha", label: "Mean daily alpha" },
+    { value: "signal_mean_daily_alpha", label: "Signal α/day" },
+    { value: "mean_daily_alpha", label: "Portfolio α/day" },
     { value: "information_ratio", label: "Information ratio" },
     { value: "sharpe", label: "Sharpe" },
     { value: "hit_rate", label: "Hit rate" },
@@ -187,7 +194,8 @@
           <th scope="col">Prompt</th>
           <th scope="col" class="right">Horizon</th>
           {@render sortHeader("rank_score", "Lower 95%")}
-          {@render sortHeader("mean_daily_alpha", "Mean α/day")}
+          {@render sortHeader("signal_mean_daily_alpha", "Signal α/day")}
+          {@render sortHeader("mean_daily_alpha", "Portfolio α/day")}
 
           {@render sortHeader("information_ratio", "Info ratio")}
           {@render sortHeader("sharpe", "Sharpe")}
@@ -209,6 +217,7 @@
             <td>{benchmark.direction === "short" ? "Daily −1× SPY" : "Buy and hold SPY"}</td>
             <td class="right num">—</td>
             <td class="right num">0.00%</td>
+            <td class="right num">{pct(benchmark.metrics.signal_mean_daily_alpha, 2)}</td>
             <td class="right num">0.00%</td>
 
             <td class="right num">—</td>
@@ -243,6 +252,9 @@
             <td class="right num score {pctSignClass(row.rank_score, 2)}">
               {pct(row.rank_score, 2)}
             </td>
+            <td class="right num {pctSignClass(row.metrics.signal_mean_daily_alpha, 2)}">
+              {pct(row.metrics.signal_mean_daily_alpha, 2)}
+            </td>
             <td class="right num {pctSignClass(row.metrics.mean_daily_alpha, 2)}">
               {pct(row.metrics.mean_daily_alpha, 2)}
             </td>
@@ -260,7 +272,7 @@
           </tr>
         {:else}
           <tr>
-            <td colspan="12" class="table-empty"> No rebuilt portfolios match these filters. </td>
+            <td colspan="13" class="table-empty"> No rebuilt portfolios match these filters. </td>
           </tr>
         {/each}
       </tbody>
@@ -315,7 +327,12 @@
         <dl>
           {@render metricTile("Lower 95%", pct(row.rank_score, 2), pctSignClass(row.rank_score, 2))}
           {@render metricTile(
-            "Mean α/day",
+            "Signal α/day",
+            pct(row.metrics.signal_mean_daily_alpha, 2),
+            pctSignClass(row.metrics.signal_mean_daily_alpha, 2),
+          )}
+          {@render metricTile(
+            "Portfolio α/day",
             pct(row.metrics.mean_daily_alpha, 2),
             pctSignClass(row.metrics.mean_daily_alpha, 2),
           )}

@@ -170,11 +170,12 @@ def test_selection_uses_lower_bound_then_shorter_horizon():
     def candidate(horizon, score):
         return PolicyResult(horizon, [], [], [], [], [], 0, metrics={"eligible": True, "ci_lower": score})
 
-    assert select_policy([candidate(5, 0.1), candidate(1, 0.1), candidate(0.5, 0)]).horizon == 1
+    assert select_policy([candidate(5, 0.1), candidate(1, 0.1), candidate(0.5, 0)], "ci_lower").horizon == 1
 
 
 @pytest.mark.parametrize(
-    "objective", ["ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"]
+    "objective",
+    ["signal_mean_daily_alpha", "ci_lower", "information_ratio", "sharpe", "mean_daily_alpha", "hit_rate"],
 )
 def test_selection_maximizes_requested_metric_and_breaks_ties_with_shorter_horizon(objective):
     def candidate(horizon, score, *, eligible=True):
@@ -208,9 +209,9 @@ def test_different_objectives_can_select_different_horizons_without_mutating_can
     )
     sharpe = PolicyResult(5, [], [], [], [], [], 0, metrics={"eligible": True, "ci_lower": 0.1, "sharpe": 2})
     candidates = [lower_bound, sharpe]
-    assert select_policy(candidates) is lower_bound
+    assert select_policy(candidates, "ci_lower") is lower_bound
     assert select_policy(candidates, "sharpe") is sharpe
-    assert select_policy(candidates) is lower_bound
+    assert select_policy(candidates, "ci_lower") is lower_bound
     with pytest.raises(ValueError, match="Unknown horizon optimization objective"):
         select_policy(candidates, "unknown")
 
@@ -236,3 +237,55 @@ def test_initial_rebuilt_trade_measures_rotation_from_reference():
     result = construct_policy([signal(1, days[0])], data, calendar, 1)
     # One full rotation into AAPL and one full rotation back into SPY.
     assert result.cumulative_turnover_pct == pytest.approx(200)
+
+
+@pytest.mark.parametrize("benchmark_close", [100.0, 100.4])
+def test_signal_alpha_normalizes_each_half_session_before_averaging(benchmark_close):
+    days, data, calendar = market()
+    data["AAPL"][0]["close"] = 100.8
+    data["AAPL"][1]["close"] = 102.0
+    data["SPY"][0]["close"] = benchmark_close
+    signals = [signal(1, days[0]), signal(2, days[1]), signal(3, days[-1])]
+    # End at the last open so the third signal is still open at H0.5.
+    horizons, policies = evaluate_policy_grid(signals, data, calendar[:-1], execution_boundary="open")
+    half = next(item for item in horizons if item["horizon"] == 0.5)
+    expected = (((100.8 / benchmark_close) ** 2 - 1) + (1.02**2 - 1)) / 2
+    assert half["mean_daily_alpha"] == pytest.approx(expected)
+    assert half["complete_count"] == 2
+    assert half["open_count"] == 1
+    for horizon, policy in zip(horizons, policies, strict=True):
+        assert policy.metrics["signal_mean_daily_alpha"] == horizon["mean_daily_alpha"]
+    selected = select_policy(policies)
+    assert selected is not None
+    matching = next(item for item in horizons if item["horizon"] == selected.horizon)
+    assert selected.metrics["signal_mean_daily_alpha"] == matching["mean_daily_alpha"]
+
+
+def test_default_signal_objective_differs_from_portfolio_alpha_without_mutating_grid():
+    from copy import deepcopy
+
+    def candidate(horizon, signal_alpha, portfolio_alpha):
+        return PolicyResult(
+            horizon,
+            [],
+            [],
+            [],
+            [],
+            [],
+            0,
+            metrics={
+                "eligible": True,
+                "ci_lower": -0.01,
+                "signal_mean_daily_alpha": signal_alpha,
+                "mean_daily_alpha": portfolio_alpha,
+            },
+        )
+
+    signal_best = candidate(0.5, 0.0162, 0.0054)
+    portfolio_best = candidate(2, 0.01, 0.007)
+    candidates = [signal_best, portfolio_best]
+    before = deepcopy(candidates)
+    assert select_policy(candidates) is signal_best
+    assert select_policy(candidates, "mean_daily_alpha") is portfolio_best
+    assert select_policy(candidates) is signal_best
+    assert candidates == before
