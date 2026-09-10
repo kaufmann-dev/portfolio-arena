@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { apiJson, postJson, putJson } from "../api/client";
+  import { apiJson, del, postJson, putJson } from "../api/client";
   import type {
     EvaluationQueueResponse,
     EvaluationRun,
@@ -14,7 +14,8 @@
   import SelectField, { type SelectOption } from "./ui/SelectField.svelte";
   import ToggleSwitch from "./ui/ToggleSwitch.svelte";
 
-  const { versionId }: { versionId: number } = $props();
+  const { versionId, onHistoryChange }: { versionId: number; onHistoryChange: () => Promise<void> } =
+    $props();
 
   const WEEKDAYS = [
     { value: 0, label: "Mon" },
@@ -51,8 +52,9 @@
   let busyAction = $state("");
   let error = $state("");
   let notice = $state("");
-  let cancelTarget = $state.raw<EvaluationRun | null>(null);
-  let cancelDialogOpen = $state(false);
+  let actionTarget = $state.raw<EvaluationRun | null>(null);
+  let runAction = $state<"cancel" | "delete">("cancel");
+  let actionDialogOpen = $state(false);
   let expandedRunIds = $state<number[]>([]);
 
   const enabledPortfolioIds = $derived(
@@ -246,25 +248,34 @@
     }
   }
 
-  function cancelRun(run: EvaluationRun) {
+  function requestRunAction(run: EvaluationRun, action: "cancel" | "delete") {
     error = "";
-    cancelTarget = run;
-    cancelDialogOpen = true;
+    actionTarget = run;
+    runAction = action;
+    actionDialogOpen = true;
   }
 
-  async function confirmCancelRun() {
-    const run = cancelTarget;
-    if (!run || busyAction === `cancel-${run.id}`) return;
-    busyAction = `cancel-${run.id}`;
+  async function confirmRunAction() {
+    const run = actionTarget;
+    const action = runAction;
+    if (!run || busyAction) return;
+    busyAction = `${action}-${run.id}`;
     error = "";
     try {
-      await apiJson(`/api/evaluator/runs/${run.id}/cancel`, { method: "POST" });
-      notice = `Cancellation requested for run #${run.id}.`;
+      if (action === "delete") {
+        await del(`/api/evaluator/runs/${run.id}`);
+        expandedRunIds = expandedRunIds.filter((id) => id !== run.id);
+        notice = `Evaluation #${run.id} and its result deleted.`;
+        await onHistoryChange();
+      } else {
+        await postJson(`/api/evaluator/runs/${run.id}/cancel`, {});
+        notice = `Cancellation requested for run #${run.id}.`;
+      }
       await Promise.all([loadDashboard(), loadRuns(true)]);
-      cancelDialogOpen = false;
-      cancelTarget = null;
+      actionDialogOpen = false;
+      actionTarget = null;
     } catch (e) {
-      error = e instanceof Error ? e.message : "Could not cancel evaluation.";
+      error = e instanceof Error ? e.message : `Could not ${action} evaluation.`;
     } finally {
       busyAction = "";
     }
@@ -671,7 +682,7 @@
                     <button
                       class="btn small danger"
                       type="button"
-                      onclick={() => cancelRun(run)}
+                      onclick={() => requestRunAction(run, "cancel")}
                       disabled={busyAction === `cancel-${run.id}`}
                     >
                       Cancel
@@ -687,9 +698,14 @@
                     >
                       Retry
                     </button>
-                  {:else}
-                    <span class="muted">—</span>
                   {/if}
+                  <button
+                    class="btn small danger"
+                    type="button"
+                    onclick={() => requestRunAction(run, "delete")}
+                    disabled={Boolean(busyAction)}
+                    aria-label={`Delete evaluation #${run.id} for ${run.portfolio.name}`}>Delete</button
+                  >
                 </div>
               </td>
             </tr>
@@ -737,15 +753,17 @@
   </section>
 </div>
 
-{#if cancelTarget}
+{#if actionTarget}
   <ConfirmDialog
-    bind:open={cancelDialogOpen}
-    title="Cancel evaluation?"
-    description={`Run #${cancelTarget.id} for ${cancelTarget.portfolio.name} will receive a cancellation request. A running worker may need a moment to stop.`}
-    confirmLabel="Cancel evaluation"
-    busy={busyAction === `cancel-${cancelTarget.id}`}
+    bind:open={actionDialogOpen}
+    title={runAction === "delete" ? "Delete evaluation?" : "Cancel evaluation?"}
+    description={runAction === "delete"
+      ? `Run #${actionTarget.id} for ${actionTarget.portfolio.name}, its report and its allocation or signal will be permanently removed. Performance will be recalculated from the remaining history. Any running worker will stop.`
+      : `Run #${actionTarget.id} for ${actionTarget.portfolio.name} will receive a cancellation request. A running worker may need a moment to stop.`}
+    confirmLabel={runAction === "delete" ? "Delete evaluation" : "Cancel evaluation"}
+    busy={Boolean(busyAction)}
     {error}
-    onConfirm={confirmCancelRun}
+    onConfirm={confirmRunAction}
   />
 {/if}
 

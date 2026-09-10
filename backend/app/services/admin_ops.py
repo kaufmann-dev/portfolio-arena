@@ -1223,59 +1223,17 @@ def delete_portfolio(session: Session, portfolio_id: int) -> dict:
 
 
 def reset_portfolio(session: Session, portfolio_id: int) -> dict:
-    """Delete the portfolio's mode-specific history while preserving identity,
-    evaluator configuration, and evaluator audit rows."""
+    """Delete all decisions and evaluation runs, preserving identity and configuration."""
     portfolio = _lock_portfolio_lifecycle(session, portfolio_id)
-
-    cancelled_queued_runs = 0
-    cancellation_requested_runs = 0
-    now = datetime.now(UTC)
-    active_runs = session.scalars(
-        select(EvaluationRun)
-        .where(
-            EvaluationRun.portfolio_id == portfolio.id,
-            EvaluationRun.status.in_({"queued", "running", "cancel_requested"}),
-        )
-        .with_for_update()
-    ).all()
-    for run in active_runs:
-        if run.status == "queued":
-            run.status = "cancelled"
-            run.finished_at = now
-            run.error = "Cancelled because the portfolio was reset."
-            cancelled_queued_runs += 1
-        else:
-            if run.status == "running":
-                run.status = "cancel_requested"
-            run.error = "Cancellation requested because the portfolio was reset."
-            cancellation_requested_runs += 1
-
-    deleted_allocations = 0
-    deleted_signals = 0
-    if portfolio.prompt_mode == "managed":
-        deleted_allocations = int(
-            session.scalar(
-                select(func.count()).select_from(Allocation).where(Allocation.portfolio_id == portfolio.id)
-            )
-            or 0
-        )
-        session.execute(delete(Allocation).where(Allocation.portfolio_id == portfolio.id))
-    else:
-        deleted_signals = int(
-            session.scalar(
-                select(func.count()).select_from(Signal).where(Signal.portfolio_id == portfolio.id)
-            )
-            or 0
-        )
-        session.execute(delete(Signal).where(Signal.portfolio_id == portfolio.id))
+    deleted = {}
+    for model, key in (
+        (EvaluationRun, "deleted_evaluation_runs"),
+        (Allocation, "deleted_allocations"),
+        (Signal, "deleted_signals"),
+    ):
+        deleted[key] = session.execute(delete(model).where(model.portfolio_id == portfolio.id)).rowcount
     session.commit()
-    return {
-        "ok": True,
-        "deleted_allocations": deleted_allocations,
-        "deleted_signals": deleted_signals,
-        "cancelled_queued_runs": cancelled_queued_runs,
-        "cancellation_requested_runs": cancellation_requested_runs,
-    }
+    return {"ok": True, **deleted}
 
 
 def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
@@ -1474,17 +1432,23 @@ def update_allocation(
     return serialize_allocation(reload_allocation(session, allocation.id), admin=True)
 
 
-def delete_allocation(session: Session, allocation_id: int) -> dict:
-    allocation = session.scalars(
-        select(Allocation).where(Allocation.id == allocation_id).options(selectinload(Allocation.portfolio))
-    ).first()
-    if allocation is None:
-        raise AdminOpError(404, "Allocation not found")
-    if is_locked(allocation.effective_date, datetime.now(UTC), allocation.portfolio.execution_boundary):
-        raise AdminOpError(403, "This allocation is locked: its effective boundary has passed.")
-    session.delete(allocation)
+def _delete_decision(session: Session, model: type[Allocation] | type[Signal], decision_id: int) -> dict:
+    portfolio_id = session.scalar(select(model.portfolio_id).where(model.id == decision_id))
+    if portfolio_id is None:
+        raise AdminOpError(404, f"{model.__name__} not found")
+    _lock_portfolio_lifecycle(session, portfolio_id)
+    decision = session.get(model, decision_id, populate_existing=True)
+    if decision is None:
+        raise AdminOpError(404, f"{model.__name__} not found")
+    result_column = EvaluationRun.allocation_id if model is Allocation else EvaluationRun.signal_id
+    session.execute(delete(EvaluationRun).where(result_column == decision_id))
+    session.delete(decision)
     session.commit()
     return {"ok": True}
+
+
+def delete_allocation(session: Session, allocation_id: int) -> dict:
+    return _delete_decision(session, Allocation, allocation_id)
 
 
 # --- Rebuilt signals --------------------------------------------------------
@@ -1608,21 +1572,8 @@ def update_signal(
     return serialize_signal(reload_signal(session, signal.id), admin=True, now=current_time)
 
 
-def delete_signal(
-    session: Session,
-    signal_id: int,
-    *,
-    now: datetime | None = None,
-) -> dict:
-    current_time = now or datetime.now(UTC)
-    signal = session.scalars(select(Signal).where(Signal.id == signal_id).with_for_update()).first()
-    if signal is None:
-        raise AdminOpError(404, "Signal not found.")
-    if is_locked(signal.effective_date, current_time, signal.portfolio.execution_boundary):
-        raise AdminOpError(403, "This signal is immutable: its effective boundary has passed.")
-    session.delete(signal)
-    session.commit()
-    return {"ok": True}
+def delete_signal(session: Session, signal_id: int) -> dict:
+    return _delete_decision(session, Signal, signal_id)
 
 
 # --- Settings ---------------------------------------------------------------

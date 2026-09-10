@@ -302,11 +302,11 @@ class TestLockEnforcement:
         assert response.status_code == 403
         assert "frozen" in response.json()["detail"]
 
-    def test_locked_allocation_not_deletable(self, client, admin_headers, sample_portfolio):
+    def test_locked_allocation_deletable(self, client, admin_headers, sample_portfolio):
         allocation_id = sample_portfolio["allocation"]["id"]
         backdate_allocation(allocation_id)
         response = client.delete(f"/api/allocations/{allocation_id}", headers=admin_headers)
-        assert response.status_code == 403
+        assert response.status_code == 200
 
     def test_delete_last_pending_allocation_clears_managed_history(
         self,

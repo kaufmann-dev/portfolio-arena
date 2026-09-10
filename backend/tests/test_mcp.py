@@ -105,6 +105,7 @@ class TestMcpTools:
             "configure_portfolio_evaluator",
             "run_evaluations",
             "cancel_evaluation_run",
+            "delete_evaluation_run",
             "retry_evaluation_run",
             "list_evaluation_runs",
         } <= names

@@ -352,6 +352,11 @@ def cancel_evaluator_run(run_id: int, session: Session = Depends(get_session)):
     return _run(evaluator.cancel_run, session, run_id=run_id)
 
 
+@router.delete("/evaluator/runs/{run_id}")
+def delete_evaluator_run(run_id: int, session: Session = Depends(get_session)):
+    return _run(evaluator.delete_run, session, run_id=run_id)
+
+
 @router.post("/evaluator/runs/{run_id}/retry", status_code=201)
 def retry_evaluator_run(run_id: int, session: Session = Depends(get_session)):
     return _run(evaluator.retry_run, session, run_id=run_id)
