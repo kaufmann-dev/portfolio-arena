@@ -78,11 +78,7 @@ def managed_arena(
     request: Request, version_id: int, direction: Direction, session: Session = Depends(get_session)
 ):
     _version(session, version_id)
-    portfolios = [
-        portfolio
-        for portfolio in load_portfolios(session, version_id)
-        if portfolio.prompt_mode == "managed" and portfolio.direction == direction
-    ]
+    portfolios = load_portfolios(session, version_id, prompt_mode="managed", direction=direction)
     allocation_policy = allocation_policy_out(admin_ops.get_app_settings(session), "managed")
     valuations = compute_valuations(session, portfolios)
     rows = [
@@ -123,11 +119,7 @@ def rebuilt_arena(
     session: Session = Depends(get_session),
 ):
     _version(session, version_id)
-    portfolios = [
-        portfolio
-        for portfolio in load_portfolios(session, version_id)
-        if portfolio.prompt_mode == "rebuilt" and portfolio.direction == direction
-    ]
+    portfolios = load_portfolios(session, version_id, prompt_mode="rebuilt", direction=direction)
     arena = compute_rebuilt_arena(session, portfolios, objective=objective)
     allocation_policy = allocation_policy_out(admin_ops.get_app_settings(session), "rebuilt")
     rows = [
@@ -168,12 +160,10 @@ def portfolio_detail(
     objective: HorizonObjective = "signal_mean_daily_alpha",
     session: Session = Depends(get_session),
 ):
-    record = session.scalar(select(Portfolio).where(Portfolio.slug == slug))
-    if record is None:
+    matches = load_portfolios(session, slugs=[slug])
+    if not matches:
         raise HTTPException(404, "Portfolio not found")
-    match = next(
-        portfolio for portfolio in load_portfolios(session, record.version_id) if portfolio.id == record.id
-    )
+    match = matches[0]
     settings = admin_ops.get_app_settings(session)
     policy = allocation_policy_out(settings, match.prompt_mode)
     direction_instructions = settings[f"{match.direction}_direction_instructions"]
@@ -241,7 +231,7 @@ def compare(
     wanted = list(dict.fromkeys(part.strip() for part in slugs.split(",") if part.strip()))
     if not wanted or len(wanted) > 8:
         raise HTTPException(422, "Pass 1-8 portfolio slugs.")
-    by_slug = {portfolio.slug: portfolio for portfolio in load_portfolios(session, version_id)}
+    by_slug = {portfolio.slug: portfolio for portfolio in load_portfolios(session, version_id, slugs=wanted)}
     if missing := [slug for slug in wanted if slug not in by_slug]:
         raise HTTPException(404, f"Portfolio not found in this version: {', '.join(missing)}")
     selected = [by_slug[slug] for slug in wanted]

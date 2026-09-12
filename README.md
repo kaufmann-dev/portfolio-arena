@@ -38,6 +38,13 @@ The project measures cost-free paper performance for research.
   I/O and retain the latest complete boundary while new data is `updating`. After ten minutes of
   publication lag it is `stale`; missing required history is `unavailable`. Missing openings are
   never replaced with closing prices. Paused versions continue receiving market data.
+- **Browsing:** the SPA retains up to 64 public ranking, detail, comparison, and version responses
+  in browser memory across navigation. Visited views display immediately; responses older than
+  five minutes refresh in the background when revisited or focused. Visible analysis pages also
+  refresh every five minutes, retaining displayed results during requests and temporary failures.
+  Successful browser-admin writes invalidate these responses immediately. A page reload clears
+  them; external changes appear on the next refresh. The displayed valuation boundary and the
+  provider's 15-minute publication delay still apply. First visits fetch results normally.
 
 ## Experiment-integrity rules
 

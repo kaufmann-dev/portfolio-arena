@@ -500,3 +500,57 @@ class TestAdminMisc:
         response = client.get("/api/symbols/search?q=AAP", headers=admin_headers)
         assert response.status_code == 200
         assert any(item["symbol"] == "AAPL" for item in response.json()["results"])
+
+
+def test_analysis_reads_load_only_requested_portfolios(client, admin_headers, sample_agent, sample_prompt):
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    from app.models import Portfolio
+
+    portfolios = {}
+    for track in ("managed", "rebuilt"):
+        for direction in ("long", "short"):
+            response = client.post(
+                "/api/portfolios",
+                json={
+                    "name": f"Scoped {track} {direction}",
+                    "version_id": 1,
+                    "agent_id": sample_agent["id"],
+                    "prompt_id": sample_prompt["id"],
+                    "prompt_mode": track,
+                    "direction": direction,
+                },
+                headers=admin_headers,
+            )
+            assert response.status_code == 201, response.text
+            portfolios[track, direction] = response.json()
+
+    loaded_ids = []
+
+    def record_load(session, instance):
+        if isinstance(instance, Portfolio):
+            loaded_ids.append(instance.id)
+
+    event.listen(Session, "loaded_as_persistent", record_load)
+    try:
+        for (track, direction), portfolio in portfolios.items():
+            loaded_ids.clear()
+            response = client.get(f"/api/arena/{track}?version_id=1&direction={direction}")
+            assert response.status_code == 200, response.text
+            assert loaded_ids == [portfolio["id"]]
+            loaded_ids.clear()
+            response = client.get(f"/api/portfolios/{portfolio['slug']}")
+            assert response.status_code == 200, response.text
+            assert loaded_ids == [portfolio["id"]]
+
+        loaded_ids.clear()
+        first = portfolios["managed", "long"]
+        second = portfolios["rebuilt", "short"]
+        response = client.get(
+            f"/api/compare?version_id=1&track=managed&direction=long&slugs={first['slug']},{second['slug']}"
+        )
+        assert response.status_code == 422
+        assert set(loaded_ids) == {first["id"], second["id"]}
+    finally:
+        event.remove(Session, "loaded_as_persistent", record_load)
