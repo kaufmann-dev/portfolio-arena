@@ -44,7 +44,11 @@ The project measures cost-free paper performance for research.
   refresh every five minutes, retaining displayed results during requests and temporary failures.
   Successful browser-admin writes invalidate these responses immediately. A page reload clears
   them; external changes appear on the next refresh. The displayed valuation boundary and the
-  provider's 15-minute publication delay still apply. First visits fetch results normally.
+  provider's 15-minute publication delay still apply. The selected arena view loads first, then
+  the other three long/short and rebuilt/managed views load in the background, one at a time,
+  for the same version and optimization objective. Switching to a warmed view uses its saved
+  response; switching during its load shares that request. Leaving or hiding the page cancels
+  queued work, while an in-flight request can finish populating the cache.
 
 ## Experiment-integrity rules
 
