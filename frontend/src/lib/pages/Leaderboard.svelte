@@ -3,6 +3,7 @@
 
   import { router } from "../stores/router.svelte";
   import { getPublicQuery, PUBLIC_REFRESH_MS } from "../api/publicCache";
+  import { arenaQueryUrl, ArenaPrefetchQueue } from "../api/arenaPrefetch";
   import type {
     ArenaTrack,
     ArenaVersion,
@@ -85,9 +86,7 @@
     versionId === null
       ? null
       : getPublicQuery<ManagedArenaResponse | RebuiltArenaResponse>(
-          track === "managed"
-            ? `/api/arena/managed?direction=${direction}&version_id=${versionId}`
-            : `/api/arena/rebuilt?direction=${direction}&version_id=${versionId}&objective=${objective}`,
+          arenaQueryUrl({ versionId, track, direction, objective }),
         ),
   );
   const currentData = $derived(arenaQuery?.data ?? null);
@@ -183,6 +182,10 @@
   const activeTrackDescription = $derived(TRACKS.find((item) => item.value === track)?.description ?? "");
 
   let mounted = false;
+  const prefetch = new ArenaPrefetchQueue(
+    (url) => getPublicQuery(url).load(),
+    () => mounted && document.visibilityState === "visible" && !arenaQuery?.loading,
+  );
   onMount(() => {
     mounted = true;
     writeDirectionUrl(direction);
@@ -192,6 +195,7 @@
     }, PUBLIC_REFRESH_MS);
     return () => {
       mounted = false;
+      prefetch.cancel();
       window.clearInterval(refreshTimer);
     };
   });
@@ -207,8 +211,13 @@
     router.syncVersion();
   }
 
-  function loadArena(force = false): Promise<void> {
-    return arenaQuery?.load(force) ?? Promise.resolve();
+  async function loadArena(force = false): Promise<void> {
+    prefetch.cancel();
+    const query = arenaQuery;
+    if (!query || versionId === null) return;
+    const view = { versionId, track, direction, objective };
+    await query.load(force);
+    if (mounted && query === arenaQuery && query.data && !query.error) prefetch.schedule(view);
   }
 
   function loadComparison(force = false): Promise<void> {
@@ -295,6 +304,12 @@
 </svelte:head>
 
 <svelte:window onfocus={() => void refreshVisible()} />
+<svelte:document
+  onvisibilitychange={() => {
+    if (document.visibilityState === "visible") void refreshVisible();
+    else prefetch.cancel();
+  }}
+/>
 
 <section class="leaderboard-page" aria-labelledby="arena-title">
   <header class="page-head">
