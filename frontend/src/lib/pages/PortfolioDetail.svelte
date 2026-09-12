@@ -1,6 +1,7 @@
 <script lang="ts">
   import { decisionOutcomeLabel, referenceLabel } from "../allocation";
-  import { apiJson } from "../api/client";
+  import { onMount } from "svelte";
+  import { getPublicQuery, PUBLIC_REFRESH_MS } from "../api/publicCache";
   import type {
     ManagedPortfolioDetail,
     PortfolioAnalysisResponse,
@@ -65,12 +66,14 @@
   }
 
   function markersFor(data: PortfolioAnalysisResponse): string[] {
-    if (data.track === "managed") {
-      return data.portfolio.allocations
-        .map((allocation) => allocation.applied_at?.timestamp ?? null)
-        .filter((date): date is string => date !== null);
-    }
-    return data.portfolio.signals.map((signal) => signal.effective_at.timestamp);
+    const timestamps =
+      data.track === "managed"
+        ? data.portfolio.allocations
+            .map((allocation) => allocation.applied_at?.timestamp ?? null)
+            .filter((date): date is string => date !== null)
+        : data.portfolio.signals.map((signal) => signal.effective_at.timestamp);
+    // Multiple decisions may share an execution boundary, but chart markers are keyed by timestamp.
+    return [...new Set(timestamps)];
   }
 
   async function copyPrompt(executionPrompt: string | null): Promise<void> {
@@ -83,9 +86,14 @@
     }
   }
 
-  function requestErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : "Could not load this portfolio.";
-  }
+  const analysisQuery = $derived(getPublicQuery<PortfolioAnalysisResponse>(requestUrl(slug)));
+  onMount(() => {
+    void analysisQuery.load();
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void analysisQuery.load(true);
+    }, PUBLIC_REFRESH_MS);
+    return () => window.clearInterval(refreshTimer);
+  });
 </script>
 
 {#snippet metricTile(label: string, value: string, className = "")}
@@ -161,387 +169,389 @@
   </section>
 {/snippet}
 
-{#key slug}
-  {@const request = apiJson<PortfolioAnalysisResponse>(requestUrl(slug))}
-  {#await request}
-    <div class="loading-block">
-      <span class="spinner" aria-hidden="true"></span> Building portfolio analysis…
-    </div>
-  {:then data}
-    {@const portfolio = data.portfolio}
-    {@const managedPortfolio = data.track === "managed" ? (data.portfolio as ManagedPortfolioDetail) : null}
-    {@const rebuiltPortfolio = data.track === "rebuilt" ? (data.portfolio as RebuiltPortfolioDetail) : null}
-    {@const benchmarkName = portfolio.direction === "short" ? "Short SPY" : "SPY"}
-    {@const arenaHref = `/?version=${portfolio.version_id}&direction=${portfolio.direction}&track=${portfolio.prompt_mode}${rebuiltPortfolio ? `&objective=${rebuiltPortfolio.optimization_objective}` : ""}`}
-    {@const series = chartSeries(portfolio)}
-    {@const markers = markersFor(data)}
-    <article class="portfolio-detail">
-      <header class="detail-head split">
-        <div>
-          <nav class="crumbs" aria-label="Breadcrumb">
-            <a href={arenaHref} onclick={(event) => link(event, arenaHref)}>Portfolio Arena</a>
-            <span aria-hidden="true">/</span>
-            <span>{data.track === "rebuilt" ? "Rebuilt" : "Managed"}</span>
-          </nav>
-          <h1>{portfolio.name}</h1>
-          <p class="identity">
-            <a
-              href={versionHref(`/agent/${portfolio.agent.slug}`)}
-              onclick={(event) => link(event, `/agent/${portfolio.agent.slug}`)}
-            >
-              {portfolio.agent.name}
-            </a>
-            · prompt
-            <a
-              href={versionHref(`/prompt/${portfolio.prompt.slug}`)}
-              onclick={(event) => link(event, `/prompt/${portfolio.prompt.slug}`)}
-            >
-              {portfolio.prompt.name}
-            </a>
-            · {portfolio.direction} · {data.track}
-            {#if data.as_of}· as of <span class="num">{fmtDate(data.as_of)}</span>{/if}
-          </p>
-          {#if portfolio.execution_context_notice}
-            <p class="context-notice">{portfolio.execution_context_notice}</p>
-          {/if}
-          {#if portfolio.execution_prompt}
-            <div class="prompt-action">
-              <button class="btn small" type="button" onclick={() => copyPrompt(portfolio.execution_prompt)}>
-                Copy evaluation prompt
-              </button>
-              {#if copyResult}
-                <span class={copyResult === "error" ? "neg" : "muted"} role="status">
-                  {copyResult === "copied" ? "Copied." : "Copy failed."}
-                </span>
-              {/if}
-            </div>
-          {/if}
-        </div>
-        <div class="head-badges">
-          <span class="badge">{portfolio.direction}</span>
-          <span class="badge">{data.track}</span>
-          <span class="badge">{portfolio.execution_boundary === "open" ? "Open" : "Close"}</span>
-          <span class="badge">{portfolio.version.name}</span>
-          <EvidenceBadge state={portfolio.evidence} />
-          {#if portfolio.stale_data}<span class="badge warn">stale data</span>{/if}
-          {#if portfolio.frozen_symbols.length}
-            <span class="badge neg">{portfolio.frozen_symbols.length} frozen</span>
-          {/if}
-          {#if portfolio.is_liquidated}
-            <span class="badge neg">{data.track === "rebuilt" ? "policy liquidated" : "liquidated"}</span>
-          {/if}
-        </div>
-      </header>
+<svelte:window onfocus={() => void analysisQuery.load()} />
 
-      <MarketDataWarning
-        versionId={portfolio.version_id}
-        status={data.market_data_status}
-        asOf={data.as_of}
-      />
+{#if analysisQuery.error}
+  <div class="error-box" role="alert">
+    <span
+      >{analysisQuery.data
+        ? `Could not refresh; showing saved results. ${analysisQuery.error}`
+        : analysisQuery.error}</span
+    >
+    <button class="btn small" type="button" onclick={() => void analysisQuery.load(true)}>Retry</button>
+  </div>
+{/if}
+{#if !analysisQuery.data && !analysisQuery.error}
+  <div class="loading-block" aria-live="polite" aria-busy="true">
+    <span class="spinner" aria-hidden="true"></span> Loading portfolio analysis…
+  </div>
+{/if}
+{#if analysisQuery.data}
+  {@const data = analysisQuery.data}
+  {@const portfolio = data.portfolio}
+  {@const managedPortfolio = data.track === "managed" ? (data.portfolio as ManagedPortfolioDetail) : null}
+  {@const rebuiltPortfolio = data.track === "rebuilt" ? (data.portfolio as RebuiltPortfolioDetail) : null}
+  {@const benchmarkName = portfolio.direction === "short" ? "Short SPY" : "SPY"}
+  {@const arenaHref = `/?version=${portfolio.version_id}&direction=${portfolio.direction}&track=${portfolio.prompt_mode}${rebuiltPortfolio ? `&objective=${rebuiltPortfolio.optimization_objective}` : ""}`}
+  {@const series = chartSeries(portfolio)}
+  {@const markers = markersFor(data)}
+  <article class="portfolio-detail">
+    <header class="detail-head split">
+      <div>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <a href={arenaHref} onclick={(event) => link(event, arenaHref)}>Portfolio Arena</a>
+          <span aria-hidden="true">/</span>
+          <span>{data.track === "rebuilt" ? "Rebuilt" : "Managed"}</span>
+        </nav>
+        <h1>{portfolio.name}</h1>
 
-      {#if portfolio.error}
-        <div class="error-box" role="alert">Analysis failed: {portfolio.error}</div>
-      {/if}
-
-      {#if portfolio.is_liquidated}
-        <div class="card warning-card" role="status">
-          <strong
-            >{data.track === "rebuilt" ? "Selected policy" : "Portfolio"} liquidated{portfolio.liquidated_at
-              ? ` ${fmtDate(portfolio.liquidated_at)}`
-              : ""}.</strong
+        <p class="identity">
+          <a
+            href={versionHref(`/agent/${portfolio.agent.slug}`)}
+            onclick={(event) => link(event, `/agent/${portfolio.agent.slug}`)}
           >
+            {portfolio.agent.name}
+          </a>
+          · prompt
+          <a
+            href={versionHref(`/prompt/${portfolio.prompt.slug}`)}
+            onclick={(event) => link(event, `/prompt/${portfolio.prompt.slug}`)}
+          >
+            {portfolio.prompt.name}
+          </a>
+          · {portfolio.direction} · {data.track}
+          {#if data.as_of}· as of <span class="num">{fmtDate(data.as_of)}</span>{/if}
+        </p>
+        {#if portfolio.execution_context_notice}
+          <p class="context-notice">{portfolio.execution_context_notice}</p>
+        {/if}
+        {#if portfolio.execution_prompt}
+          <div class="prompt-action">
+            <button class="btn small" type="button" onclick={() => copyPrompt(portfolio.execution_prompt)}>
+              Copy evaluation prompt
+            </button>
+            {#if copyResult}
+              <span class={copyResult === "error" ? "neg" : "muted"} role="status">
+                {copyResult === "copied" ? "Copied." : "Copy failed."}
+              </span>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      <div class="head-badges">
+        <span class="badge">{portfolio.direction}</span>
+        <span class="badge">{data.track}</span>
+        <span class="badge">{portfolio.execution_boundary === "open" ? "Open" : "Close"}</span>
+        <span class="badge">{portfolio.version.name}</span>
+        <EvidenceBadge state={portfolio.evidence} />
+        {#if portfolio.stale_data}<span class="badge warn">stale data</span>{/if}
+        {#if portfolio.frozen_symbols.length}
+          <span class="badge neg">{portfolio.frozen_symbols.length} frozen</span>
+        {/if}
+        {#if portfolio.is_liquidated}
+          <span class="badge neg">{data.track === "rebuilt" ? "policy liquidated" : "liquidated"}</span>
+        {/if}
+      </div>
+    </header>
+
+    <MarketDataWarning versionId={portfolio.version_id} status={data.market_data_status} asOf={data.as_of} />
+
+    {#if portfolio.error}
+      <div class="error-box" role="alert">Analysis failed: {portfolio.error}</div>
+    {/if}
+
+    {#if portfolio.is_liquidated}
+      <div class="card warning-card" role="status">
+        <strong
+          >{data.track === "rebuilt" ? "Selected policy" : "Portfolio"} liquidated{portfolio.liquidated_at
+            ? ` ${fmtDate(portfolio.liquidated_at)}`
+            : ""}.</strong
+        >
+        {data.track === "rebuilt"
+          ? "Independent signals continue to feed other policies and future cohorts."
+          : "Its completed history remains visible, but it no longer accepts new allocations."}
+      </div>
+    {/if}
+
+    {#if portfolio.frozen_symbols.length}
+      <div class="error-box" role="alert">
+        <strong>Frozen positions:</strong>
+        {portfolio.frozen_symbols.join(", ")} stopped returning prices and remain at their last known values.
+      </div>
+    {/if}
+
+    {#if rebuiltPortfolio}
+      <section class="policy-context" aria-label="Selected holding horizon">
+        <div>
+          <span>Optimize horizon by</span><strong
+            >{horizonObjectiveLabel(rebuiltPortfolio.optimization_objective)}</strong
+          >
+        </div>
+        <div>
+          <span>Portfolio tuned</span><strong
+            >{rebuiltPortfolio.selected_policy
+              ? `H${rebuiltPortfolio.selected_policy.horizon}`
+              : "Pending evidence"}</strong
+          >
+        </div>
+        <div>
+          <span>Completed / open signals</span><strong class="num"
+            >{rebuiltPortfolio.completion.complete_count} / {rebuiltPortfolio.completion.open_count}</strong
+          >
+        </div>
+        <div>
+          <span>Completion</span><strong class="num"
+            >{pct(rebuiltPortfolio.completion.completion_ratio, 0)}</strong
+          >
+        </div>
+      </section>
+    {/if}
+
+    <section class="policy-context" aria-label="Selection participation">
+      <div>
+        <span>Selection participation</span><strong class="num"
+          >{portfolio.participation.participation_rate === null
+            ? "—"
+            : pctPoints(portfolio.participation.participation_rate * 100, 0)}</strong
+        >
+      </div>
+      <div>
+        <span>Decisions with selections</span><strong class="num"
+          >{portfolio.participation.selected_count} / {portfolio.participation.decision_count}</strong
+        >
+      </div>
+      <div>
+        <span>Abstentions</span><strong class="num">{portfolio.participation.abstention_count}</strong>
+      </div>
+    </section>
+
+    {#if portfolio.metrics.has_data}
+      <section class="metric-grid" aria-label="Portfolio metrics">
+        {@render metricTile("Lower 95%", pct(portfolio.rank_score, 2), pctSignClass(portfolio.rank_score, 2))}
+        {#if rebuiltPortfolio}
+          {@render metricTile(
+            "Signal α/day",
+            pct(rebuiltPortfolio.metrics.signal_mean_daily_alpha, 2),
+            pctSignClass(rebuiltPortfolio.metrics.signal_mean_daily_alpha, 2),
+          )}
+        {/if}
+        {@render metricTile(
+          rebuiltPortfolio ? "Portfolio α/day" : "Mean α/day",
+          pct(portfolio.metrics.mean_daily_alpha, 2),
+          pctSignClass(portfolio.metrics.mean_daily_alpha, 2),
+        )}
+        {@render metricTile(
+          "Cumulative excess",
+          pct(portfolio.metrics.cumulative_excess),
+          pctSignClass(portfolio.metrics.cumulative_excess),
+        )}
+        {@render metricTile("Hit rate", pct(portfolio.metrics.hit_rate, 0))}
+        {@render metricTile("Information ratio", num(portfolio.metrics.information_ratio))}
+        {@render metricTile("Sharpe (rf=0)", num(portfolio.metrics.sharpe))}
+        {@render metricTile("Max drawdown", pct(portfolio.metrics.max_drawdown))}
+        {@render metricTile("Ann. volatility", pct(portfolio.metrics.ann_volatility))}
+        {@render metricTile("Turnover", pctPoints(portfolio.metrics.turnover_pct, 0))}
+        {#if managedPortfolio}
+          {@render metricTile(
+            "ITD return",
+            pct(managedPortfolio.metrics.itd_return),
+            pctSignClass(managedPortfolio.metrics.itd_return),
+          )}
+          {@render metricTile("Age", ageLabel(managedPortfolio.age_days))}
+        {/if}
+      </section>
+    {:else}
+      <div class="empty-state card">
+        <h3>Evidence pending</h3>
+        <p>
           {data.track === "rebuilt"
-            ? "Independent signals continue to feed other policies and future cohorts."
-            : "Its completed history remains visible, but it no longer accepts new allocations."}
+            ? "Daily signals will populate this policy as their holding periods complete."
+            : "The first allocation has not produced a valued market boundary yet."}
+        </p>
+      </div>
+    {/if}
+
+    {#if series.length}
+      <section class="card chart-card">
+        <header class="section-head">
+          <div>
+            <h2>NAV vs {benchmarkName}</h2>
+            <p>Base 100, total return.</p>
+          </div>
+        </header>
+        <LineChart {series} {markers} ariaLabel="{portfolio.name} NAV versus {benchmarkName}" />
+        <p class="chart-note">
+          Dotted vertical lines mark {data.track === "managed" ? "allocation" : "signal"} effective open or close
+          boundaries.
+        </p>
+      </section>
+    {/if}
+
+    {#if managedPortfolio}
+      {#if Object.keys(managedPortfolio.stale_days).length}
+        <div class="card warning-card">
+          <strong>Carried-forward prices:</strong>
+          {Object.entries(managedPortfolio.stale_days)
+            .map(([symbol, days]) => `${symbol} (${days.length} sessions)`)
+            .join(", ")}.
         </div>
       {/if}
-
-      {#if portfolio.frozen_symbols.length}
-        <div class="error-box" role="alert">
-          <strong>Frozen positions:</strong>
-          {portfolio.frozen_symbols.join(", ")} stopped returning prices and remain at their last known values.
+      <section class="data-section" aria-labelledby="managed-holdings-title">
+        <header class="section-head">
+          <div>
+            <h2 id="managed-holdings-title">Current holdings</h2>
+            <p>
+              Drifted weights against the latest managed {managedPortfolio.direction === "short"
+                ? "short"
+                : "long"} target.
+            </p>
+          </div>
+        </header>
+        <div class="table-scroll">
+          <table class="data-table">
+            <caption class="visually-hidden">Current holdings for {managedPortfolio.name}</caption>
+            <thead
+              ><tr
+                ><th scope="col">Symbol</th><th scope="col" class="right">Weight</th><th
+                  scope="col"
+                  class="right">Target</th
+                ><th scope="col" class="right">Drift</th></tr
+              ></thead
+            >
+            <tbody>
+              {#each managedPortfolio.holdings as holding (holding.symbol)}
+                <tr>
+                  <td class="num">{holding.symbol}</td>
+                  <td class="right num">{pctPoints(holding.weight_pct)}</td>
+                  <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
+                  <td class="right num {pctPointsSignClass(holding.weight_pct - holding.target_weight_pct)}">
+                    {pctPoints(holding.weight_pct - holding.target_weight_pct)}
+                  </td>
+                </tr>
+              {/each}
+              {#if managedPortfolio.reference_holding}
+                {@const reference = managedPortfolio.reference_holding}
+                <tr>
+                  <td>{referenceLabel(portfolio.direction)}</td>
+                  <td class="right num">{pctPoints(reference.weight_pct)}</td>
+                  <td class="right num">{pctPoints(reference.target_weight_pct)}</td>
+                  <td class="right num">{pctPoints(reference.weight_pct - reference.target_weight_pct)}</td>
+                </tr>
+              {:else if !managedPortfolio.holdings.length}
+                <tr><td colspan="4" class="table-empty">No current holdings.</td></tr>
+              {/if}
+            </tbody>
+          </table>
         </div>
-      {/if}
-
-      {#if rebuiltPortfolio}
-        <section class="policy-context" aria-label="Selected holding horizon">
+      </section>
+      {@render allocationHistory(managedPortfolio)}
+    {:else if rebuiltPortfolio}
+      <section class="data-section" aria-labelledby="aggregate-holdings-title">
+        <header class="section-head">
           <div>
-            <span>Optimize horizon by</span><strong
-              >{horizonObjectiveLabel(rebuiltPortfolio.optimization_objective)}</strong
-            >
+            <h2 id="aggregate-holdings-title">Aggregate holdings</h2>
+            <p>
+              Overlapping active {rebuiltPortfolio.direction} cohorts plus the unallocated
+              {benchmarkName} sleeve.
+            </p>
           </div>
-          <div>
-            <span>Portfolio tuned</span><strong
-              >{rebuiltPortfolio.selected_policy
-                ? `H${rebuiltPortfolio.selected_policy.horizon}`
-                : "Pending evidence"}</strong
-            >
-          </div>
-          <div>
-            <span>Completed / open signals</span><strong class="num"
-              >{rebuiltPortfolio.completion.complete_count} / {rebuiltPortfolio.completion.open_count}</strong
-            >
-          </div>
-          <div>
-            <span>Completion</span><strong class="num"
-              >{pct(rebuiltPortfolio.completion.completion_ratio, 0)}</strong
-            >
-          </div>
-        </section>
-      {/if}
-
-      <section class="policy-context" aria-label="Selection participation">
-        <div>
-          <span>Selection participation</span><strong class="num"
-            >{portfolio.participation.participation_rate === null
-              ? "—"
-              : pctPoints(portfolio.participation.participation_rate * 100, 0)}</strong
-          >
-        </div>
-        <div>
-          <span>Decisions with selections</span><strong class="num"
-            >{portfolio.participation.selected_count} / {portfolio.participation.decision_count}</strong
-          >
-        </div>
-        <div>
-          <span>Abstentions</span><strong class="num">{portfolio.participation.abstention_count}</strong>
+        </header>
+        <div class="table-scroll">
+          <table class="data-table">
+            <caption class="visually-hidden">Aggregate holdings for {rebuiltPortfolio.name}</caption>
+            <thead><tr><th scope="col">Symbol</th><th scope="col" class="right">Weight</th></tr></thead>
+            <tbody>
+              {#each rebuiltPortfolio.holdings as holding (holding.symbol)}
+                <tr>
+                  <td class="num">{holding.symbol}</td>
+                  <td class="right num">{pctPoints(holding.weight_pct, 2)}</td>
+                </tr>
+              {/each}
+              {#if rebuiltPortfolio.reference_holding}
+                <tr
+                  ><td>{referenceLabel(portfolio.direction)}</td><td class="right num"
+                    >{pctPoints(rebuiltPortfolio.reference_holding.weight_pct, 2)}</td
+                  ></tr
+                >
+              {:else if !rebuiltPortfolio.holdings.length}
+                <tr><td colspan="2" class="table-empty">No aggregate holdings available.</td></tr>
+              {/if}
+            </tbody>
+          </table>
         </div>
       </section>
 
-      {#if portfolio.metrics.has_data}
-        <section class="metric-grid" aria-label="Portfolio metrics">
-          {@render metricTile(
-            "Lower 95%",
-            pct(portfolio.rank_score, 2),
-            pctSignClass(portfolio.rank_score, 2),
-          )}
-          {#if rebuiltPortfolio}
-            {@render metricTile(
-              "Signal α/day",
-              pct(rebuiltPortfolio.metrics.signal_mean_daily_alpha, 2),
-              pctSignClass(rebuiltPortfolio.metrics.signal_mean_daily_alpha, 2),
-            )}
-          {/if}
-          {@render metricTile(
-            rebuiltPortfolio ? "Portfolio α/day" : "Mean α/day",
-            pct(portfolio.metrics.mean_daily_alpha, 2),
-            pctSignClass(portfolio.metrics.mean_daily_alpha, 2),
-          )}
-          {@render metricTile(
-            "Cumulative excess",
-            pct(portfolio.metrics.cumulative_excess),
-            pctSignClass(portfolio.metrics.cumulative_excess),
-          )}
-          {@render metricTile("Hit rate", pct(portfolio.metrics.hit_rate, 0))}
-          {@render metricTile("Information ratio", num(portfolio.metrics.information_ratio))}
-          {@render metricTile("Sharpe (rf=0)", num(portfolio.metrics.sharpe))}
-          {@render metricTile("Max drawdown", pct(portfolio.metrics.max_drawdown))}
-          {@render metricTile("Ann. volatility", pct(portfolio.metrics.ann_volatility))}
-          {@render metricTile("Turnover", pctPoints(portfolio.metrics.turnover_pct, 0))}
-          {#if managedPortfolio}
-            {@render metricTile(
-              "ITD return",
-              pct(managedPortfolio.metrics.itd_return),
-              pctSignClass(managedPortfolio.metrics.itd_return),
-            )}
-            {@render metricTile("Age", ageLabel(managedPortfolio.age_days))}
-          {/if}
-        </section>
-      {:else}
-        <div class="empty-state card">
-          <h3>Evidence pending</h3>
-          <p>
-            {data.track === "rebuilt"
-              ? "Daily signals will populate this policy as their holding periods complete."
-              : "The first allocation has not produced a valued market boundary yet."}
-          </p>
-        </div>
-      {/if}
-
-      {#if series.length}
-        <section class="card chart-card">
-          <header class="section-head">
-            <div>
-              <h2>NAV vs {benchmarkName}</h2>
-              <p>Base 100, total return.</p>
-            </div>
-          </header>
-          <LineChart {series} {markers} ariaLabel="{portfolio.name} NAV versus {benchmarkName}" />
-          <p class="chart-note">
-            Dotted vertical lines mark {data.track === "managed" ? "allocation" : "signal"} effective open or close
-            boundaries.
-          </p>
-        </section>
-      {/if}
-
-      {#if managedPortfolio}
-        {#if Object.keys(managedPortfolio.stale_days).length}
-          <div class="card warning-card">
-            <strong>Carried-forward prices:</strong>
-            {Object.entries(managedPortfolio.stale_days)
-              .map(([symbol, days]) => `${symbol} (${days.length} sessions)`)
-              .join(", ")}.
+      <section class="data-section" aria-labelledby="active-cohorts-title">
+        <header class="section-head">
+          <div>
+            <h2 id="active-cohorts-title">Active cohorts</h2>
+            <p>Signals that are still contributing to the selected holding horizon.</p>
           </div>
-        {/if}
-        <section class="data-section" aria-labelledby="managed-holdings-title">
-          <header class="section-head">
-            <div>
-              <h2 id="managed-holdings-title">Current holdings</h2>
-              <p>
-                Drifted weights against the latest managed {managedPortfolio.direction === "short"
-                  ? "short"
-                  : "long"} target.
-              </p>
-            </div>
-          </header>
-          <div class="table-scroll">
-            <table class="data-table">
-              <caption class="visually-hidden">Current holdings for {managedPortfolio.name}</caption>
-              <thead
-                ><tr
-                  ><th scope="col">Symbol</th><th scope="col" class="right">Weight</th><th
-                    scope="col"
-                    class="right">Target</th
-                  ><th scope="col" class="right">Drift</th></tr
-                ></thead
-              >
-              <tbody>
-                {#each managedPortfolio.holdings as holding (holding.symbol)}
-                  <tr>
-                    <td class="num">{holding.symbol}</td>
-                    <td class="right num">{pctPoints(holding.weight_pct)}</td>
-                    <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
-                    <td
-                      class="right num {pctPointsSignClass(holding.weight_pct - holding.target_weight_pct)}"
+          <span class="num">{rebuiltPortfolio.active_cohorts.length}</span>
+        </header>
+        <div class="disclosure-list">
+          {#each rebuiltPortfolio.active_cohorts as cohort (cohort.signal_id)}
+            {@const cohortReferenceWeight = Math.max(
+              0,
+              100 - cohort.positions.reduce((total, position) => total + position.weight_pct, 0),
+            )}
+            <details>
+              <summary>
+                <span class="disclosure-primary">
+                  <strong class="num">{fmtDate(cohort.start_at)}</strong>
+                  <span>Signal #{cohort.signal_id}</span>
+                </span>
+                <span class="disclosure-meta">
+                  {cohort.age_sessions} sessions · ends {fmtDate(cohort.end_at)}
+                </span>
+              </summary>
+              <div class="disclosure-body">
+                <div class="table-scroll">
+                  <table class="data-table">
+                    <caption class="visually-hidden">
+                      Positions for signal {cohort.signal_id}, effective {fmtDate(cohort.start_at)}
+                    </caption>
+                    <thead
+                      ><tr><th scope="col">Symbol</th><th scope="col" class="right">Signal weight</th></tr
+                      ></thead
                     >
-                      {pctPoints(holding.weight_pct - holding.target_weight_pct)}
-                    </td>
-                  </tr>
-                {/each}
-                {#if managedPortfolio.reference_holding}
-                  {@const reference = managedPortfolio.reference_holding}
-                  <tr>
-                    <td>{referenceLabel(portfolio.direction)}</td>
-                    <td class="right num">{pctPoints(reference.weight_pct)}</td>
-                    <td class="right num">{pctPoints(reference.target_weight_pct)}</td>
-                    <td class="right num">{pctPoints(reference.weight_pct - reference.target_weight_pct)}</td>
-                  </tr>
-                {:else if !managedPortfolio.holdings.length}
-                  <tr><td colspan="4" class="table-empty">No current holdings.</td></tr>
-                {/if}
-              </tbody>
-            </table>
-          </div>
-        </section>
-        {@render allocationHistory(managedPortfolio)}
-      {:else if rebuiltPortfolio}
-        <section class="data-section" aria-labelledby="aggregate-holdings-title">
-          <header class="section-head">
-            <div>
-              <h2 id="aggregate-holdings-title">Aggregate holdings</h2>
-              <p>
-                Overlapping active {rebuiltPortfolio.direction} cohorts plus the unallocated
-                {benchmarkName} sleeve.
-              </p>
-            </div>
-          </header>
-          <div class="table-scroll">
-            <table class="data-table">
-              <caption class="visually-hidden">Aggregate holdings for {rebuiltPortfolio.name}</caption>
-              <thead><tr><th scope="col">Symbol</th><th scope="col" class="right">Weight</th></tr></thead>
-              <tbody>
-                {#each rebuiltPortfolio.holdings as holding (holding.symbol)}
-                  <tr>
-                    <td class="num">{holding.symbol}</td>
-                    <td class="right num">{pctPoints(holding.weight_pct, 2)}</td>
-                  </tr>
-                {/each}
-                {#if rebuiltPortfolio.reference_holding}
-                  <tr
-                    ><td>{referenceLabel(portfolio.direction)}</td><td class="right num"
-                      >{pctPoints(rebuiltPortfolio.reference_holding.weight_pct, 2)}</td
-                    ></tr
-                  >
-                {:else if !rebuiltPortfolio.holdings.length}
-                  <tr><td colspan="2" class="table-empty">No aggregate holdings available.</td></tr>
-                {/if}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="data-section" aria-labelledby="active-cohorts-title">
-          <header class="section-head">
-            <div>
-              <h2 id="active-cohorts-title">Active cohorts</h2>
-              <p>Signals that are still contributing to the selected holding horizon.</p>
-            </div>
-            <span class="num">{rebuiltPortfolio.active_cohorts.length}</span>
-          </header>
-          <div class="disclosure-list">
-            {#each rebuiltPortfolio.active_cohorts as cohort (cohort.signal_id)}
-              {@const cohortReferenceWeight = Math.max(
-                0,
-                100 - cohort.positions.reduce((total, position) => total + position.weight_pct, 0),
-              )}
-              <details>
-                <summary>
-                  <span class="disclosure-primary">
-                    <strong class="num">{fmtDate(cohort.start_at)}</strong>
-                    <span>Signal #{cohort.signal_id}</span>
-                  </span>
-                  <span class="disclosure-meta">
-                    {cohort.age_sessions} sessions · ends {fmtDate(cohort.end_at)}
-                  </span>
-                </summary>
-                <div class="disclosure-body">
-                  <div class="table-scroll">
-                    <table class="data-table">
-                      <caption class="visually-hidden">
-                        Positions for signal {cohort.signal_id}, effective {fmtDate(cohort.start_at)}
-                      </caption>
-                      <thead
-                        ><tr><th scope="col">Symbol</th><th scope="col" class="right">Signal weight</th></tr
-                        ></thead
-                      >
-                      <tbody>
-                        {#each cohort.positions as position (position.symbol)}
-                          <tr>
-                            <td class="num">{position.symbol}</td>
-                            <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
-                          </tr>
-                        {/each}
-                        {#if cohortReferenceWeight > 0.00001}
-                          <tr
-                            ><td>{referenceLabel(portfolio.direction)}</td><td class="right num"
-                              >{pctPoints(cohortReferenceWeight, 2)}</td
-                            ></tr
-                          >
-                        {/if}
-                      </tbody>
-                    </table>
-                  </div>
+                    <tbody>
+                      {#each cohort.positions as position (position.symbol)}
+                        <tr>
+                          <td class="num">{position.symbol}</td>
+                          <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
+                        </tr>
+                      {/each}
+                      {#if cohortReferenceWeight > 0.00001}
+                        <tr
+                          ><td>{referenceLabel(portfolio.direction)}</td><td class="right num"
+                            >{pctPoints(cohortReferenceWeight, 2)}</td
+                          ></tr
+                        >
+                      {/if}
+                    </tbody>
+                  </table>
                 </div>
-              </details>
-            {:else}
-              <div class="empty-state compact">No cohorts are active in this aggregate policy.</div>
-            {/each}
-          </div>
-        </section>
+              </div>
+            </details>
+          {:else}
+            <div class="empty-state compact">No cohorts are active in this aggregate policy.</div>
+          {/each}
+        </div>
+      </section>
 
+      {#key JSON.stringify([rebuiltPortfolio.signals, rebuiltPortfolio.signals_next_cursor])}
         <SignalHistory
           slug={rebuiltPortfolio.slug}
           direction={rebuiltPortfolio.direction}
           initialSignals={rebuiltPortfolio.signals}
           initialNextCursor={rebuiltPortfolio.signals_next_cursor}
         />
-        <SignalMatrix rows={[rebuiltPortfolio]} {benchmarkName} />
-      {/if}
-    </article>
-  {:catch error}
-    <div class="error-box" role="alert">{requestErrorMessage(error)}</div>
-  {/await}
-{/key}
+      {/key}
+      <SignalMatrix rows={[rebuiltPortfolio]} {benchmarkName} />
+    {/if}
+  </article>
+{/if}
 
 <style>
   .portfolio-detail {

@@ -7,6 +7,13 @@ export class ApiError extends Error {
   }
 }
 
+const mutationListeners = new Set<() => void>();
+
+export function onApiMutation(callback: () => void): () => void {
+  mutationListeners.add(callback);
+  return () => mutationListeners.delete(callback);
+}
+
 let unauthorizedCallback: (() => void) | null = null;
 
 export function setUnauthorizedCallback(callback: () => void): void {
@@ -31,6 +38,10 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
   if (!response.ok) {
     const message = await errorMessage(response);
     throw new ApiError(message, response.status);
+  }
+  const method = (options.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method) && url !== "/api/auth/activity") {
+    for (const listener of mutationListeners) listener();
   }
   return response;
 }

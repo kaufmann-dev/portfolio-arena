@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
 
   import { router } from "../stores/router.svelte";
-  import { apiJson } from "../api/client";
+  import { getPublicQuery, PUBLIC_REFRESH_MS } from "../api/publicCache";
   import type {
     ArenaTrack,
     ArenaVersion,
@@ -64,26 +64,53 @@
   let track = $state<ArenaTrack>(
     new URLSearchParams(window.location.search).get("track") === "managed" ? "managed" : "rebuilt",
   );
-  let versions = $state.raw<ArenaVersion[]>([]);
+  const versionsQuery = getPublicQuery<VersionsResponse>("/api/versions");
+  const versions = $derived<ArenaVersion[]>(versionsQuery.data?.versions ?? []);
   let objective = $state<HorizonObjective>(
     parseHorizonObjective(new URLSearchParams(window.location.search).get("objective")),
   );
-  let versionId = $state<number | null>(null);
+  function initialVersionId(): number | null {
+    return (
+      selectedVersion(
+        versionsQuery.data?.versions ?? [],
+        new URLSearchParams(window.location.search).get("version"),
+      )?.id ?? null
+    );
+  }
+  let versionId = $state<number | null>(initialVersionId());
   const version = $derived(versions.find((item) => item.id === versionId));
   let agentFilter = $state("all");
   let promptFilter = $state("all");
-  let managedData = $state.raw<ManagedArenaResponse | null>(null);
-  let rebuiltData = $state.raw<RebuiltArenaResponse | null>(null);
-  let loading = $state(true);
-  let error = $state("");
+  const arenaQuery = $derived(
+    versionId === null
+      ? null
+      : getPublicQuery<ManagedArenaResponse | RebuiltArenaResponse>(
+          track === "managed"
+            ? `/api/arena/managed?direction=${direction}&version_id=${versionId}`
+            : `/api/arena/rebuilt?direction=${direction}&version_id=${versionId}&objective=${objective}`,
+        ),
+  );
+  const currentData = $derived(arenaQuery?.data ?? null);
+  const managedData = $derived(currentData?.track === "managed" ? currentData : null);
+  const rebuiltData = $derived(currentData?.track === "rebuilt" ? currentData : null);
+  const loading = $derived(versionsQuery.loading || (arenaQuery?.loading ?? false));
+  const error = $derived(arenaQuery?.error || versionsQuery.error);
   let selected = $state<string[]>([]);
-  let compareData = $state.raw<CompareResponse | null>(null);
-  let compareLoading = $state(false);
-  let comparisonError = $state("");
-  let requestSequence = 0;
-  let compareSequence = 0;
-
-  const currentData = $derived(track === "rebuilt" ? rebuiltData : managedData);
+  let comparisonSelectionError = $state("");
+  const compareQuery = $derived.by(() => {
+    if (selected.length < 2 || versionId === null) return null;
+    const query = new URLSearchParams({
+      slugs: selected.join(","),
+      track,
+      direction,
+      version_id: String(versionId),
+    });
+    if (track === "rebuilt") query.set("objective", objective);
+    return getPublicQuery<CompareResponse>(`/api/compare?${query.toString()}`);
+  });
+  const compareData = $derived(compareQuery?.data ?? null);
+  const compareLoading = $derived(compareQuery?.loading ?? false);
+  const comparisonError = $derived(comparisonSelectionError || compareQuery?.error || "");
   const allRealRows = $derived.by((): RealPortfolio[] => {
     if (!currentData) return [];
     return currentData.portfolios.filter((row): row is RealPortfolio => row.kind !== "benchmark");
@@ -155,9 +182,18 @@
   );
   const activeTrackDescription = $derived(TRACKS.find((item) => item.value === track)?.description ?? "");
 
+  let mounted = false;
   onMount(() => {
+    mounted = true;
     writeDirectionUrl(direction);
     void initialize();
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshVisible(true);
+    }, PUBLIC_REFRESH_MS);
+    return () => {
+      mounted = false;
+      window.clearInterval(refreshTimer);
+    };
   });
 
   function writeDirectionUrl(next: Direction): void {
@@ -171,30 +207,16 @@
     router.syncVersion();
   }
 
-  async function loadArena(): Promise<void> {
-    if (versionId === null) return;
-    const sequence = ++requestSequence;
-    error = "";
-    loading = true;
-    try {
-      if (track === "managed") {
-        const payload = await apiJson<ManagedArenaResponse>(
-          `/api/arena/managed?direction=${direction}&version_id=${versionId}`,
-        );
-        if (sequence === requestSequence) managedData = payload;
-      } else {
-        const payload = await apiJson<RebuiltArenaResponse>(
-          `/api/arena/rebuilt?direction=${direction}&version_id=${versionId}&objective=${objective}`,
-        );
-        if (sequence === requestSequence) rebuiltData = payload;
-      }
-    } catch (caught) {
-      if (sequence === requestSequence) {
-        error = caught instanceof Error ? caught.message : "Could not load the arena.";
-      }
-    } finally {
-      if (sequence === requestSequence) loading = false;
-    }
+  function loadArena(force = false): Promise<void> {
+    return arenaQuery?.load(force) ?? Promise.resolve();
+  }
+
+  function loadComparison(force = false): Promise<void> {
+    return compareQuery?.load(force) ?? Promise.resolve();
+  }
+
+  async function refreshVisible(force = false): Promise<void> {
+    await Promise.all([loadArena(force), loadComparison(force)]);
   }
 
   function resetFilters(): void {
@@ -207,7 +229,6 @@
     if (next === objective) return;
     objective = next;
     writeDirectionUrl(direction);
-    compareData = null;
     void loadArena();
     void loadComparison();
   }
@@ -216,8 +237,6 @@
     if (direction === next) return;
     direction = next;
     writeDirectionUrl(next);
-    managedData = null;
-    rebuiltData = null;
     resetFilters();
     clearComparison();
     void loadArena();
@@ -234,9 +253,10 @@
 
   function toggleCompare(slug: string): void {
     if (!selected.includes(slug) && selected.length >= 8) {
-      comparisonError = "Compare up to eight portfolios at a time.";
+      comparisonSelectionError = "Compare up to eight portfolios at a time.";
       return;
     }
+    comparisonSelectionError = "";
     selected = selected.includes(slug)
       ? selected.filter((candidate) => candidate !== slug)
       : [...selected, slug];
@@ -244,62 +264,25 @@
   }
 
   function clearComparison(): void {
-    compareSequence += 1;
     selected = [];
-    compareData = null;
-    compareLoading = false;
-    comparisonError = "";
+    comparisonSelectionError = "";
   }
 
-  async function loadComparison(): Promise<void> {
-    const slugs = selected;
-    const sequence = ++compareSequence;
-    comparisonError = "";
-    if (slugs.length < 2) {
-      compareData = null;
-      compareLoading = false;
-      return;
-    }
-
-    const query = new URLSearchParams({
-      slugs: slugs.join(","),
-      track,
-      direction,
-      version_id: String(versionId),
-    });
-    if (track === "rebuilt") query.set("objective", objective);
-
-    compareLoading = true;
-    try {
-      const payload = await apiJson<CompareResponse>(`/api/compare?${query.toString()}`);
-      if (sequence === compareSequence) compareData = payload;
-    } catch (caught) {
-      if (sequence === compareSequence) {
-        compareData = null;
-        comparisonError = caught instanceof Error ? caught.message : "Could not compare portfolios.";
-      }
-    } finally {
-      if (sequence === compareSequence) compareLoading = false;
-    }
-  }
   async function initialize(): Promise<void> {
-    try {
-      const payload = await apiJson<VersionsResponse>("/api/versions");
-      versions = payload.versions;
-      versionId =
-        selectedVersion(versions, new URLSearchParams(window.location.search).get("version"))?.id ?? null;
-      writeDirectionUrl(direction);
-      await loadArena();
-    } catch (caught) {
-      error = caught instanceof Error ? caught.message : "Could not load versions.";
-    } finally {
-      loading = false;
-    }
+    // A returning visitor can render and refresh a cached version immediately.
+    const initialArena = loadArena();
+    await versionsQuery.load();
+    if (!mounted) return;
+    versionId =
+      selectedVersion(
+        versions,
+        versionId === null ? new URLSearchParams(window.location.search).get("version") : String(versionId),
+      )?.id ?? null;
+    writeDirectionUrl(direction);
+    await Promise.all([initialArena, loadArena()]);
   }
   function changeVersion(value: string): void {
     versionId = Number(value);
-    managedData = null;
-    rebuiltData = null;
     resetFilters();
     clearComparison();
     writeDirectionUrl(direction);
@@ -310,6 +293,8 @@
 <svelte:head>
   <title>Portfolio Arena</title>
 </svelte:head>
+
+<svelte:window onfocus={() => void refreshVisible()} />
 
 <section class="leaderboard-page" aria-labelledby="arena-title">
   <header class="page-head">
@@ -325,10 +310,11 @@
       <strong class="num">
         {displayedMarketData.asOf ? fmtDate(displayedMarketData.asOf) : "Pending"}
       </strong>
+      {#if loading && currentData}<span role="status">Updating…</span>{/if}
     </div>
   </header>
 
-  {#if !loading && !versions.length && !error}<div class="empty-state card">
+  {#if versionsQuery.data && !loading && !versions.length && !error}<div class="empty-state card">
       <p>No Arena versions have been created yet.</p>
     </div>{/if}
   <div class="filter-controls">
@@ -409,8 +395,8 @@
 
   {#if error}
     <div class="error-box load-error" role="alert">
-      <span>{error}</span>
-      <button class="btn small" type="button" onclick={loadArena}>Retry</button>
+      <span>{currentData ? `Could not refresh; showing saved results. ${error}` : error}</span>
+      <button class="btn small" type="button" onclick={() => void initialize()}>Retry</button>
     </div>
   {/if}
 
@@ -458,12 +444,14 @@
           <span class="spinner" aria-hidden="true"></span>
           Loading comparison…
         </div>
-      {:else if comparisonError}
+      {/if}
+      {#if comparisonError}
         <div class="error-box" role="alert">
           <span>{comparisonError}</span>
-          <button class="btn small" type="button" onclick={loadComparison}>Retry</button>
+          <button class="btn small" type="button" onclick={() => void loadComparison(true)}>Retry</button>
         </div>
-      {:else if compareData}
+      {/if}
+      {#if compareData}
         <LineChart series={compareSeries} ariaLabel="Portfolio comparison chart" height={300} />
       {/if}
     </section>
@@ -471,10 +459,10 @@
     <div class="error-box" role="alert">{comparisonError}</div>
   {/if}
 
-  {#if loading && !currentData}
+  {#if (loading || !versionsQuery.data) && !currentData && !error}
     <div class="loading-block" aria-live="polite" aria-busy="true">
       <span class="spinner" aria-hidden="true"></span>
-      Building {direction}
+      Loading {direction}
       {track} rankings…
     </div>
   {:else if track === "managed" && managedData}

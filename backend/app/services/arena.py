@@ -31,6 +31,7 @@ from .trading_calendar import NY, boundary_at, boundary_value, is_trading_day
 from .valuation import (
     AllocationInput,
     Boundary,
+    Direction,
     PositionInput,
     Series,
     ValuationError,
@@ -241,16 +242,31 @@ def load_price_series(
     )
 
 
-def load_portfolios(session: Session, version_id: int | None = None) -> list[Portfolio]:
+def load_portfolios(
+    session: Session,
+    version_id: int | None = None,
+    *,
+    prompt_mode: Literal["managed", "rebuilt"] | None = None,
+    direction: Direction | None = None,
+    slugs: list[str] | None = None,
+) -> list[Portfolio]:
     query = select(Portfolio).options(
         selectinload(Portfolio.agent).selectinload(Agent.model).selectinload(ModelDefinition.capabilities),
         selectinload(Portfolio.prompt),
         selectinload(Portfolio.version),
-        selectinload(Portfolio.allocations).selectinload(Allocation.positions),
-        selectinload(Portfolio.signals).selectinload(Signal.positions),
     )
+    if prompt_mode != "rebuilt":
+        query = query.options(selectinload(Portfolio.allocations).selectinload(Allocation.positions))
+    if prompt_mode != "managed":
+        query = query.options(selectinload(Portfolio.signals).selectinload(Signal.positions))
     if version_id is not None:
         query = query.where(Portfolio.version_id == version_id)
+    if prompt_mode is not None:
+        query = query.where(Portfolio.prompt_mode == prompt_mode)
+    if direction is not None:
+        query = query.where(Portfolio.direction == direction)
+    if slugs is not None:
+        query = query.where(Portfolio.slug.in_(slugs))
     return list(session.scalars(query))
 
 
