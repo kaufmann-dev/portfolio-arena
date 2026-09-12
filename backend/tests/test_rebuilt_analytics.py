@@ -290,3 +290,48 @@ def test_default_signal_objective_differs_from_portfolio_alpha_without_mutating_
     assert select_policy(candidates, "mean_daily_alpha") is portfolio_best
     assert select_policy(candidates) is signal_best
     assert candidates == before
+
+
+def test_grid_shares_reference_preparation_across_horizons_and_portfolios(monkeypatch):
+    from unittest.mock import Mock
+
+    from app.services import valuation
+    from app.services.rebuilt import prepare_market
+
+    days, data, calendar = market(25)
+    calendar_builder = Mock(wraps=valuation.build_calendar)
+    monkeypatch.setattr(valuation, "build_calendar", calendar_builder)
+    # Rebuilt preparation already owns these exact price lookups.
+    lookup_builder = Mock(wraps=valuation.PriceLookup)
+    monkeypatch.setattr(valuation, "PriceLookup", lookup_builder)
+    prepared = prepare_market(data, calendar)
+    assert calendar_builder.call_count == 0
+    for direction, phase in (("long", "open"), ("short", "close")):
+        signals = [signal(i, day) for i, day in enumerate(days[:18])]
+        horizons, policies = evaluate_policy_grid(
+            signals, data, calendar, direction, phase, prepared_market=prepared
+        )
+        assert len(horizons) == len(policies) == 40
+    assert calendar_builder.call_count == 1
+    assert lookup_builder.call_count == 0
+
+
+def test_rebuilt_reference_cannot_skip_missing_spy_print_with_sparse_calendar():
+    days, data, calendar = market()
+    del data["SPY"][1]["open"]
+    # Even a caller omitting opening observations must validate scheduled SPY prints.
+    with pytest.raises(ValuationError, match="Missing open price for SPY"):
+        construct_policy([signal(1, days[0])], data, calendar[1::2], 1)
+
+
+def test_liquidated_signal_reuses_reference_at_liquidation_boundary():
+    days, data, calendar = market()
+    data["AAPL"][1]["open"] = 250
+    data["SPY"][1]["open"] = 110
+    data["SPY"][1]["close"] = 120
+    result = signal_horizon_statistics([signal(1, days[0])], data, calendar, 2, direction="short")
+    cohort = result["completed_cohorts"][0]
+    assert cohort["liquidated_at"] == calendar[2]
+    assert cohort["spy_return"] == pytest.approx(-0.1)
+    assert cohort["signal_return"] == -1
+    assert cohort["daily_alpha"] == -1

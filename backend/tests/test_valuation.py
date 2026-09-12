@@ -169,3 +169,69 @@ def test_missing_full_spy_session_preserves_calendar_and_fails_pricing():
     assert calendar[2] == boundary(DAYS[1], "open")
     with pytest.raises(ValuationError, match="Missing open price for SPY"):
         rebase_series(spy, boundary(DAYS[0]), boundary(DAYS[-1]))
+
+
+@pytest.mark.parametrize(
+    "start,phase,end, direction,expected",
+    [
+        (0, "open", 2, "long", [100, 110, 121, 132, 132, 132]),
+        (0, "open", 2, "short", [100, 90, 81, 72, 72, 72]),
+        (0, "close", 1, "short", [100, 90, 80]),
+        (1, "open", 1, "short", [100, 100 * (2 - 132 / 121)]),
+        (1, "close", 2, "long", [100, 100, 100]),
+    ],
+)
+def test_prepared_reference_prices_independent_intervals(start, phase, end, direction, expected):
+    from app.services.valuation import PreparedReference
+
+    spy = prices([(100, 110), (121, 132), (132, 132)])
+    reference = PreparedReference(spy, boundary(DAYS[-1]))
+    # A preceding request with another direction/start cannot change this interval.
+    reference.rebase(boundary(DAYS[0]), boundary(DAYS[-1]), "short")
+    result = reference.rebase(boundary(DAYS[start], phase), boundary(DAYS[end]), direction)
+    assert [point["nav"] for point in result] == pytest.approx(expected)
+    assert point_boundary(result[0]) == boundary(DAYS[start], phase)
+    assert point_boundary(result[-1]) == boundary(DAYS[end])
+
+
+def test_prepared_reference_validates_only_requested_interval_and_keeps_gaps():
+    from app.services.valuation import PreparedReference
+
+    spy = prices([(100, 110), (121, 132), (132, 132)])
+    del spy[0]["open"]
+    del spy[2]["open"]
+    reference = PreparedReference(spy, boundary(DAYS[-1]))
+    result = reference.rebase(boundary(DAYS[1], "open"), boundary(DAYS[1]))
+    assert [point["nav"] for point in result] == pytest.approx([100, 132 / 121 * 100])
+    with pytest.raises(ValuationError, match="Missing open price for SPY"):
+        reference.rebase(boundary(DAYS[1]), boundary(DAYS[2]))
+    assert reference.rebase(boundary(DAYS[2]), boundary(DAYS[1])) == []
+    with pytest.raises(ValueError, match="exceeds the prepared market boundary"):
+        reference.rebase(boundary(DAYS[0]), boundary("2026-01-08"))
+
+
+def test_prepared_short_reference_liquidation_stays_zero_and_still_requires_prices():
+    from app.services.valuation import PreparedReference
+
+    spy = prices([(100, 100), (250, 110), (100, 100)])
+    reference = PreparedReference(spy, boundary(DAYS[-1]))
+    result = reference.rebase(boundary(DAYS[0]), boundary(DAYS[-1]), "short")
+    assert [point["nav"] for point in result] == [100, 0, 0, 0, 0]
+    del spy[-1]["open"]
+    with pytest.raises(ValuationError, match="Missing open price for SPY"):
+        PreparedReference(spy, boundary(DAYS[-1])).rebase(boundary(DAYS[0]), boundary(DAYS[-1]), "short")
+
+
+def test_prepared_reference_preserves_holiday_and_early_close_boundaries():
+    from app.services.valuation import PreparedReference
+
+    spy = [
+        {"date": "2026-11-25", "open": 100, "close": 100},
+        {"date": "2026-11-27", "open": 110, "close": 120},
+    ]
+    result = PreparedReference(spy, boundary("2026-11-27")).rebase(
+        boundary("2026-11-25"), boundary("2026-11-27")
+    )
+    assert [point["nav"] for point in result] == pytest.approx([100, 110, 120])
+    assert result[-1]["timestamp"] == "2026-11-27T18:00:00+00:00"
+    assert len(result) == 3  # Thanksgiving is not an observation.

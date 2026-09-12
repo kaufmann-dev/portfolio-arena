@@ -7,6 +7,7 @@ change at decision boundaries; extra chart observations never introduce trades.
 from __future__ import annotations
 
 import math
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Literal
@@ -315,28 +316,49 @@ def value_portfolio(
     )
 
 
+class PreparedReference:
+    """Snapshot-local SPY calendar and prices shared by benchmark intervals.
+
+    Preparation preserves every scheduled boundary, including missing prints.
+    Prices are required only within the requested interval, so unrelated gaps
+    elsewhere in the snapshot do not invalidate an otherwise priceable cohort.
+    """
+
+    def __init__(self, points: Series, end: Boundary, *, lookup: PriceLookup | None = None):
+        self._end = end["timestamp"]
+        self._calendar = build_calendar(points, end)
+        self._timestamps = [event["timestamp"] for event in self._calendar]
+        self._lookup = lookup if lookup is not None else PriceLookup(points)
+
+    def rebase(self, start: Boundary, end: Boundary, direction: Direction = "long") -> Series:
+        """Direction-matched SPY; short reference resets only at market close."""
+        if direction not in ("long", "short"):
+            raise ValueError("direction must be long or short")
+        if end["timestamp"] > self._end:
+            raise ValueError("Benchmark interval exceeds the prepared market boundary")
+        first = bisect_left(self._timestamps, start["timestamp"])
+        stop = bisect_right(self._timestamps, end["timestamp"])
+        if first >= stop:
+            return []
+        entry = self._lookup.require(self._calendar[first], "SPY")
+        anchor = 100.0
+        result = []
+        liquidated = False
+        for index in range(first, stop):
+            event = self._calendar[index]
+            current = self._lookup.require(event, "SPY")
+            nav = current / entry * 100 if direction == "long" else anchor * (2 - current / entry)
+            if liquidated or nav <= 0:
+                nav = 0.0
+                liquidated = True
+            result.append({**event, "nav": nav})
+            if direction == "short" and event["phase"] == "close":
+                anchor, entry = nav, current
+        return result
+
+
 def rebase_series(points: Series, start: Boundary, end: Boundary, direction: Direction = "long") -> Series:
-    """Direction-matched SPY; short reference resets only at market close."""
-    if direction not in ("long", "short"):
-        raise ValueError("direction must be long or short")
-    calendar = [event for event in build_calendar(points, end) if event["timestamp"] >= start["timestamp"]]
-    if not calendar:
-        return []
-    lookup = PriceLookup(points)
-    entry = lookup.require(calendar[0], "SPY")
-    anchor = 100.0
-    result = []
-    liquidated = False
-    for event in calendar:
-        current = lookup.require(event, "SPY")
-        nav = current / entry * 100 if direction == "long" else anchor * (2 - current / entry)
-        if liquidated or nav <= 0:
-            nav = 0.0
-            liquidated = True
-        result.append({**event, "nav": nav})
-        if direction == "short" and event["phase"] == "close":
-            anchor, entry = nav, current
-    return result
+    return PreparedReference(points, end).rebase(start, end, direction)
 
 
 def full_session_points(series: Series) -> Series:

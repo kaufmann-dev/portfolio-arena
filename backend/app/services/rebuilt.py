@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from functools import cached_property
 from statistics import NormalDist, median
 from typing import Literal, get_args
 
@@ -18,11 +19,11 @@ from .valuation import (
     Direction,
     Phase,
     PositionInput,
+    PreparedReference,
     PriceLookup,
     Series,
     ValuationError,
     boundary_date,
-    rebase_series,
     series_metrics,
     session_returns,
 )
@@ -72,6 +73,10 @@ class PreparedMarket:
     prices: dict[str, Series]
     calendar: list[Boundary]
     lookups: dict[str, PriceLookup]
+
+    @cached_property
+    def reference(self) -> PreparedReference:
+        return PreparedReference(self.prices["SPY"], self.calendar[-1], lookup=self.lookups["SPY"])
 
     def price(self, symbol: str, event: Boundary) -> float:
         lookup = self.lookups.get(symbol)
@@ -222,7 +227,7 @@ def signal_horizon_statistics(
             reference_weight = max(
                 0.0, 1 - sum(position.weight_pct for position in item.signal.positions) / 100
             )
-            reference_series = rebase_series(prices["SPY"], start, calendar[final_index], direction)
+            reference_series = market.reference.rebase(start, calendar[final_index], direction)
             reference_returns = {point["timestamp"]: point["nav"] / 100 - 1 for point in reference_series}
             for index in range(item.start_index + 1, final_index + 1):
                 underlying = sum(
@@ -243,8 +248,7 @@ def signal_horizon_statistics(
                 continue
             end_index = liquidation_index if liquidation_index is not None else planned_end
             end = calendar[end_index]
-            benchmark = rebase_series(prices["SPY"], start, end, direction)
-            benchmark_return = benchmark[-1]["nav"] / 100 - 1
+            benchmark_return = reference_returns[end["timestamp"]]
             if benchmark_return <= -1:
                 invalid_count += 1
                 continue
@@ -339,7 +343,7 @@ def construct_policy(
         return PolicyResult(horizon, [], [], [], [], [], 0.0, direction)
     steps = int(horizon * 2)
     first_index = min(item.start_index for item in mapped)
-    benchmark = rebase_series(prices["SPY"], calendar[first_index], calendar[-1], direction)
+    benchmark = market.reference.rebase(calendar[first_index], calendar[-1], direction)
     reference = {point["timestamp"]: point["nav"] for point in benchmark}
     trade_indices = {item.start_index for item in mapped} | {item.start_index + steps for item in mapped}
     quantities: dict[str, float] = {}
