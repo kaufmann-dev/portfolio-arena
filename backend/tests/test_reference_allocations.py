@@ -318,6 +318,40 @@ def test_instruction_migration_updates_saved_constraints_without_overwriting_cus
         assert "exactly 100%" not in value
         assert "remainder in long SPY" in value
 
+        # Upgrade the persisted legacy text through both revisions, with custom research intact.
+        legacy_long = (
+            "Custom research rule.\n"
+            "- This is an all-long portfolio. Every submitted position is a long position.\n"
+            "- Submit security weights according to the allocation policy; "
+            "the server puts any remainder in long SPY.\n"
+            "- Do not submit cash, shorts, leverage, or placeholder reference tickers."
+        )
+        session.execute(
+            text("UPDATE settings SET value = :value WHERE key = 'long_direction_instructions'"),
+            {"value": legacy_long},
+        )
+        wrapper = "Custom research rule.\n{{allocation_policy}}"
+        session.execute(
+            text(
+                "UPDATE settings SET value = :value "
+                "WHERE key IN ('managed_wrapper_prompt', 'rebuilt_wrapper_prompt')"
+            ),
+            {"value": wrapper},
+        )
+        path = path.with_name("0029_concise_execution_instructions.py")
+        spec = importlib.util.spec_from_file_location("concise_migration", path)
+        concise = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(concise)
+        monkeypatch.setattr(concise.op, "get_bind", session.connection)
+        concise.upgrade()
+        saved = dict(session.execute(text("SELECT key, value FROM settings")).all())
+        assert saved["long_direction_instructions"].startswith("Custom research rule.")
+        assert "remainder" not in saved["long_direction_instructions"]
+        assert "positive weights" in saved["long_direction_instructions"]
+        assert "replaces previous holdings" in saved["managed_wrapper_prompt"]
+        assert saved["managed_wrapper_prompt"].startswith(wrapper)
+        assert saved["rebuilt_wrapper_prompt"] == wrapper
+
 
 @pytest.mark.parametrize("mode", ["managed", "rebuilt"])
 def test_mcp_reference_decisions_public_participation_and_locking(
