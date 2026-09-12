@@ -30,7 +30,9 @@ The project measures cost-free paper performance for research.
   with bounded per-ticker history repair. Both fields use the same split/dividend adjustments.
   A developing closing price is never published with a morning opening price.
 - **Valuation:** NAV is never stored. Pure calculations derive it from decisions and cached prices;
-  a bounded cache memoizes exact-input analytics. Opening and closing observations are separate
+  a bounded cache memoizes exact-input analytics. Cold rebuilt calculations share the benchmark
+  calendar and SPY price lookup across horizons and portfolios within each market snapshot.
+  Opening and closing observations are separate
   UTC timestamp/phase events. API boundaries use `{timestamp, phase}` and chart points add `nav`.
 - **Publication:** prices become eligible 15 minutes after their boundary. Reads perform no provider
   I/O and retain the latest complete boundary while new data is `updating`. After ten minutes of
@@ -95,6 +97,7 @@ The project measures cost-free paper performance for research.
   Column sorting only changes row order. The objective is preserved in the URL, comparisons, and
   portfolio details. The Signal Alpha matrix shows all forty horizons alongside rankings
   and in portfolio details; the table’s Signal α/day matches the selected horizon’s matrix cell.
+  Matrix row labels show saved portfolio names without separate Open/Close badges.
   Cell backgrounds show alpha sign (red negative, green positive), with
   intensity scaled by absolute signal alpha across all displayed rows and horizons; zero is neutral.
   About’s Metrics explained section covers the calculations and worked examples.

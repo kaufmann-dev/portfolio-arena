@@ -101,7 +101,6 @@
               <a href={detailHref(row)} onclick={(event) => link(event, detailHref(row))}>
                 {row.name}
               </a>
-              <span class="badge">{row.execution_boundary === "open" ? "Open" : "Close"}</span>
             </th>
             {#each horizons as horizon (horizon)}
               {@const cell = cellFor(row, horizon)}
