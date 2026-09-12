@@ -46,7 +46,9 @@
   function metric(row: RebuiltArenaPortfolio, key: SortKey): number | null {
     const value =
       key === "completion_ratio"
-        ? row.completion.completion_ratio
+        ? row.selected_policy
+          ? row.completion.completion_ratio
+          : null
         : key === "rank_score"
           ? row.rank_score
           : row.metrics[key];
@@ -265,9 +267,11 @@
             <td class="right num">{pct(row.metrics.hit_rate, 0)}</td>
             <td
               class="right num"
-              title={`${row.completion.complete_count} complete, ${row.completion.open_count} open`}
+              title={row.selected_policy
+                ? `${row.completion.complete_count} complete, ${row.completion.open_count} open`
+                : undefined}
             >
-              {pct(row.completion.completion_ratio, 0)}
+              {pct(row.selected_policy ? row.completion.completion_ratio : null, 0)}
             </td>
           </tr>
         {:else}
@@ -341,7 +345,10 @@
           {@render metricTile("Sharpe", num(row.metrics.sharpe))}
 
           {@render metricTile("Hit rate", pct(row.metrics.hit_rate, 0))}
-          {@render metricTile("Completion", pct(row.completion.completion_ratio, 0))}
+          {@render metricTile(
+            "Completion",
+            pct(row.selected_policy ? row.completion.completion_ratio : null, 0),
+          )}
         </dl>
       </article>
     {/each}
