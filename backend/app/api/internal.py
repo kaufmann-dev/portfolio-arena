@@ -90,4 +90,5 @@ def fail_run(
         run_id=run_id,
         error=body.error,
         cancelled=body.cancelled,
+        report=body.report,
     )

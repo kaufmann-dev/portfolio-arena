@@ -43,8 +43,10 @@ allowed evaluation context. Managed portfolios include holdings, notes, history,
 and performance. Rebuilt portfolios intentionally expose none of their prior
 signals, notes, holdings, or performance.
 2. Follow the returned portfolio direction and allocation policy. Weights are
-   always positive and must sum to exactly 100 across USD-denominated equities
-   and ETFs; the portfolio direction makes the entire book long or short.
+   positive for selected USD-denominated equities and ETFs, totaling min(100,
+   selected count × maximum position weight). The server puts the remainder
+   in direction-matched SPY. No qualifying securities is a successful decision:
+   submit an empty positions list with an explanation, never a placeholder ticker.
    Validate unfamiliar tickers with `validate_symbol` / `search_symbols`.
 3. Managed: call `create_allocation(...)` exactly once. Rebuilt: call
    `create_signal(...)` exactly once. Entry time and the first future effective

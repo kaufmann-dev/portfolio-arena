@@ -68,7 +68,8 @@ def test_half_day_policy_exits_to_spy_at_close():
     data["AAPL"][1]["open"] = 200
     result = construct_policy([signal(1, days[0])], data, calendar, 0.5, execution_boundary="open")
     assert [point["nav"] for point in result.series[:3]] == pytest.approx([100, 110, 110])
-    assert result.holdings == [{"symbol": "SPY", "weight_pct": 100}]
+    assert result.holdings == []
+    assert result.reference_holding == {"weight_pct": 100}
 
 
 def test_fractional_horizon_uses_ceiling_sleeves_without_leverage():

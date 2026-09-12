@@ -60,6 +60,7 @@ class PolicyResult:
     direction: Direction = "long"
     liquidated_at: Boundary | None = None
     metrics: dict = field(default_factory=dict)
+    reference_holding: dict | None = None
 
 
 class RebuiltValuationError(ValuationError):
@@ -218,6 +219,11 @@ def signal_horizon_statistics(
             }
             liquidation_index = None
             basket_return = 0.0
+            reference_weight = max(
+                0.0, 1 - sum(position.weight_pct for position in item.signal.positions) / 100
+            )
+            reference_series = rebase_series(prices["SPY"], start, calendar[final_index], direction)
+            reference_returns = {point["timestamp"]: point["nav"] / 100 - 1 for point in reference_series}
             for index in range(item.start_index + 1, final_index + 1):
                 underlying = sum(
                     position.weight_pct
@@ -227,6 +233,7 @@ def signal_horizon_statistics(
                     if position.weight_pct > 0
                 )
                 basket_return = underlying if direction == "long" else -underlying
+                basket_return += reference_weight * reference_returns[calendar[index]["timestamp"]]
                 if basket_return <= -1:
                     basket_return = -1.0
                     liquidation_index = index
@@ -413,12 +420,16 @@ def construct_policy(
         series.append({**event, "nav": nav})
 
     holdings = []
+    reference_holding = None
     if liquidated_at is None:
         final_values = current_values(calendar[-1])
         merged: dict[str, float] = {}
         for symbol, value in final_values.items():
-            name = "SPY" if symbol == "__reference__" else symbol
-            merged[name] = merged.get(name, 0.0) + value
+            if symbol == "__reference__":
+                if value > 0:
+                    reference_holding = {"weight_pct": value / series[-1]["nav"] * 100}
+            else:
+                merged[symbol] = merged.get(symbol, 0.0) + value
         holdings = [
             {"symbol": symbol, "weight_pct": value / series[-1]["nav"] * 100}
             for symbol, value in sorted(merged.items())
@@ -431,6 +442,7 @@ def construct_policy(
                 "start_at": calendar[item.start_index],
                 "end_at": _cohort_end(calendar, item.start_index + steps),
                 "age_sessions": (len(calendar) - 1 - item.start_index) / 2,
+                "reference_weight_pct": max(0.0, 100 - sum(p.weight_pct for p in item.signal.positions)),
                 "positions": [
                     {"symbol": position.symbol, "weight_pct": position.weight_pct}
                     for position in item.signal.positions
@@ -452,6 +464,7 @@ def construct_policy(
         turnover_total,
         direction,
         liquidated_at,
+        reference_holding=reference_holding,
     )
 
 

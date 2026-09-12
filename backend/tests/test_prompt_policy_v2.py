@@ -39,7 +39,7 @@ def test_managed_execution_instructions_remain_allocation_specific():
     policy = {
         "min_position_weight_pct": 10,
         "max_position_weight_pct": 25,
-        "derived_min_positions": 4,
+        "derived_min_positions": 0,
         "derived_max_positions": 10,
     }
 
@@ -58,7 +58,7 @@ def test_managed_execution_instructions_remain_allocation_specific():
 
     assert "call `create_allocation` exactly once" in manual
     assert "create_signal" not in manual
-    assert "for a valid allocation" in automated
+    assert "Both are successful decisions, never errors or retry requests" in automated
     assert "valid signal allocation" not in automated
     assert portfolio.prompt.managed_long_text in manual
     assert portfolio.prompt.rebuilt_long_text not in manual
@@ -73,7 +73,7 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
     policy = {
         "min_position_weight_pct": 10,
         "max_position_weight_pct": 100,
-        "derived_min_positions": 1,
+        "derived_min_positions": 0,
         "derived_max_positions": 10,
     }
 
@@ -92,7 +92,7 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
 
     assert "call `create_signal` exactly once" in manual
     assert "previous signals" in manual
-    assert "valid signal allocation" in automated
+    assert "Both are successful decisions, never errors or retry requests" in automated
     assert "create_allocation" not in manual
     assert portfolio.prompt.rebuilt_long_text in manual
     assert portfolio.prompt.managed_long_text not in manual
@@ -109,7 +109,7 @@ def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_pola
     policy = {
         "min_position_weight_pct": 10,
         "max_position_weight_pct": 25,
-        "derived_min_positions": 4,
+        "derived_min_positions": 0,
         "derived_max_positions": 10,
     }
 
@@ -122,8 +122,8 @@ def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_pola
 
     assert "prices are expected to underperform SPY" in prompt
     assert "short book can outperform the Short SPY reference" in prompt
-    assert "Submit positive weights totaling exactly 100%" in prompt
-    assert "server interprets every position as gross short exposure" in prompt
+    assert "Submit positive security weights according to the allocation policy" in prompt
+    assert "server interprets them as short exposure" in prompt
     assert prompt.count("This is an all-short portfolio") == 1
     assert portfolio.prompt.managed_short_text in prompt
     assert portfolio.prompt.managed_long_text not in prompt

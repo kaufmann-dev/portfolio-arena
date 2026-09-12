@@ -98,7 +98,18 @@ export interface PositionOut {
   note?: string;
 }
 
+export type DecisionOutcome = "allocated" | "partially_allocated" | "abstained";
+
+export interface Participation {
+  decision_count: number;
+  selected_count: number;
+  abstention_count: number;
+  participation_rate: number | null;
+}
+
 export interface AllocationOut {
+  outcome: DecisionOutcome;
+  reference_weight_pct: number;
   id: number;
   portfolio_id: number;
   entered_at: string;
@@ -150,6 +161,8 @@ export interface AdminPortfoliosResponse {
 }
 
 export interface SignalOut {
+  outcome: DecisionOutcome;
+  reference_weight_pct: number;
   id: number;
   portfolio_id: number;
   entered_at: string;
@@ -190,6 +203,7 @@ export interface AlphaMetrics {
 }
 
 export interface ArenaPortfolioBase {
+  participation: Participation;
   version_id: number;
   version: ArenaVersion;
   execution_boundary: ExecutionBoundary;
@@ -303,6 +317,7 @@ export interface RebuiltArenaResponse {
 }
 
 export interface ManagedPortfolioDetail extends ManagedArenaPortfolio {
+  reference_holding: { weight_pct: number; target_weight_pct: number } | null;
   execution_prompt: string | null;
   execution_context_notice?: string | null;
   series: SeriesPoint[];
@@ -329,6 +344,7 @@ export interface ActiveCohort {
 }
 
 export interface RebuiltPortfolioDetail extends RebuiltArenaPortfolio {
+  reference_holding: { weight_pct: number } | null;
   execution_prompt: string | null;
   execution_context_notice?: string | null;
   series: SeriesPoint[];
@@ -606,6 +622,7 @@ export interface EvaluatorDashboard {
 }
 
 export interface EvaluationRun {
+  outcome: DecisionOutcome | null;
   id: number;
   portfolio: Ref & { direction: Direction; version_id: number; execution_boundary: ExecutionBoundary };
   execution_boundary: ExecutionBoundary;

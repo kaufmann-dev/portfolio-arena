@@ -25,7 +25,7 @@ from .admin_ops import AdminOpError
 from .arena import compute_valuations
 from .harnesses import automation_harness_ids, get_harness, supports_automation
 from .model_catalog import agent_out, agent_snapshot_out, model_ref
-from .prompt_policy import automated_execution_prompt
+from .prompt_policy import automated_execution_prompt, decision_summary
 from .trading_calendar import boundary_at, boundary_value, effective_date_for, is_trading_day
 
 ACTIVE_STATUSES = {"queued", "running", "cancel_requested"}
@@ -126,7 +126,11 @@ def run_out(run: EvaluationRun) -> dict:
         result = {"kind": "allocation", "id": run.allocation_id}
     elif run.signal_id is not None:
         result = {"kind": "signal", "id": run.signal_id}
+    decision = run.allocation if run.allocation_id is not None else run.signal
     return {
+        "outcome": decision_summary(p.weight_pct for p in decision.positions)["outcome"]
+        if decision is not None
+        else None,
         "id": run.id,
         "portfolio": {
             "id": run.portfolio.id,
@@ -179,6 +183,8 @@ def _run_query():
         .selectinload(Agent.model)
         .selectinload(ModelDefinition.capabilities),
         selectinload(EvaluationRun.model),
+        selectinload(EvaluationRun.allocation).selectinload(Allocation.positions),
+        selectinload(EvaluationRun.signal).selectinload(Signal.positions),
     )
 
 
@@ -937,7 +943,12 @@ def submit_run(
     # pass the duplicate check while this run is constructing its result.
     admin_ops.writable_portfolio(session, run.portfolio_id, lock=True)
     allocation_policy = admin_ops.get_app_settings(session)[f"{run.portfolio.prompt_mode}_allocation_policy"]
-    normalized = admin_ops._normalize_positions(allocation_policy, positions)
+    normalized = admin_ops._normalize_positions(allocation_policy, positions, note)
+    if (
+        decision_summary(p["weight_pct"] for p in normalized)["reference_weight_pct"] > 0
+        and not report.strip()
+    ):
+        raise AdminOpError(422, "Partial allocations and abstentions require a research report.")
     effective = run.scheduled_for or effective_date_for(current_time, run.execution_boundary)
     assert effective is not None
     if run.portfolio.prompt_mode == "managed":
@@ -958,7 +969,7 @@ def submit_run(
             session.add(allocation)
             session.flush()
             run.status = "succeeded"
-            run.allocation_id = allocation.id
+            run.allocation = allocation
         else:
             run.status = "skipped"
             run.error = "An allocation already targets this effective session."
@@ -983,12 +994,14 @@ def submit_run(
             session.add(signal)
             session.flush()
             run.status = "succeeded"
-            run.signal_id = signal.id
+            run.signal = signal
         else:
             run.status = "skipped"
             run.error = "A signal already targets this effective session."
             run.signal_id = None
         run.allocation_id = None
+    if run.status == "succeeded":
+        run.error = None
     run.report = report[:RUN_REPORT_MAX_LENGTH]
     run.lease_expires_at = None
     run.finished_at = current_time
@@ -1003,6 +1016,7 @@ def fail_run(
     run_id: int,
     error: str,
     cancelled: bool = False,
+    report: str | None = None,
     now: datetime | None = None,
 ) -> dict:
     current_time = now or datetime.now(UTC)
@@ -1011,6 +1025,8 @@ def fail_run(
     if run.status in FINISHED_STATUSES:
         return run_out(run)
     run.error = error[:RUN_ERROR_MAX_LENGTH]
+    if report is not None:
+        run.report = report[:RUN_REPORT_MAX_LENGTH]
     run.lease_expires_at = None
     run.worker_id = None
     if cancelled or run.status == "cancel_requested":

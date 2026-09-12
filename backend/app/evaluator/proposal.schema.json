@@ -2,27 +2,73 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "positions", "note", "report", "error"],
+  "required": [
+    "status",
+    "positions",
+    "note",
+    "report",
+    "error",
+    "blocked_reason"
+  ],
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["proposal", "blocked"]
+      "enum": [
+        "proposal",
+        "abstained",
+        "blocked"
+      ]
     },
     "positions": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["symbol", "weight_pct", "note"],
+        "required": [
+          "symbol",
+          "weight_pct",
+          "note"
+        ],
         "properties": {
-          "symbol": { "type": "string", "minLength": 1, "maxLength": 32 },
-          "weight_pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
-          "note": { "type": "string", "maxLength": 2000 }
+          "symbol": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "weight_pct": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000
+          }
         }
       }
     },
-    "note": { "type": "string", "maxLength": 4000 },
-    "report": { "type": "string", "maxLength": 20000 },
-    "error": { "type": "string", "maxLength": 4000 }
+    "note": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "report": {
+      "type": "string",
+      "maxLength": 20000
+    },
+    "error": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "blocked_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "portfolio_unavailable",
+        "research_unavailable",
+        null
+      ]
+    }
   }
 }

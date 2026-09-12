@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { referenceLabel, selectedTarget, sizeSelectedPositions, validateAllocation } from "../allocation";
   import { fmtDate } from "../format";
   import { apiJson } from "../api/client";
   import type { AllocationPolicy, Boundary, Direction, ResolvedSymbol } from "../api/types";
@@ -24,6 +25,7 @@
     portfolioId: number;
     initialPositions?: { symbol: string; weight_pct: number; note?: string }[];
     initialNote?: string;
+    initialAbstained?: boolean;
     /** When false (locked allocation edit) position rows are read-only. */
     positionsEditable?: boolean;
     submitLabel: string;
@@ -37,6 +39,7 @@
     portfolioId,
     initialPositions = [],
     initialNote = "",
+    initialAbstained = false,
     positionsEditable = true,
     submitLabel,
     onSubmit,
@@ -76,6 +79,8 @@
   let rows = $state<Row[]>(toRows(initialPositions));
   // svelte-ignore state_referenced_locally
   let note = $state(initialNote);
+  // svelte-ignore state_referenced_locally
+  let abstained = $state(initialAbstained);
   let submitting = $state(false);
   let formError = $state("");
 
@@ -92,8 +97,13 @@
   }
   void loadEffectivePreview();
 
-  const weightSum = $derived(rows.reduce((sum, row) => sum + (parseFloat(row.weight) || 0), 0));
-  const sumOk = $derived(Math.abs(weightSum - 100) < 1e-6);
+  const selectedRows = $derived(abstained ? [] : rows.filter((row) => row.symbol.trim()));
+  const weightSum = $derived(selectedRows.reduce((sum, row) => sum + (Number(row.weight) || 0), 0));
+  const targetWeight = $derived(
+    positionsEditable ? selectedTarget(selectedRows.length, policy?.max_position_weight_pct) : weightSum,
+  );
+  const referenceWeight = $derived(Math.max(0, 100 - targetWeight));
+  const sumOk = $derived(Math.abs(weightSum - targetWeight) < 1e-6);
 
   function addRow() {
     rows = [...rows, emptyRow()];
@@ -147,50 +157,34 @@
     }
   }
 
-  function normalize() {
-    const total = weightSum;
-    if (total <= 0) return;
-    rows = rows.map((row) => {
-      const weight = parseFloat(row.weight) || 0;
-      return { ...row, weight: ((weight / total) * 100).toFixed(4).replace(/\.?0+$/, "") };
-    });
-    // rounding residue lands on the largest position so the sum is exactly 100
-    const parsed = rows.map((row) => parseFloat(row.weight) || 0);
-    const residue = 100 - parsed.reduce((a, b) => a + b, 0);
-    if (Math.abs(residue) > 1e-9) {
-      const largest = parsed.indexOf(Math.max(...parsed));
-      rows[largest].weight = String(Math.round((parsed[largest] + residue) * 1e4) / 1e4);
+  function sizePositions() {
+    formError = "";
+    try {
+      const weights = sizeSelectedPositions(selectedRows.length, policy);
+      selectedRows.forEach((row, index) => {
+        row.weight = String(weights[index]);
+      });
+    } catch (error) {
+      formError = error instanceof Error ? error.message : "Could not size positions.";
     }
   }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     formError = "";
-    const positions = rows
-      .filter((row) => row.symbol.trim())
+    const positions = (abstained ? [] : rows)
+      .filter((row) => row.symbol.trim() || Number(row.weight) || row.note.trim())
       .map((row) => ({
         symbol: row.symbol.trim().toUpperCase(),
-        weight_pct: parseFloat(row.weight) || 0,
+        weight_pct: Number(row.weight),
         note: row.note.trim(),
       }));
-    if (!positions.length) {
-      formError = "Enter at least one position.";
-      return;
-    }
-    if (!sumOk) {
-      formError = `Weights sum to ${weightSum.toFixed(4)} — they must be exactly 100.`;
-      return;
-    }
-    if (
-      policy &&
-      positions.some(
-        (position) =>
-          position.weight_pct < policy.min_position_weight_pct ||
-          position.weight_pct > policy.max_position_weight_pct,
-      )
-    ) {
-      formError = `Every position must be between ${policy.min_position_weight_pct}% and ${policy.max_position_weight_pct}%.`;
-      return;
+    if (positionsEditable) {
+      const error = validateAllocation(positions, note, abstained, policy);
+      if (error) {
+        formError = error;
+        return;
+      }
     }
     submitting = true;
     try {
@@ -211,7 +205,9 @@
         <div>
           <span class="positions-title" aria-hidden="true">Target {direction} positions</span>
           <p class="muted">
-            USD-denominated equities and ETFs · fully invested {direction} book
+            Qualifying USD-denominated equities and ETFs; remaining exposure follows {referenceLabel(
+              direction,
+            )}.
           </p>
         </div>
         <span class={["weight-total", "num", sumOk ? "ok" : "neg"]} aria-live="polite">
@@ -228,95 +224,105 @@
           >
         </div>
       {/if}
-      <div class="rows">
-        {#each rows as row, index (row.id)}
-          <article class="position-row">
-            <div class="position-index num" aria-hidden="true">{String(index + 1).padStart(2, "0")}</div>
-            <div class="symbol-cell">
-              <label for="symbol-{row.id}">Symbol</label>
-              <input
-                id="symbol-{row.id}"
-                type="text"
-                placeholder="AAPL"
-                value={row.symbol}
-                oninput={(event) => updateSymbol(row, event.currentTarget.value)}
-                onblur={() => checkSymbol(row)}
-                aria-label="Symbol for row {index + 1}"
-                class={row.status === "error" ? "invalid" : undefined}
-              />
-              <div class="resolution" aria-live="polite" aria-atomic="true">
-                {#if row.status === "checking"}
-                  <span class="muted">checking…</span>
-                {:else if row.status === "ok" && row.resolved}
-                  <span class="ok">
-                    <CircleCheck size={14} aria-hidden="true" />
-                    {row.resolved.name} · {row.resolved.security_type}
-                  </span>
-                {:else if row.status === "error"}
-                  <span class="neg">{row.error}</span>
-                {/if}
+      <label class="abstention-choice">
+        <input type="checkbox" bind:checked={abstained} /> No qualifying securities
+      </label>
+      {#if abstained}
+        <p class="muted">This records a completed decision with 100% {referenceLabel(direction)} exposure.</p>
+      {:else}
+        <div class="rows">
+          {#each rows as row, index (row.id)}
+            <article class="position-row">
+              <div class="position-index num" aria-hidden="true">{String(index + 1).padStart(2, "0")}</div>
+              <div class="symbol-cell">
+                <label for="symbol-{row.id}">Symbol</label>
+                <input
+                  id="symbol-{row.id}"
+                  type="text"
+                  placeholder="AAPL"
+                  value={row.symbol}
+                  oninput={(event) => updateSymbol(row, event.currentTarget.value)}
+                  onblur={() => checkSymbol(row)}
+                  aria-label="Symbol for row {index + 1}"
+                  class={row.status === "error" ? "invalid" : undefined}
+                />
+                <div class="resolution" aria-live="polite" aria-atomic="true">
+                  {#if row.status === "checking"}
+                    <span class="muted">checking…</span>
+                  {:else if row.status === "ok" && row.resolved}
+                    <span class="ok">
+                      <CircleCheck size={14} aria-hidden="true" />
+                      {row.resolved.name} · {row.resolved.security_type}
+                    </span>
+                  {:else if row.status === "error"}
+                    <span class="neg">{row.error}</span>
+                  {/if}
+                </div>
               </div>
-            </div>
-            <div class="weight-cell">
-              <label for="weight-{row.id}">Weight %</label>
-              <input
-                id="weight-{row.id}"
-                class="weight"
-                type="number"
-                step="0.0001"
-                min="0"
-                placeholder="0"
-                bind:value={row.weight}
-                aria-label="Weight percent for row {index + 1}"
-              />
-            </div>
-            <div class="row-actions">
-              <button
-                type="button"
-                class="btn small icon-btn"
-                onclick={() => move(index, -1)}
-                aria-label="Move row {index + 1} up"
-                disabled={index === 0}><ChevronUp size={14} /></button
-              >
-              <button
-                type="button"
-                class="btn small icon-btn"
-                onclick={() => move(index, 1)}
-                aria-label="Move row {index + 1} down"
-                disabled={index === rows.length - 1}><ChevronDown size={14} /></button
-              >
-              <button
-                type="button"
-                class="btn small danger icon-btn"
-                onclick={() => removeRow(index)}
-                aria-label="Remove row {index + 1}"><X size={14} /></button
-              >
-            </div>
-            <div class="note-cell">
-              <label for="position-note-{row.id}">Handoff note <span class="muted">optional</span></label>
-              <input
-                id="position-note-{row.id}"
-                class="pos-note"
-                type="text"
-                placeholder={direction === "short"
-                  ? "Why this security belongs in the short book"
-                  : "Why this security belongs in the long portfolio"}
-                bind:value={row.note}
-                aria-label="Agent note for row {index + 1}"
-              />
-            </div>
-          </article>
-        {/each}
-      </div>
-      <div class="rows-footer">
-        <button type="button" class="btn small" onclick={addRow}>+ Add position</button>
-        {#if !sumOk}
-          <span class="sum-message neg">Weights must total exactly 100%.</span>
-        {/if}
-        <button type="button" class="btn small" onclick={normalize} disabled={weightSum <= 0}>
-          Normalize to 100
-        </button>
-      </div>
+              <div class="weight-cell">
+                <label for="weight-{row.id}">Weight %</label>
+                <input
+                  id="weight-{row.id}"
+                  class="weight"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  placeholder="0"
+                  bind:value={row.weight}
+                  aria-label="Weight percent for row {index + 1}"
+                />
+              </div>
+              <div class="row-actions">
+                <button
+                  type="button"
+                  class="btn small icon-btn"
+                  onclick={() => move(index, -1)}
+                  aria-label="Move row {index + 1} up"
+                  disabled={index === 0}><ChevronUp size={14} /></button
+                >
+                <button
+                  type="button"
+                  class="btn small icon-btn"
+                  onclick={() => move(index, 1)}
+                  aria-label="Move row {index + 1} down"
+                  disabled={index === rows.length - 1}><ChevronDown size={14} /></button
+                >
+                <button
+                  type="button"
+                  class="btn small danger icon-btn"
+                  onclick={() => removeRow(index)}
+                  aria-label="Remove row {index + 1}"><X size={14} /></button
+                >
+              </div>
+              <div class="note-cell">
+                <label for="position-note-{row.id}">Handoff note <span class="muted">optional</span></label>
+                <input
+                  id="position-note-{row.id}"
+                  class="pos-note"
+                  type="text"
+                  placeholder={direction === "short"
+                    ? "Why this security belongs in the short book"
+                    : "Why this security belongs in the long portfolio"}
+                  bind:value={row.note}
+                  aria-label="Agent note for row {index + 1}"
+                />
+              </div>
+            </article>
+          {/each}
+        </div>
+        <div class="rows-footer">
+          <button type="button" class="btn small" onclick={addRow}>+ Add position</button>
+          {#if !sumOk}
+            <span class="sum-message neg">Selected weights must total {targetWeight}%.</span>
+          {/if}
+          <button type="button" class="btn small" onclick={sizePositions} disabled={!selectedRows.length}>
+            Size selected positions
+          </button>
+        </div>
+      {/if}
+      <p class="muted" aria-live="polite">
+        Target: {targetWeight}% selections · {referenceWeight}% {referenceLabel(direction)}
+      </p>
     </fieldset>
   {:else}
     <p class="muted locked-note">
@@ -327,12 +333,13 @@
   <div class="field">
     <label for="alloc-note">
       {entryKind === "signal" ? "Signal rationale" : "Allocation handoff"}
-      <span class="muted">optional</span>
+      <span class="muted">{referenceWeight > 0 ? "required" : "optional"}</span>
     </label>
     <textarea
       id="alloc-note"
       bind:value={note}
       rows="4"
+      required={positionsEditable && referenceWeight > 0}
       placeholder={entryKind === "signal"
         ? direction === "short"
           ? "Summarize why these securities should underperform and the evidence behind the signal."
@@ -357,6 +364,17 @@
 </form>
 
 <style>
+  .abstention-choice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-block: 14px;
+  }
+
+  .abstention-choice input {
+    width: auto;
+  }
+
   .alloc-form {
     display: grid;
     gap: 22px;

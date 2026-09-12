@@ -1,11 +1,11 @@
 """Pydantic request/response models."""
 
-import math
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .services.prompt_policy import (
+    allocation_policy_from_limits,
     validate_direction_instructions,
     validate_prompt_texts,
     validate_wrapper_prompt,
@@ -58,10 +58,7 @@ class AllocationPolicyIn(BaseModel):
     def validate_feasible(self):
         if self.min_position_weight_pct > self.max_position_weight_pct:
             raise ValueError("Minimum position weight cannot exceed the maximum.")
-        minimum_positions = math.ceil(100 / self.max_position_weight_pct)
-        maximum_positions = math.floor(100 / self.min_position_weight_pct)
-        if minimum_positions > maximum_positions:
-            raise ValueError("Position weight limits cannot form a portfolio totaling 100%.")
+        allocation_policy_from_limits(self.min_position_weight_pct, self.max_position_weight_pct)
         return self
 
 
@@ -106,31 +103,31 @@ class PromptPatch(BaseModel):
 
 class PositionIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
-    weight_pct: float = Field(ge=0)
+    weight_pct: float = Field(gt=0, le=100, allow_inf_nan=False)
     note: str = Field(default="", max_length=2000)
 
 
 class AllocationCreate(BaseModel):
-    positions: list[PositionIn] = Field(min_length=1)
+    positions: list[PositionIn]
     note: str = ""
 
 
 class AllocationUpdate(BaseModel):
     """Positions are frozen once the allocation is locked; metadata stays editable."""
 
-    positions: list[PositionIn] | None = Field(default=None, min_length=1)
+    positions: list[PositionIn] | None = None
     note: str | None = None
 
 
 class SignalCreate(BaseModel):
-    positions: list[PositionIn] = Field(min_length=1)
+    positions: list[PositionIn]
     note: str = Field(default="", max_length=4000)
 
 
 class SignalUpdate(BaseModel):
     """A pending signal may be replaced as a complete immutable snapshot."""
 
-    positions: list[PositionIn] | None = Field(default=None, min_length=1)
+    positions: list[PositionIn] | None = None
     note: str | None = Field(default=None, max_length=4000)
 
 
@@ -234,7 +231,7 @@ class MuseCatalogImportIn(BaseModel):
 
 
 class EvaluatorRunSubmitIn(BaseModel):
-    positions: list[PositionIn] = Field(min_length=1)
+    positions: list[PositionIn]
     note: str = Field(max_length=4000)
     report: str = Field(max_length=20_000)
 
@@ -242,6 +239,7 @@ class EvaluatorRunSubmitIn(BaseModel):
 class EvaluatorRunFailIn(BaseModel):
     error: str = Field(min_length=1, max_length=4000)
     cancelled: bool = False
+    report: str | None = Field(default=None, max_length=20_000)
 
 
 class ApiKeyCreate(BaseModel):

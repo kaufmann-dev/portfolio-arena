@@ -32,31 +32,44 @@ class ProposalPosition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     symbol: str = Field(min_length=1, max_length=32)
-    weight_pct: float = Field(gt=0, le=100)
+    weight_pct: float = Field(gt=0, le=100, allow_inf_nan=False)
     note: str = Field(max_length=2000)
 
 
 class Proposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["proposal", "blocked"]
+    status: Literal["proposal", "abstained", "blocked"]
     positions: list[ProposalPosition]
     note: str = Field(max_length=4000)
     report: str = Field(max_length=20_000)
     error: str = Field(max_length=4000)
+    blocked_reason: Literal["portfolio_unavailable", "research_unavailable"] | None
 
     @model_validator(mode="after")
     def validate_status_payload(self):
-        if self.status == "proposal":
-            if not self.positions:
+        if self.status != "blocked":
+            if self.status == "proposal" and not self.positions:
                 raise ValueError("A proposal must contain at least one position")
+            if self.status == "abstained" and self.positions:
+                raise ValueError("An abstention cannot contain positions")
+            if self.blocked_reason is not None:
+                raise ValueError("Completed research cannot contain a blocked reason")
             if self.error:
                 raise ValueError("A proposal cannot contain an error")
+            if sum(position.weight_pct for position in self.positions) < 100 and (
+                not self.note.strip() or not self.report.strip()
+            ):
+                raise ValueError("Partial allocations and abstentions require a note and research report")
         else:
             if self.positions:
                 raise ValueError("A blocked result cannot contain positions")
             if not self.error.strip():
                 raise ValueError("A blocked result must explain the error")
+            if self.blocked_reason is None:
+                raise ValueError(
+                    "A blocked result must identify the unavailable research or portfolio context"
+                )
         return self
 
 
@@ -92,7 +105,7 @@ class RunCancelled(RuntimeError):
 
 
 class EvaluationBlocked(RuntimeError):
-    """The harness could not produce a valid portfolio proposal."""
+    """The harness could not access required research or portfolio context."""
 
 
 @dataclass
@@ -382,10 +395,11 @@ async def evaluate_run(
     settings: EvaluatorRuntimeSettings,
     run: ClaimedRun,
 ) -> None:
+    proposal = None
     try:
         proposal = await (run_muse(settings, run) if run.harness == "muse" else run_codex(settings, run))
         if proposal.status == "blocked":
-            raise EvaluationBlocked(proposal.error)
+            raise EvaluationBlocked(f"{proposal.blocked_reason}: {proposal.error}")
         await internal_request(
             settings,
             "POST",
@@ -422,7 +436,11 @@ async def evaluate_run(
                 settings,
                 "POST",
                 f"/runs/{run.id}/fail",
-                {"error": message[-4000:], "cancelled": False},
+                {
+                    "error": message[-4000:],
+                    "cancelled": False,
+                    "report": proposal.report if proposal else None,
+                },
             )
         except Exception:
             logger.exception("evaluation_failure_record_failed run_id=%s", run.id)

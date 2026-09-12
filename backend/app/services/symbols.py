@@ -1,6 +1,8 @@
 """Validation for USD-denominated equities and ETFs."""
 
+import math
 from dataclasses import dataclass
+from decimal import Decimal
 
 from . import massive
 
@@ -108,13 +110,10 @@ def search_symbols_allowed(query: str) -> list[dict]:
 
 
 def validate_positions(positions: list[dict]) -> None:
-    """Submit-time position-set rules: no duplicates, all >= 0, sum exactly 100.
+    """Submit-time position-set rules: unique positive weights, at most 100%.
 
     `positions` is a list of {symbol (normalized), weight_pct}. Pure, no network.
     """
-    if not positions:
-        raise SymbolValidationError("At least one position is required.")
-
     seen: set[str] = set()
     total = 0.0
     for position in positions:
@@ -123,12 +122,15 @@ def validate_positions(positions: list[dict]) -> None:
         if symbol in seen:
             raise SymbolValidationError(f"Duplicate symbol {symbol}.")
         seen.add(symbol)
-        if weight < 0:
+        if not math.isfinite(weight) or weight <= 0:
             raise SymbolValidationError(
-                f"Negative weight for {symbol}; portfolio direction is set separately."
+                f"Weight for {symbol} must be positive and finite; direction is set separately."
             )
+        if weight > 100:
+            raise SymbolValidationError(f"Weights cannot exceed 100 (got {weight:g}).")
+        if Decimal(str(weight)) != Decimal(str(weight)).quantize(Decimal("0.0001")):
+            raise SymbolValidationError("Position weights support at most four decimal places.")
         total += weight
 
-    # Weights are entered with 4 decimals; exactly-100 means to that precision.
-    if abs(total - 100.0) > 1e-6:
-        raise SymbolValidationError(f"Weights must sum to exactly 100 (got {total:g}).")
+    if total > 100.0 + 1e-6:
+        raise SymbolValidationError(f"Weights cannot exceed 100 (got {total:g}).")

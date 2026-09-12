@@ -43,7 +43,7 @@ from .valuation import (
 
 SPY_SYMBOL = "SPY"
 MarketDataStatus = Literal["fresh", "updating", "stale", "unavailable"]
-ANALYTICS_ENGINE_VERSION = 3
+ANALYTICS_ENGINE_VERSION = 4
 
 
 @dataclass

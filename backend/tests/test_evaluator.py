@@ -85,6 +85,7 @@ def test_run_codex_applies_snapshot_reasoning_without_service_tier(tmp_path, mon
                 json.dumps(
                     {
                         "status": "proposal",
+                        "blocked_reason": None,
                         "positions": [{"symbol": "AAPL", "weight_pct": 100, "note": "test"}],
                         "note": "test",
                         "report": "test",
@@ -129,6 +130,7 @@ def test_run_codex_omits_reasoning_when_model_has_none(tmp_path, monkeypatch):
                 json.dumps(
                     {
                         "status": "proposal",
+                        "blocked_reason": None,
                         "positions": [{"symbol": "AAPL", "weight_pct": 100, "note": "test"}],
                         "note": "test",
                         "report": "test",
@@ -162,6 +164,7 @@ def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):
 
         return Proposal(
             status="blocked",
+            blocked_reason="portfolio_unavailable",
             positions=[],
             note="",
             report="",
@@ -182,7 +185,8 @@ def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):
             "POST",
             "/runs/17/fail",
             {
-                "error": "EvaluationBlocked: get_portfolio was unavailable",
+                "error": "EvaluationBlocked: portfolio_unavailable: get_portfolio was unavailable",
+                "report": "",
                 "cancelled": False,
             },
         )

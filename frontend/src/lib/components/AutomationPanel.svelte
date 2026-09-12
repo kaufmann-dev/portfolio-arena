@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { decisionOutcomeLabel } from "../allocation";
   import { apiJson, del, postJson, putJson } from "../api/client";
   import type {
     EvaluationQueueResponse,
@@ -652,7 +653,13 @@
                 </div>
                 <div class="cell-line muted num">{run.harness_version ?? "not claimed"}</div>
               </td>
-              <td><span class={`badge ${statusClass(run.status)}`}>{run.status}</span></td>
+              <td
+                ><span class={`badge ${statusClass(run.status)}`}
+                  >{run.status === "succeeded" && run.outcome
+                    ? decisionOutcomeLabel(run.outcome)
+                    : run.status}</span
+                ></td
+              >
               <td class="right num">{run.attempt_count}/{run.max_attempts}</td>
               <td class="num"><span class="cell-line">{fmtDateTime(run.finished_at)}</span></td>
               <td>
@@ -715,18 +722,37 @@
                   <div class="run-report-panel">
                     <div class="run-report-head">
                       <strong class="run-report-title" id={`run-report-title-${run.id}`}>
-                        {run.error ? "Error details" : "Evaluation report"} for {run.portfolio.name} · run #{run.id}
+                        {run.error && run.report
+                          ? "Evaluation details"
+                          : run.error
+                            ? "Error details"
+                            : "Evaluation report"} for {run.portfolio.name} · run #{run.id}
                       </strong>
                       <button class="btn small" type="button" onclick={() => toggleRunReport(run.id)}>
                         Close
                       </button>
                     </div>
-                    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-                    <pre
-                      class={{ "error-report": Boolean(run.error) }}
-                      tabindex="0"
-                      role="region"
-                      aria-labelledby={`run-report-title-${run.id}`}>{run.error ?? run.report}</pre>
+                    {#if run.error}
+                      {#if run.report}<strong id={`run-error-label-${run.id}`}>Error details</strong>{/if}
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                      <pre
+                        class="error-report"
+                        tabindex="0"
+                        role="region"
+                        aria-labelledby={run.report
+                          ? `run-error-label-${run.id}`
+                          : `run-report-title-${run.id}`}>{run.error}</pre>
+                    {/if}
+                    {#if run.report}
+                      {#if run.error}<strong id={`run-report-label-${run.id}`}>Evaluation report</strong>{/if}
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                      <pre
+                        tabindex="0"
+                        role="region"
+                        aria-labelledby={run.error
+                          ? `run-report-label-${run.id}`
+                          : `run-report-title-${run.id}`}>{run.report}</pre>
+                    {/if}
                   </div>
                 </td>
               </tr>
@@ -924,7 +950,7 @@
   }
 
   .runs-table {
-    min-width: 1080px;
+    min-width: 1134px;
     table-layout: fixed;
   }
 
@@ -941,7 +967,7 @@
   }
 
   .runs-table .status-column {
-    width: 116px;
+    width: 170px;
   }
 
   .runs-table .attempts-column {

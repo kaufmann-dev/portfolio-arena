@@ -78,6 +78,19 @@
             </p>
           </section>
         </div>
+        <h2>Partial selections and abstentions</h2>
+        <p>
+          Both tracks allocate only to qualifying securities. Selected weights total the smaller of 100% or
+          the number of selections times the per-position cap. The remainder automatically follows SPY for
+          long portfolios or the daily −1× Short SPY reference for short portfolios. Selected SPY holdings are
+          separate from this automatic reference exposure.
+        </p>
+        <p>
+          Completed research finding no qualifying securities records a successful abstention with 100%
+          reference exposure and does not trigger a retry. A managed abstention replaces existing holdings at
+          its effective boundary. Rebuilt abstentions leave older cohorts active until their horizons expire.
+          Technical failures remain retryable and create no portfolio decision.
+        </p>
         <h2>Portfolio tuned comparison</h2>
         <p>
           “Optimize horizon by” selects each portfolio’s horizon using Signal α/day (the default), Adjusted
@@ -145,10 +158,11 @@
         <h2>Metrics explained</h2>
         <h3>Signal α/day: how good were the individual picks?</h3>
         <p>
-          Each rebuilt evaluation records an independent basket of stocks and weights: a signal. For each
-          completed signal, we measure its basket return and the direction-matched SPY return over the same
-          holding period. We convert their relative growth into a one-session equivalent, then average those
-          daily-equivalent values across completed signals. Open signals are excluded from this average.
+          Each completed rebuilt evaluation records a signal with selected securities and automatic reference
+          exposure, including reference-only abstentions. For each completed signal, we measure its combined
+          selection and reference return and the direction-matched SPY return over the same holding period. We
+          convert their relative growth into a one-session equivalent, then average those daily-equivalent
+          values across completed signals. Open signals are excluded from this average.
         </p>
         <p>
           For one signal, the calculation is
@@ -221,6 +235,12 @@
           identical. ITD return is the portfolio’s cumulative return since inception; cumulative excess is
           that return minus the benchmark’s cumulative return over the same period. These totals include any
           initial partial session and are not daily averages.
+        </p>
+        <p>
+          Abstentions count as decisions and mature across rebuilt horizons with zero alpha against the
+          reference. Selection participation is decisions with at least one selected security divided by
+          completed decisions; partial selections count as participation. Read participation alongside
+          performance and signal completion. Technical failures are shown separately in evaluation history.
         </p>
         <h3>Other portfolio measurements</h3>
         <p>

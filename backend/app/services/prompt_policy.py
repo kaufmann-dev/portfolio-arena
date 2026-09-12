@@ -2,6 +2,7 @@
 
 import math
 import re
+from decimal import Decimal
 
 from ..models import Portfolio, Prompt
 
@@ -83,7 +84,8 @@ authoritative. Follow the eligibility rules and submission instructions in this 
 
 Act as a US equity portfolio manager aiming to outperform the portfolio's direction-matched SPY
 reference. Search across the full eligible US market rather than defaulting to index constituents,
-household names, or recent winners. Do not mirror SPY. Select a stock or ETF only when it has a
+household names, or recent winners. Do not select SPY as a substitute for research; the server supplies
+any automatic reference allocation. Select a stock or ETF only when it has a
 distinct, falsifiable, security-specific investment thesis supported by current evidence.
 
 If the returned allocation history is empty, construct the portfolio's initial allocation. Otherwise,
@@ -124,7 +126,8 @@ Do not use prior portfolio state from any source when constructing or weighting 
 
 Act as a US equity security selector aiming to outperform the portfolio's direction-matched SPY
 reference. Search across the full eligible US market rather than defaulting to index constituents,
-household names, or recent winners. Do not mirror SPY.
+household names, or recent winners. Do not select SPY as a substitute for research; the server supplies
+any automatic reference allocation.
 
 This is an independent security-selection signal. Breadth must be an outcome of the evidence, not a
 diversification target. Select only securities that independently qualify under the strategy. Never
@@ -155,8 +158,8 @@ Research all decision-relevant current information with Massive and live web sea
 
 DEFAULT_LONG_DIRECTION_INSTRUCTIONS = """\
 - This is an all-long portfolio. Every submitted position is a long position.
-- Invest exactly 100% of NAV across USD-denominated equities and ETFs.
-- Do not use cash, shorts, or leverage."""
+- Submit security weights according to the allocation policy; the server puts any remainder in long SPY.
+- Do not submit cash, shorts, leverage, or placeholder reference tickers."""
 
 DEFAULT_SHORT_DIRECTION_INSTRUCTIONS = "\n".join(
     [
@@ -165,34 +168,29 @@ DEFAULT_SHORT_DIRECTION_INSTRUCTIONS = "\n".join(
             "underperform SPY so the short book can outperform the Short SPY reference."
         ),
         (
-            "- Submit positive weights totaling exactly 100%; the server interprets every position "
-            "as gross short exposure."
+            "- Submit positive security weights according to the allocation policy; the server interprets "
+            "them as short exposure and puts any remainder in the synthetic Short SPY reference."
         ),
-        "- Do not use cash, long positions, or gross exposure above 100%.",
+        "- Do not submit cash, long positions, gross exposure above 100%, or placeholder reference tickers.",
     ]
 )
 
-MANAGED_AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
-Do not call any write tool: the worker will validate and submit the final structured proposal
-atomically.
+AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
+Do not call any write tool: the worker validates and submits the final structured decision atomically.
 
-The report should briefly explain the portfolio-level decision, key evidence, material risks, and
-what would change the next evaluation. Position notes should be concise handoff context.
+Return status `proposal` with selected securities, or `abstained` with no positions when completed
+research finds no qualifying securities. Both are successful decisions, never errors or retry requests.
+Use an empty `error` and null `blocked_reason` for either successful outcome. Explain partial allocations
+and abstentions in both `note` and `report`, including the research performed and why candidates failed
+the strategy. Insufficient qualifying securities is never a blocked result. Never invent a placeholder.
 
-Return `status` as `proposal` with an empty `error` for a valid allocation. If `get_portfolio` fails
-or no valid allocation can be produced, return `status` as `blocked`, no positions, and a concise
-`error`; never invent a placeholder symbol."""
+Use status `blocked`, no positions, and a concise `error` only when required context or research could
+not be accessed. Set `blocked_reason` to `portfolio_unavailable` or `research_unavailable` accordingly.
+Explain the access problem and preserve any completed research in `report`.
 
-REBUILT_AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
-Do not call any write tool: the worker will validate and submit the final structured proposal
-atomically.
-
-The report should briefly explain the signal-level decision, key evidence, material risks, and what
-would change the next evaluation. Position notes should be concise signal context.
-
-Return `status` as `proposal` with an empty `error` for a valid signal allocation. If `get_portfolio`
-fails or no valid signal allocation can be produced, return `status` as `blocked`, no positions, and
-a concise `error`; never invent a placeholder symbol."""
+The report should explain the decision, key evidence, material risks, and what would change the next
+evaluation. Position notes should provide concise thesis context.
+"""
 
 MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS = """\
 When the analysis is complete, call `create_allocation` exactly once with the portfolio id returned by
@@ -327,16 +325,16 @@ lasting deterioration in business value.""",
 
 
 def allocation_policy_from_limits(minimum: float, maximum: float) -> dict:
-    if minimum <= 0 or maximum > 100 or minimum > maximum:
+    if not all(math.isfinite(value) for value in (minimum, maximum)) or not 0 < minimum <= maximum <= 100:
         raise ValueError("Position weights must satisfy 0 < minimum <= maximum <= 100.")
-    minimum_positions = math.ceil(100 / maximum)
+    for value in (minimum, maximum):
+        if Decimal(str(value)) != Decimal(str(value)).quantize(Decimal("0.0001")):
+            raise ValueError("Position limits support at most four decimal places.")
     maximum_positions = math.floor(100 / minimum)
-    if minimum_positions > maximum_positions:
-        raise ValueError("Position weight limits cannot form a portfolio totaling 100%.")
     return {
         "min_position_weight_pct": minimum,
         "max_position_weight_pct": maximum,
-        "derived_min_positions": minimum_positions,
+        "derived_min_positions": 0,
         "derived_max_positions": maximum_positions,
     }
 
@@ -362,6 +360,29 @@ def validate_position_weights(policy: dict, positions: list[dict]) -> None:
         weight = float(position["weight_pct"])
         if weight < minimum or weight > maximum:
             raise ValueError(f"{position['symbol']} weight must be between {minimum:g}% and {maximum:g}%.")
+    total = sum((Decimal(str(position["weight_pct"])) for position in positions), Decimal(0))
+    required = min(Decimal(100), len(positions) * Decimal(str(maximum)))
+    if total != required:
+        raise ValueError(
+            f"Selected weights must total {required:g}% for {len(positions)} positions (got {total:g})."
+        )
+
+
+def decision_summary(weights) -> dict:
+    """Derive reference allocation and outcome from persisted security weights."""
+    total = sum((Decimal(str(weight)) for weight in weights), Decimal(0))
+    return {
+        "reference_weight_pct": float(max(Decimal(0), Decimal(100) - total)),
+        "outcome": "abstained" if total == 0 else "partially_allocated" if total < 100 else "allocated",
+    }
+
+
+def validate_decision_note(positions: list[dict], note: str) -> None:
+    if (
+        decision_summary(position["weight_pct"] for position in positions)["reference_weight_pct"] > 0
+        and not note.strip()
+    ):
+        raise ValueError("Partial allocations and abstentions require an explanation in the note.")
 
 
 def validate_wrapper_prompt(template: str) -> str:
@@ -395,6 +416,13 @@ def allocation_policy_text(policy: dict) -> str:
                 f"- Every position must be between {policy['min_position_weight_pct']:g}% and "
                 f"{policy['max_position_weight_pct']:g}% of NAV."
             ),
+            "- For n selected securities, their weights must total min(100, n × maximum position weight).",
+            "- Use at most four decimal places. Do not normalize partial allocations to 100%.",
+            "- The server puts the remainder in direction-matched SPY, outside security weight limits.",
+            "- Zero qualifying securities is a valid abstention: submit no positions and explain why.",
+            "- Research broadly; never add marginal or omit qualifying securities to alter reference weight.",
+            "- Explain partial allocations and abstentions in the note; reference is not a selected ticker.",
+            "- Managed decisions replace holdings. Abstaining exits selected holdings into the reference.",
             "- Do not use mutual funds, options, futures, indices, or FX.",
             "- Validate every final symbol before submitting.",
         ]
@@ -451,11 +479,7 @@ def automated_execution_prompt(
     allocation_policy: dict,
 ) -> str:
     """Build the complete prompt sent to an integrated evaluator worker."""
-    submission_instructions = (
-        REBUILT_AUTOMATED_SUBMISSION_INSTRUCTIONS
-        if portfolio.prompt_mode == "rebuilt"
-        else MANAGED_AUTOMATED_SUBMISSION_INSTRUCTIONS
-    )
+    submission_instructions = AUTOMATED_SUBMISSION_INSTRUCTIONS
     return render_execution_prompt(
         portfolio,
         wrapper_prompt,
