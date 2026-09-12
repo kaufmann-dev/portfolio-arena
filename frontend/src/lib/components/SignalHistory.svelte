@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { decisionOutcomeLabel, referenceLabel } from "../allocation";
   import { apiJson } from "../api/client";
   import type { Direction, SignalOut, SignalsPage } from "../api/types";
   import { fmtDate, fmtDateTime, pctPoints } from "../format";
@@ -56,7 +57,7 @@
         <summary>
           <span class="disclosure-primary">
             <strong class="num">{fmtDate(signal.effective_at)}</strong>
-            <span>{signal.positions.length} positions</span>
+            <span>{decisionOutcomeLabel(signal.outcome)} · {signal.positions.length} positions</span>
           </span>
           <span class="disclosure-meta">
             {signal.locked ? "Locked" : "Pending"}
@@ -78,6 +79,13 @@
                     <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
                   </tr>
                 {/each}
+                {#if signal.reference_weight_pct > 0}
+                  <tr
+                    ><td>{referenceLabel(direction)}</td><td class="right num"
+                      >{pctPoints(signal.reference_weight_pct, 2)}</td
+                    ></tr
+                  >
+                {/if}
               </tbody>
             </table>
           </div>

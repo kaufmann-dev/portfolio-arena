@@ -69,14 +69,23 @@ The project measures cost-free paper performance for research.
 - **Research context depends on track.** Managed evaluations receive holdings, notes, allocation
   history and performance. Rebuilt evaluations receive no prior portfolio state. Strategy and
   direction instructions are inserted into the editable track-specific wrapper in Admin → Settings.
-- **Books have one direction.** Weights are positive and total exactly 100%. Server-enforced sizing
-  defaults are 10–25% for Managed and 10–100% for Rebuilt. Changes affect future submissions.
+- **Books have one direction.** Selected weights are positive and total `min(100, count × maximum weight)`.
+  Server-enforced sizing defaults are 10–25% for Managed and 10–100% for Rebuilt, with at most four
+  decimal places. The remainder follows the direction-matched SPY reference, outside ticker limits.
+  Zero qualifying selections is a successful, explained abstention with 100% reference exposure.
+  Partial allocations also require an explanatory note. Managed decisions replace prior holdings at
+  the execution boundary; a technical failure makes no decision and existing holdings continue.
+  Limits affect future submissions; no minimum ticker count forces unsuitable selections.
 - **Benchmarks are synthetic.** Long SPY is buy-and-hold; short SPY resets to −1× at each close and
   is also marked at the open. Merely publishing another price does not trigger a portfolio trade.
 - **Rebuilt comparison is portfolio-tuned.** Forty horizons H0.5, H1, H1.5 … H20 are tested at 100%
   exposure. One half-step advances to the next open/close: morning H0.5 expires that close, morning
   H1 at the next open; evening H0.5 at the next open and evening H1 at the next close. Each daily
   cohort gets `1 / ceil(H)` of the book; unused capacity stays in direction-matched SPY.
+  Each direct signal return also includes its reference remainder. Recorded abstentions mature as
+  zero-alpha observations across all horizons, without closing older active cohorts. Participation
+  counts decisions whose execution boundary has passed: selections versus abstentions, excluding
+  technical failures. Reference holdings are displayed separately from explicitly selected SPY.
   “Optimize horizon by” selects each portfolio’s best eligible horizon using Signal α/day (default),
   adjusted lower 95%, information ratio, Sharpe, Portfolio α/day, or hit rate, breaking ties toward the
   shorter horizon. Signal α/day averages completed baskets’ benchmark-relative growth normalized to
@@ -178,7 +187,13 @@ Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It 
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Muse Code runs via `muse exec`
 with web tools enabled and shell/file writes disabled. It uses the same read-only Arena MCP token
 and Massive MCP server. Muse returns JSON in its root terminal event; the worker validates the
-proposal and rejects malformed, blocked, failed, or incomplete results before submission.
+structured response before submission. Both harnesses return `proposal` for full or partial selections,
+`abstained` for completed research with no qualifying securities, or `blocked` only when portfolio
+context or required research is unavailable. The latter requires `blocked_reason` of
+`portfolio_unavailable` or `research_unavailable`. Partial allocations and abstentions require a note
+and report. They save normal decisions and finish successfully without retries. Actual execution,
+research-access, and response-validation failures remain retryable. Successful recovery clears the
+terminal error; blocked reports are retained. Existing historical failures are left unchanged.
 
 Muse uses its persisted Meta account login and subscription. `META_API_KEY` is an optional alternative
 and takes precedence when set, matching the Muse CLI. After authentication, each Muse worker process

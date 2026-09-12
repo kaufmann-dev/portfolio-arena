@@ -65,6 +65,7 @@ from .prompt_policy import (
     allocation_policy_out,
     prompt_supports_direction,
     prompt_supports_mode,
+    validate_decision_note,
     validate_direction_instructions,
     validate_position_weights,
     validate_prompt_texts,
@@ -1296,9 +1297,8 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
 # --- Allocations ------------------------------------------------------------
 
 
-def _normalize_positions(policy: dict, positions: list[dict]) -> list[dict]:
-    """Normalize symbols and enforce the position-set rules (sum to 100, no dups,
-    positive whole-book weights) plus per-symbol resolution against Massive."""
+def _normalize_positions(policy: dict, positions: list[dict], note: str = "") -> list[dict]:
+    """Validate selected weights, the reference remainder, and real security symbols."""
     normalized = [
         {
             "symbol": normalize_symbol(p["symbol"]),
@@ -1309,9 +1309,10 @@ def _normalize_positions(policy: dict, positions: list[dict]) -> list[dict]:
     ]
     try:
         validate_positions(normalized)
+        validate_position_weights(policy, normalized)
+        validate_decision_note(normalized, note)
         for position in normalized:
             resolve_symbol(position["symbol"])
-        validate_position_weights(policy, normalized)
     except SymbolValidationError as exc:
         raise AdminOpError(422, exc.message) from None
     except ValueError as exc:
@@ -1376,7 +1377,7 @@ def create_allocation(session: Session, portfolio_id: int, positions: list[dict]
     _ensure_managed_not_liquidated(session, portfolio)
 
     policy = allocation_policy_out(get_app_settings(session), "managed")
-    normalized = _normalize_positions(policy, positions)
+    normalized = _normalize_positions(policy, positions, note or "")
     now = datetime.now(UTC)
     effective = effective_date_for(now, portfolio.execution_boundary)
     clash = session.scalars(
@@ -1420,12 +1421,16 @@ def update_allocation(
             )
         _ensure_managed_not_liquidated(session, allocation.portfolio)
         policy = allocation_policy_out(get_app_settings(session), "managed")
-        normalized = _normalize_positions(policy, positions)
+        normalized = _normalize_positions(policy, positions, note if note is not None else allocation.note)
         allocation.positions.clear()
         session.flush()  # delete old rows before inserting (unique on allocation+symbol)
         _apply_positions(allocation, normalized)
 
     if note is not None:
+        try:
+            validate_decision_note([{"weight_pct": p.weight_pct} for p in allocation.positions], note)
+        except ValueError as exc:
+            raise AdminOpError(422, str(exc)) from None
         allocation.note = note
 
     session.commit()
@@ -1515,7 +1520,7 @@ def create_signal(
     current_time = now or datetime.now(UTC)
     effective = effective_date_for(current_time, portfolio.execution_boundary)
     policy = allocation_policy_out(get_app_settings(session), "rebuilt")
-    normalized = _normalize_positions(policy, positions)
+    normalized = _normalize_positions(policy, positions, note or "")
     clash = session.scalars(
         select(Signal).where(
             Signal.portfolio_id == portfolio.id,
@@ -1562,11 +1567,15 @@ def update_signal(
         raise AdminOpError(403, "This signal is immutable: its effective boundary has passed.")
     if positions is not None:
         policy = allocation_policy_out(get_app_settings(session), "rebuilt")
-        normalized = _normalize_positions(policy, positions)
+        normalized = _normalize_positions(policy, positions, note if note is not None else signal.note)
         signal.positions.clear()
         session.flush()
         _apply_signal_positions(signal, normalized)
     if note is not None:
+        try:
+            validate_decision_note([{"weight_pct": p.weight_pct} for p in signal.positions], note)
+        except ValueError as exc:
+            raise AdminOpError(422, str(exc)) from None
         signal.note = note
     session.commit()
     return serialize_signal(reload_signal(session, signal.id), admin=True, now=current_time)

@@ -585,8 +585,10 @@ def reset_portfolio(portfolio_id: int) -> dict:
 
 @mcp.tool()
 def create_allocation(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
-    """Enter a managed rebalance (or first allocation). Weights must sum to exactly
-    100 and satisfy the portfolio prompt's position limits. Each position's
+    """Enter a managed rebalance (or first allocation). Selected weights must total
+    min(100, count × maximum weight) and satisfy the position limits. The server
+    supplies the SPY reference remainder. Empty positions means abstention; partial
+    allocations and abstentions require an explanatory note. Each position's
     `note` and the general `note` are the handoff to the next rebalance. Entry
     time is server-set; the allocation freezes after its effective boundary."""
     with _session() as session:
@@ -619,7 +621,9 @@ def delete_allocation(allocation_id: int) -> dict:
 @mcp.tool()
 def create_signal(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
     """Enter one independent rebuilt signal portfolio for the next effective
-    boundary. Weights must total 100 and satisfy the prompt policy. The server sets
+    boundary. Selected weights total min(100, count × maximum weight); the remainder
+    follows the direction-matched SPY reference. Empty positions is a valid abstention.
+    Partial allocations and abstentions require an explanatory note. The server sets
     entry/effective time; do not use this for managed portfolios."""
     with _session() as session:
         return _guard(

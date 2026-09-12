@@ -308,8 +308,8 @@ class TestPromptsAndAgents:
         assert payload["prompt"]["rebuilt_long_text"].startswith("Select a fresh long portfolio")
         assert payload["prompt"]["rebuilt_short_text"].startswith("Select a fresh short portfolio")
         assert "text" not in payload["prompt"]
-        assert payload["prompt"]["allocation_policies"]["managed"]["derived_min_positions"] == 1
-        assert payload["prompt"]["allocation_policies"]["rebuilt"]["derived_min_positions"] == 1
+        assert payload["prompt"]["allocation_policies"]["managed"]["derived_min_positions"] == 0
+        assert payload["prompt"]["allocation_policies"]["rebuilt"]["derived_min_positions"] == 0
         assert find(payload["portfolios"], sample_portfolio["slug"]) is not None
 
         row = next(
@@ -353,13 +353,13 @@ class TestAdminMisc:
             "managed_allocation_policy": {
                 "min_position_weight_pct": 10.0,
                 "max_position_weight_pct": 25.0,
-                "derived_min_positions": 4,
+                "derived_min_positions": 0,
                 "derived_max_positions": 10,
             },
             "rebuilt_allocation_policy": {
                 "min_position_weight_pct": 10.0,
                 "max_position_weight_pct": 100.0,
-                "derived_min_positions": 1,
+                "derived_min_positions": 0,
                 "derived_max_positions": 10,
             },
             "managed_wrapper_prompt": DEFAULT_MANAGED_WRAPPER_PROMPT,
@@ -395,13 +395,13 @@ class TestAdminMisc:
             "managed_allocation_policy": {
                 "min_position_weight_pct": 5.0,
                 "max_position_weight_pct": 20.0,
-                "derived_min_positions": 5,
+                "derived_min_positions": 0,
                 "derived_max_positions": 20,
             },
             "rebuilt_allocation_policy": {
                 "min_position_weight_pct": 20.0,
                 "max_position_weight_pct": 100.0,
-                "derived_min_positions": 1,
+                "derived_min_positions": 0,
                 "derived_max_positions": 5,
             },
             "managed_wrapper_prompt": updated_managed,
@@ -445,12 +445,12 @@ class TestAdminMisc:
         assert response.status_code == 422, response.text
         assert client.get("/api/settings", headers=admin_headers).json() == original
 
-    def test_settings_reject_infeasible_allocation_policy_atomically(self, client, admin_headers):
+    def test_settings_reject_invalid_allocation_limits_atomically(self, client, admin_headers):
         original = client.get("/api/settings", headers=admin_headers).json()
         payload = {
             **original,
             "managed_allocation_policy": {
-                "min_position_weight_pct": 34,
+                "min_position_weight_pct": 41,
                 "max_position_weight_pct": 40,
             },
         }
@@ -481,10 +481,10 @@ class TestAdminMisc:
         assert portfolio["prompt"]["allocation_policy"] == {
             "min_position_weight_pct": 20.0,
             "max_position_weight_pct": 50.0,
-            "derived_min_positions": 2,
+            "derived_min_positions": 0,
             "derived_max_positions": 5,
         }
-        assert "Use between 2 and 5 positions." in portfolio["execution_prompt"]
+        assert "Use between 0 and 5 positions." in portfolio["execution_prompt"]
         assert "between 20% and 50% of NAV" in portfolio["execution_prompt"]
         assert "Use the custom long direction block." in portfolio["execution_prompt"]
         assert "This is an all-long portfolio" not in portfolio["execution_prompt"]

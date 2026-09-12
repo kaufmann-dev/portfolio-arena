@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { decisionOutcomeLabel, referenceLabel } from "../allocation";
   import { apiJson } from "../api/client";
   import type {
     ManagedPortfolioDetail,
@@ -109,7 +110,11 @@
           <summary>
             <span class="disclosure-primary">
               <strong class="num">{fmtDate(allocation.effective_at)}</strong>
-              <span>{allocationTitle(index, portfolio.allocations.length)}</span>
+              <span
+                >{allocationTitle(index, portfolio.allocations.length)} · {decisionOutcomeLabel(
+                  allocation.outcome,
+                )}</span
+              >
             </span>
             <span class="disclosure-meta">
               {#if !allocation.applied_at}
@@ -137,6 +142,13 @@
                       <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
                     </tr>
                   {/each}
+                  {#if allocation.reference_weight_pct > 0}
+                    <tr
+                      ><td>{referenceLabel(portfolio.direction)}</td><td class="right num"
+                        >{pctPoints(allocation.reference_weight_pct, 2)}</td
+                      ></tr
+                    >
+                  {/if}
                 </tbody>
               </table>
             </div>
@@ -278,6 +290,24 @@
         </section>
       {/if}
 
+      <section class="policy-context" aria-label="Selection participation">
+        <div>
+          <span>Selection participation</span><strong class="num"
+            >{portfolio.participation.participation_rate === null
+              ? "—"
+              : pctPoints(portfolio.participation.participation_rate * 100, 0)}</strong
+          >
+        </div>
+        <div>
+          <span>Decisions with selections</span><strong class="num"
+            >{portfolio.participation.selected_count} / {portfolio.participation.decision_count}</strong
+          >
+        </div>
+        <div>
+          <span>Abstentions</span><strong class="num">{portfolio.participation.abstention_count}</strong>
+        </div>
+      </section>
+
       {#if portfolio.metrics.has_data}
         <section class="metric-grid" aria-label="Portfolio metrics">
           {@render metricTile(
@@ -387,9 +417,18 @@
                       {pctPoints(holding.weight_pct - holding.target_weight_pct)}
                     </td>
                   </tr>
-                {:else}
-                  <tr><td colspan="4" class="table-empty">No current holdings.</td></tr>
                 {/each}
+                {#if managedPortfolio.reference_holding}
+                  {@const reference = managedPortfolio.reference_holding}
+                  <tr>
+                    <td>{referenceLabel(portfolio.direction)}</td>
+                    <td class="right num">{pctPoints(reference.weight_pct)}</td>
+                    <td class="right num">{pctPoints(reference.target_weight_pct)}</td>
+                    <td class="right num">{pctPoints(reference.weight_pct - reference.target_weight_pct)}</td>
+                  </tr>
+                {:else if !managedPortfolio.holdings.length}
+                  <tr><td colspan="4" class="table-empty">No current holdings.</td></tr>
+                {/if}
               </tbody>
             </table>
           </div>
@@ -416,9 +455,16 @@
                     <td class="num">{holding.symbol}</td>
                     <td class="right num">{pctPoints(holding.weight_pct, 2)}</td>
                   </tr>
-                {:else}
-                  <tr><td colspan="2" class="table-empty">No aggregate holdings available.</td></tr>
                 {/each}
+                {#if rebuiltPortfolio.reference_holding}
+                  <tr
+                    ><td>{referenceLabel(portfolio.direction)}</td><td class="right num"
+                      >{pctPoints(rebuiltPortfolio.reference_holding.weight_pct, 2)}</td
+                    ></tr
+                  >
+                {:else if !rebuiltPortfolio.holdings.length}
+                  <tr><td colspan="2" class="table-empty">No aggregate holdings available.</td></tr>
+                {/if}
               </tbody>
             </table>
           </div>
@@ -434,6 +480,10 @@
           </header>
           <div class="disclosure-list">
             {#each rebuiltPortfolio.active_cohorts as cohort (cohort.signal_id)}
+              {@const cohortReferenceWeight = Math.max(
+                0,
+                100 - cohort.positions.reduce((total, position) => total + position.weight_pct, 0),
+              )}
               <details>
                 <summary>
                   <span class="disclosure-primary">
@@ -461,6 +511,13 @@
                             <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
                           </tr>
                         {/each}
+                        {#if cohortReferenceWeight > 0.00001}
+                          <tr
+                            ><td>{referenceLabel(portfolio.direction)}</td><td class="right num"
+                              >{pctPoints(cohortReferenceWeight, 2)}</td
+                            ></tr
+                          >
+                        {/if}
                       </tbody>
                     </table>
                   </div>

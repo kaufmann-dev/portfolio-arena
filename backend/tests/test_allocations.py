@@ -56,14 +56,16 @@ class TestCreation:
         assert {position["symbol"] for position in allocation["positions"]} == {"AAPL", "MSFT"}
         assert all("instrument" not in position for position in allocation["positions"])
 
-    def test_weights_must_sum_to_100(self, client, admin_headers, sample_portfolio, sample_prompt):
+    def test_weights_must_fill_selected_capacity(
+        self, client, admin_headers, sample_portfolio, sample_prompt
+    ):
         response = client.post(
             f"/api/portfolios/{sample_portfolio['id']}/allocations",
             json=make_allocation_body([{"symbol": "AAPL", "weight_pct": 99}]),
             headers=admin_headers,
         )
         assert response.status_code == 422
-        assert "sum to exactly 100" in response.json()["detail"]
+        assert "Selected weights must total 100%" in response.json()["detail"]
 
     def test_duplicate_symbols_rejected(self, client, admin_headers, sample_portfolio, sample_prompt):
         response = client.post(

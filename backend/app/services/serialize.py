@@ -14,7 +14,7 @@ from .arena import (
     downsample,
 )
 from .model_catalog import agent_out
-from .prompt_policy import manual_execution_prompt
+from .prompt_policy import decision_summary, manual_execution_prompt
 from .trading_calendar import boundary_value, is_locked
 from .valuation import (
     AppliedAllocation,
@@ -82,6 +82,21 @@ def allocation_positions(allocation: Allocation, admin: bool = False) -> list[di
     ]
 
 
+def participation(decisions, as_of: Boundary | None, phase: str) -> dict:
+    completed = [
+        decision
+        for decision in decisions
+        if as_of and boundary_value(decision.effective_date, phase)["timestamp"] <= as_of["timestamp"]
+    ]
+    selected = sum(any(position.weight_pct > 0 for position in decision.positions) for decision in completed)
+    return {
+        "decision_count": len(completed),
+        "selected_count": selected,
+        "abstention_count": len(completed) - selected,
+        "participation_rate": selected / len(completed) if completed else None,
+    }
+
+
 def serialize_allocation(
     allocation: Allocation,
     applied: AppliedAllocation | None = None,
@@ -99,6 +114,7 @@ def serialize_allocation(
         "note": allocation.note,
         "turnover_pct": applied.turnover_pct if applied else None,
         "positions": allocation_positions(allocation, admin),
+        **decision_summary(position.weight_pct for position in allocation.positions),
     }
 
 
@@ -111,6 +127,7 @@ def serialize_signal(signal: Signal, *, admin: bool = False, now: datetime | Non
         "effective_at": boundary_value(signal.effective_date, phase),
         "locked": is_locked(signal.effective_date, now or datetime.now(UTC), phase),
         "note": signal.note,
+        **decision_summary(position.weight_pct for position in signal.positions),
         **({"provenance": signal.provenance} if admin else {}),
         "positions": [
             {
@@ -135,6 +152,7 @@ def serialize_summary(
         "inception": point_boundary(result.series[0]) if result and result.series else None,
         "age_days": age_days(valuation, valuations.current_date),
         "allocation_count": len(portfolio.allocations),
+        "participation": participation(portfolio.allocations, valuations.as_of, portfolio.execution_boundary),
         "evidence": valuation.metrics.get("evidence", "pending"),
         "rank_score": valuation.metrics.get("ci_lower"),
         "metrics": valuation.metrics,
@@ -188,6 +206,7 @@ def serialize_detail(
             for holding in (result.holdings if result else [])
         ],
         "stale_days": result.stale_days if result else {},
+        "reference_holding": result.reference_holding if result else None,
         "allocations": [
             serialize_allocation(item, applied.get(item.effective_date.isoformat()), admin=admin)
             for item in reversed(portfolio.allocations)
@@ -272,6 +291,9 @@ def serialize_rebuilt_summary(
     return {
         **_identity(analysis.portfolio, allocation_policy),
         "kind": "rebuilt",
+        "participation": participation(
+            analysis.portfolio.signals, arena.as_of, analysis.portfolio.execution_boundary
+        ),
         "optimization_objective": arena.objective,
         "rank": None,
         "evidence": metrics.get("evidence", "pending"),
@@ -317,6 +339,7 @@ def serialize_rebuilt_detail(
         "series": policy.series if policy else [],
         "spy_series": policy.spy_series if policy else [],
         "holdings": policy.holdings if policy else [],
+        "reference_holding": policy.reference_holding if policy else None,
         "active_cohorts": policy.active_cohorts if policy else [],
         "signals": [serialize_signal(signal, admin=admin) for signal in signals],
         "signals_next_cursor": signals[-1].id if len(analysis.portfolio.signals) > len(signals) else None,

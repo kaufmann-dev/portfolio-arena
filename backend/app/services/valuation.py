@@ -72,6 +72,7 @@ class ValuationResult:
     frozen_symbols: list[str] = field(default_factory=list)
     cumulative_turnover_pct: float = 0.0
     liquidated_at: Boundary | None = None
+    reference_holding: dict | None = None
 
 
 class ValuationError(ValueError):
@@ -170,6 +171,29 @@ def value_portfolio(
     turnover_total = 0.0
     series: Series = []
     liquidated_at = None
+    reference_units = 0.0
+    reference_target = 0.0
+    needs_reference = any(
+        sum(p.weight_pct for p in allocation.positions) < 100
+        for scheduled in schedule.values()
+        for allocation in scheduled
+    )
+    reference = (
+        {
+            point["timestamp"]: point["nav"]
+            for point in rebase_series(
+                prices["SPY"],
+                next(event for event in events if event["timestamp"] == min(schedule)),
+                as_of,
+                direction,
+            )
+        }
+        if needs_reference
+        else {}
+    )
+
+    def reference_value(event: Boundary) -> float:
+        return reference_units * reference.get(event["timestamp"], 0.0)
 
     def price(symbol: str, event: Boundary) -> float:
         if symbol not in lookups:
@@ -178,9 +202,15 @@ def value_portfolio(
 
     def equity(event: Boundary) -> float:
         if direction == "long":
-            return sum(quantity * price(symbol, event) for symbol, quantity in quantities.items())
-        return anchor + sum(
-            quantity * (entries[symbol] - price(symbol, event)) for symbol, quantity in quantities.items()
+            return reference_value(event) + sum(
+                quantity * price(symbol, event) for symbol, quantity in quantities.items()
+            )
+        return (
+            reference_value(event)
+            + anchor
+            + sum(
+                quantity * (entries[symbol] - price(symbol, event)) for symbol, quantity in quantities.items()
+            )
         )
 
     first = min(schedule)
@@ -193,6 +223,8 @@ def value_portfolio(
             quantities = {}
             targets = {}
             anchor = 0.0
+            reference_units = 0.0
+            reference_target = 0.0
         if liquidated_at is None:
             for allocation in schedule.get(event["timestamp"], []):
                 positions = [position for position in allocation.positions if position.weight_pct > 0]
@@ -201,6 +233,12 @@ def value_portfolio(
                     for symbol, quantity in quantities.items()
                 }
                 new_weights = {position.symbol: position.weight_pct for position in positions}
+                reference_target = max(0.0, 100 - sum(new_weights.values()))
+                weights["__reference__"] = reference_value(event) / nav * 100
+                new_weights["__reference__"] = reference_target
+                if direction == "long":
+                    for basket in (weights, new_weights):
+                        basket["SPY"] = basket.get("SPY", 0.0) + basket.pop("__reference__")
                 turnover = (
                     0.5
                     * sum(
@@ -217,7 +255,11 @@ def value_portfolio(
                     for position in positions
                 }
                 targets = {position.symbol: position for position in positions}
-                anchor = nav
+                reference_price = reference.get(event["timestamp"], 0.0)
+                if reference_target and reference_price <= 0:
+                    raise ValuationError("Direction-matched SPY reference has liquidated.")
+                reference_units = nav * reference_target / 100 / reference_price if reference_price else 0.0
+                anchor = nav * (1 - reference_target / 100)
                 applied.append(
                     AppliedAllocation(
                         allocation.effective_date,
@@ -264,6 +306,12 @@ def value_portfolio(
         holdings,
         cumulative_turnover_pct=turnover_total,
         liquidated_at=liquidated_at,
+        reference_holding={
+            "weight_pct": reference_value(point_boundary(series[-1])) / series[-1]["nav"] * 100,
+            "target_weight_pct": reference_target,
+        }
+        if series and series[-1]["nav"] > 0 and reference_target
+        else None,
     )
 
 

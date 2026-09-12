@@ -47,9 +47,10 @@ class TestPositionRules:
             ]
         )
 
-    def test_sum_must_be_exactly_100(self):
-        with pytest.raises(SymbolValidationError, match="sum to exactly 100"):
-            validate_positions([{"symbol": "AAPL", "weight_pct": 99.9}])
+    def test_partial_total_allowed_but_leverage_rejected(self):
+        validate_positions([{"symbol": "AAPL", "weight_pct": 99.9}])
+        with pytest.raises(SymbolValidationError, match="exceed 100"):
+            validate_positions([{"symbol": "AAPL", "weight_pct": 100.1}])
 
     def test_fractional_weights_summing_to_100(self):
         validate_positions(
@@ -73,14 +74,13 @@ class TestPositionRules:
         with pytest.raises(SymbolValidationError, match="direction is set separately"):
             validate_positions(
                 [
-                    {"symbol": "AAPL", "weight_pct": 150.0},
+                    {"symbol": "AAPL", "weight_pct": 100.0},
                     {"symbol": "SH", "weight_pct": -50.0},
                 ]
             )
 
-    def test_empty_rejected(self):
-        with pytest.raises(SymbolValidationError):
-            validate_positions([])
+    def test_empty_abstention_allowed(self):
+        validate_positions([])
 
 
 class TestMassiveResolution:

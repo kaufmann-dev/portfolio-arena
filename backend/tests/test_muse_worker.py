@@ -43,6 +43,7 @@ def _run(*, effort="high", timeout_seconds=300):
 def _proposal():
     return {
         "status": "proposal",
+        "blocked_reason": None,
         "positions": [{"symbol": "AAPL", "weight_pct": 100, "note": "Supported thesis."}],
         "note": "Keep the position.",
         "report": "Research completed.",
@@ -246,10 +247,17 @@ def test_muse_exec_uses_snapshot_model_and_validates_json_before_submission(tmp_
 @pytest.mark.parametrize(
     "result,error",
     [
-        ({"status": "proposal", "positions": []}, "ValidationError"),
+        ({"status": "proposal", "blocked_reason": None, "positions": []}, "ValidationError"),
         (
-            {"status": "blocked", "positions": [], "note": "", "report": "", "error": "MCP unavailable."},
-            "EvaluationBlocked: MCP unavailable.",
+            {
+                "status": "blocked",
+                "blocked_reason": "portfolio_unavailable",
+                "positions": [],
+                "note": "",
+                "report": "",
+                "error": "MCP unavailable.",
+            },
+            "EvaluationBlocked: portfolio_unavailable: MCP unavailable.",
         ),
         ("not a proposal object", "ValidationError"),
     ],

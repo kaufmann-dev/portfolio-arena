@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { decisionOutcomeLabel, referenceLabel } from "../allocation";
   import { Tabs } from "bits-ui";
   import { onMount } from "svelte";
 
@@ -372,6 +373,19 @@
         lines.push(`- ${p.symbol}: target ${p.weight_pct.toFixed(1)}%`);
         lines.push(`  note: ${p.note?.trim() || "—"}`);
       }
+    }
+    if (detail.reference_holding) {
+      lines.push(
+        `- ${referenceLabel(detail.direction)}: weight ${pctPoints(detail.reference_holding.weight_pct)} (target ${pctPoints(detail.reference_holding.target_weight_pct)})`,
+      );
+    } else if (
+      latestAllocation &&
+      !latestAllocation.applied_at &&
+      latestAllocation.reference_weight_pct > 0
+    ) {
+      lines.push(
+        `- ${referenceLabel(detail.direction)}: target ${pctPoints(latestAllocation.reference_weight_pct)}`,
+      );
     }
     return lines.join("\n");
   }
@@ -1214,7 +1228,7 @@
     const min = Number(minimum);
     const max = Number(maximum);
     if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return "—";
-    return `${Math.ceil(100 / max)}–${Math.floor(100 / min)}`;
+    return `0–${Math.floor(100 / min)}`;
   }
 
   async function loadSettings() {
@@ -1462,6 +1476,7 @@
                       <tr>
                         <td class="num">{fmtDate(allocation.effective_at)}</td>
                         <td>
+                          <span class="badge">{decisionOutcomeLabel(allocation.outcome)}</span>
                           {#if allocation.locked}
                             <span class="badge">locked</span>
                           {:else}
@@ -1472,6 +1487,14 @@
                           {allocation.positions
                             .map((position) => `${position.symbol} ${pctPoints(position.weight_pct, 1)}`)
                             .join(", ")}
+                          {#if allocation.reference_weight_pct > 0}
+                            <span
+                              >{allocation.positions.length ? " · " : ""}{referenceLabel(
+                                managedDetail.direction,
+                              )}
+                              {pctPoints(allocation.reference_weight_pct, 1)}</span
+                            >
+                          {/if}
                         </td>
                         <td class="right actions">
                           {#if !managedDetail.is_liquidated}
@@ -1497,6 +1520,13 @@
                   Copy handoff
                 </button>
               </div>
+              {#if managedDetail.reference_holding}
+                <p class="muted prefill-note">
+                  {referenceLabel(managedDetail.direction)}: {pctPoints(
+                    managedDetail.reference_holding.weight_pct,
+                  )} current · {pctPoints(managedDetail.reference_holding.target_weight_pct)} target
+                </p>
+              {/if}
               {#if managedDetail.holdings.length}
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                 <div
@@ -1550,7 +1580,7 @@
                     </tbody>
                   </table>
                 </div>
-              {:else}
+              {:else if !managedDetail.reference_holding}
                 <p class="muted prefill-note">No drifted holdings yet.</p>
               {/if}
 
@@ -1566,6 +1596,7 @@
                     portfolioId={detail.id}
                     initialPositions={editingAllocation.positions}
                     initialNote={editingAllocation.note}
+                    initialAbstained={editingAllocation.outcome === "abstained"}
                     positionsEditable={!editingAllocation.locked}
                     policy={managedDetail.prompt.allocation_policy}
                     direction={managedDetail.direction}
@@ -1618,6 +1649,7 @@
                           <span class="badge">{signal.provenance?.replace("_", " ") ?? "—"}</span>
                         </td>
                         <td>
+                          <span class="badge">{decisionOutcomeLabel(signal.outcome)}</span>
                           <span class={["badge", !signal.locked && "warn"]}>
                             {signal.locked ? "locked" : "pending"}
                           </span>
@@ -1626,6 +1658,12 @@
                           {signal.positions
                             .map((position) => `${position.symbol} ${pctPoints(position.weight_pct, 1)}`)
                             .join(", ")}
+                          {#if signal.reference_weight_pct > 0}
+                            <span
+                              >{signal.positions.length ? " · " : ""}{referenceLabel(rebuiltDetail.direction)}
+                              {pctPoints(signal.reference_weight_pct, 1)}</span
+                            >
+                          {/if}
                         </td>
                         <td class="right actions">
                           {#if !signal.locked}
@@ -1652,6 +1690,7 @@
                     portfolioId={detail.id}
                     initialPositions={editingSignal.positions}
                     initialNote={editingSignal.note}
+                    initialAbstained={editingSignal.outcome === "abstained"}
                     policy={rebuiltDetail.prompt.allocation_policy}
                     entryKind="signal"
                     direction={rebuiltDetail.direction}
