@@ -484,8 +484,8 @@ class TestAdminMisc:
             "derived_min_positions": 0,
             "derived_max_positions": 5,
         }
-        assert "Use between 0 and 5 positions." in portfolio["execution_prompt"]
-        assert "between 20% and 50% of NAV" in portfolio["execution_prompt"]
+        assert "Use 0–5 selections," in portfolio["execution_prompt"]
+        assert "20–50% of NAV" in portfolio["execution_prompt"]
         assert "Use the custom long direction block." in portfolio["execution_prompt"]
         assert "This is an all-long portfolio" not in portfolio["execution_prompt"]
 

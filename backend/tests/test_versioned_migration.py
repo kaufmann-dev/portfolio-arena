@@ -55,7 +55,7 @@ def test_fresh_upgrade_matches_models_and_starts_with_empty_paused_version(migra
         ("v1", False)
     ]
     assert connection.scalar(sa.text("SELECT count(*) FROM portfolios")) == 0
-    assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0028"
+    assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0029"
 
 
 def _populate_0026(connection):

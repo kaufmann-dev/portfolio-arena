@@ -84,9 +84,8 @@ authoritative. Follow the eligibility rules and submission instructions in this 
 
 Act as a US equity portfolio manager aiming to outperform the portfolio's direction-matched SPY
 reference. Search across the full eligible US market rather than defaulting to index constituents,
-household names, or recent winners. Do not select SPY as a substitute for research; the server supplies
-any automatic reference allocation. Select a stock or ETF only when it has a
-distinct, falsifiable, security-specific investment thesis supported by current evidence.
+household names, or recent winners. Do not select SPY as a substitute for research. Select a stock
+or ETF only when it has a distinct, falsifiable, security-specific thesis supported by current evidence.
 
 If the returned allocation history is empty, construct the portfolio's initial allocation. Otherwise,
 manage and rebalance the existing portfolio rather than rebuilding it without reference to its
@@ -110,6 +109,8 @@ Strategy:
 Allocation policy:
 {{allocation_policy}}
 
+This decision replaces previous holdings; abstaining moves them into the reference.
+
 Research all decision-relevant current information with Massive and live web search.
 
 {{submission_instructions}}"""
@@ -126,8 +127,7 @@ Do not use prior portfolio state from any source when constructing or weighting 
 
 Act as a US equity security selector aiming to outperform the portfolio's direction-matched SPY
 reference. Search across the full eligible US market rather than defaulting to index constituents,
-household names, or recent winners. Do not select SPY as a substitute for research; the server supplies
-any automatic reference allocation.
+household names, or recent winners. Do not select SPY as a substitute for research.
 
 This is an independent security-selection signal. Breadth must be an outcome of the evidence, not a
 diversification target. Select only securities that independently qualify under the strategy. Never
@@ -157,39 +157,25 @@ Research all decision-relevant current information with Massive and live web sea
 {{submission_instructions}}"""
 
 DEFAULT_LONG_DIRECTION_INSTRUCTIONS = """\
-- This is an all-long portfolio. Every submitted position is a long position.
-- Submit security weights according to the allocation policy; the server puts any remainder in long SPY.
-- Do not submit cash, shorts, leverage, or placeholder reference tickers."""
+This is an all-long portfolio. Submit positive weights for securities expected to outperform SPY."""
 
-DEFAULT_SHORT_DIRECTION_INSTRUCTIONS = "\n".join(
-    [
-        (
-            "- This is an all-short portfolio. Select securities whose prices are expected to "
-            "underperform SPY so the short book can outperform the Short SPY reference."
-        ),
-        (
-            "- Submit positive security weights according to the allocation policy; the server interprets "
-            "them as short exposure and puts any remainder in the synthetic Short SPY reference."
-        ),
-        "- Do not submit cash, long positions, gross exposure above 100%, or placeholder reference tickers.",
-    ]
-)
+DEFAULT_SHORT_DIRECTION_INSTRUCTIONS = """\
+This is an all-short portfolio. Select securities whose prices are expected to underperform SPY
+so the short book can outperform the Short SPY reference. Submit positive weights; the server
+interprets them as short exposure."""
 
 AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
-Do not call any write tool: the worker validates and submits the final structured decision atomically.
+Do not call any write tool; return the structured response for the worker to submit.
 
-Return status `proposal` with selected securities, or `abstained` with no positions when completed
-research finds no qualifying securities. Both are successful decisions, never errors or retry requests.
-Use an empty `error` and null `blocked_reason` for either successful outcome. Explain partial allocations
-and abstentions in both `note` and `report`, including the research performed and why candidates failed
-the strategy. Insufficient qualifying securities is never a blocked result. Never invent a placeholder.
+- `proposal`: selected securities, including partial allocations.
+- `abstained`: completed research found no qualifying securities; no positions.
+Both are successful outcomes: use an empty `error` and null `blocked_reason`.
+- `blocked`: required portfolio context or research was unavailable. Return no positions, explain
+  the error, and set `blocked_reason` to `portfolio_unavailable` or `research_unavailable`.
 
-Use status `blocked`, no positions, and a concise `error` only when required context or research could
-not be accessed. Set `blocked_reason` to `portfolio_unavailable` or `research_unavailable` accordingly.
-Explain the access problem and preserve any completed research in `report`.
-
-The report should explain the decision, key evidence, material risks, and what would change the next
-evaluation. Position notes should provide concise thesis context.
+In `report`, explain the decision, evidence, material risks, and what would change your assessment.
+For partial allocations or abstentions, describe the research and why no more securities qualified.
+Preserve any completed research if blocked. Keep position notes concise.
 """
 
 MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS = """\
@@ -408,23 +394,16 @@ def validate_wrapper_prompt(template: str) -> str:
 def allocation_policy_text(policy: dict) -> str:
     return "\n".join(
         [
+            "Select only qualifying securities; do not add marginal or omit qualifying selections.",
             (
-                f"- Use between {policy['derived_min_positions']} and "
-                f"{policy['derived_max_positions']} positions."
+                f"Use 0–{policy['derived_max_positions']} selections, each weighted "
+                f"{policy['min_position_weight_pct']:g}–{policy['max_position_weight_pct']:g}% of NAV."
             ),
-            (
-                f"- Every position must be between {policy['min_position_weight_pct']:g}% and "
-                f"{policy['max_position_weight_pct']:g}% of NAV."
-            ),
-            "- For n selected securities, their weights must total min(100, n × maximum position weight).",
-            "- Use at most four decimal places. Do not normalize partial allocations to 100%.",
-            "- The server puts the remainder in direction-matched SPY, outside security weight limits.",
-            "- Zero qualifying securities is a valid abstention: submit no positions and explain why.",
-            "- Research broadly; never add marginal or omit qualifying securities to alter reference weight.",
-            "- Explain partial allocations and abstentions in the note; reference is not a selected ticker.",
-            "- Managed decisions replace holdings. Abstaining exits selected holdings into the reference.",
-            "- Do not use mutual funds, options, futures, indices, or FX.",
-            "- Validate every final symbol before submitting.",
+            "For n selections, weights must total min(100, n × maximum position weight), to four decimals.",
+            "The server puts the remainder in direction-matched SPY, outside these limits; do not submit it.",
+            "If completed research finds nothing qualifying, abstain with no positions.",
+            "Explain any partial allocation or abstention in the decision note.",
+            "Use only USD-denominated equities and ETFs, and validate every selected symbol.",
         ]
     )
 
