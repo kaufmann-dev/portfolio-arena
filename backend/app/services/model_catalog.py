@@ -144,11 +144,21 @@ def validate_capabilities(capabilities: list[dict]) -> list[dict]:
         execution_model_id = capability["execution_model_id"].strip()
         if not execution_model_id:
             raise AdminOpError(422, "Execution model ID is required")
-        efforts = capability["reasoning_efforts"]
+        if harness_id == "opencode":
+            provider, separator, model_id = execution_model_id.partition("/")
+            if not separator or not provider.strip() or not model_id.strip():
+                raise AdminOpError(422, "OpenCode execution model ID must use provider/model format")
+        efforts = [effort.strip() for effort in capability["reasoning_efforts"]]
+        if len(efforts) > 20 or any(not effort or len(effort) > 50 for effort in efforts):
+            raise AdminOpError(422, "Declare at most 20 reasoning efforts, each between 1 and 50 characters")
         if len(efforts) != len(set(efforts)):
             raise AdminOpError(422, f"Reasoning efforts for {harness.name} must be unique")
         allowed = {effort.id for effort in harness.reasoning_efforts}
-        invalid = [effort for effort in efforts if effort not in allowed]
+        invalid = (
+            [effort for effort in efforts if effort not in allowed]
+            if harness.reasoning_effort_mode == "fixed"
+            else []
+        )
         if invalid:
             raise AdminOpError(
                 422,

@@ -14,6 +14,6 @@ cmds = ["cd frontend && npm ci && npm run build"]
 
 # Launch one supervisor that starts the web API and integrated evaluator worker.
 # FastAPI's lifespan runs pending Alembic migrations before becoming healthy.
-# Refresh both harnesses even when the image build was cached, then hand signals to Python.
+# Refresh all three harnesses even when the image build was cached, then hand signals to Python.
 [start]
 cmd = "npm run update:harnesses && cd backend && exec python -m app.production"

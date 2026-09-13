@@ -24,6 +24,14 @@ from .muse import (
     muse_result,
     write_muse_config,
 )
+from .opencode import (
+    opencode_command,
+    opencode_environment,
+    opencode_models,
+    opencode_result,
+    prepare_opencode,
+    validate_opencode_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +91,7 @@ class ClaimedRun(BaseModel):
     id: int
     portfolio: PortfolioRef
     trigger_kind: Literal["scheduled", "manual", "retry"]
-    harness: Literal["codex", "muse"]
+    harness: Literal["codex", "muse", "opencode"]
     execution_model_id: str
     reasoning_effort: str | None
     timeout_seconds: int
@@ -234,6 +242,48 @@ async def codex_is_authenticated(settings: EvaluatorRuntimeSettings) -> bool:
         env=codex_environment(settings),
     )
     return await process.wait() == 0
+
+
+async def _opencode_probe(
+    settings: EvaluatorRuntimeSettings,
+    *arguments: str,
+    run: ClaimedRun | None = None,
+) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="arena-opencode-probe-") as directory:
+        process = await asyncio.create_subprocess_exec(
+            "opencode",
+            *arguments,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=directory,
+            env=opencode_environment(settings),
+            start_new_session=True,
+        )
+        if run is not None:
+            stdout, stderr = await _communicate_run(settings, run, process, None)
+        else:
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            except TimeoutError:
+                raise RuntimeError("OpenCode readiness check timed out") from None
+            finally:
+                await _stop_process(process)
+        if process.returncode != 0:
+            raise RuntimeError(stderr.decode(errors="replace")[-4000:] or "OpenCode readiness check failed")
+        return stdout
+
+
+async def opencode_version(settings: EvaluatorRuntimeSettings) -> str:
+    return (await _opencode_probe(settings, "--version")).decode().strip()
+
+
+async def opencode_available_models(
+    settings: EvaluatorRuntimeSettings, run: ClaimedRun | None = None
+) -> dict[str, dict]:
+    # Native discovery owns provider credentials and config. It creates no Arena
+    # model records and performs no inference, including for local providers.
+    return opencode_models(await _opencode_probe(settings, "models", "--verbose", run=run))
 
 
 def evaluator_prompt(run: ClaimedRun) -> str:
@@ -391,13 +441,55 @@ async def run_muse(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Propo
         return Proposal.model_validate_json(muse_result(stdout))
 
 
+async def run_opencode(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Proposal:
+    schema = Path(__file__).with_name("proposal.schema.json").read_text()
+    prompt = (
+        f"{evaluator_prompt(run)}\n\n"
+        "Return the final result as one JSON object, without commentary or Markdown fences. "
+        "The worker validates this JSON against the following schema before submitting it.\n"
+        f"{schema}"
+    )
+    try:
+        # Preflight and inference share one attempt deadline. Both subprocesses
+        # also participate in administrator cancellation and process-group cleanup.
+        async with asyncio.timeout(run.timeout_seconds):
+            models = await opencode_available_models(settings, run)
+            validate_opencode_model(models, run.execution_model_id, run.reasoning_effort)
+            with tempfile.TemporaryDirectory(prefix="arena-opencode-evaluation-") as directory:
+                workspace = Path(directory)
+                process = await asyncio.create_subprocess_exec(
+                    *opencode_command(run.execution_model_id, run.reasoning_effort, workspace),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=workspace,
+                    env=opencode_environment(settings),
+                    start_new_session=True,
+                )
+                stdout, stderr = await _communicate_run(settings, run, process, prompt.encode())
+                if process.returncode != 0:
+                    try:
+                        opencode_result(stdout)
+                    except ValueError as exc:
+                        detail = f"{exc}\n{stderr.decode(errors='replace')}".strip()
+                        raise RuntimeError(detail[-4000:]) from exc
+                    raise RuntimeError(
+                        stderr.decode(errors="replace")[-4000:]
+                        or f"OpenCode exited with {process.returncode}"
+                    )
+                return Proposal.model_validate_json(opencode_result(stdout))
+    except TimeoutError:
+        raise RuntimeError(f"opencode attempt exceeded {run.timeout_seconds} seconds") from None
+
+
 async def evaluate_run(
     settings: EvaluatorRuntimeSettings,
     run: ClaimedRun,
 ) -> None:
     proposal = None
     try:
-        proposal = await (run_muse(settings, run) if run.harness == "muse" else run_codex(settings, run))
+        runners = {"codex": run_codex, "muse": run_muse, "opencode": run_opencode}
+        proposal = await runners[run.harness](settings, run)
         if proposal.status == "blocked":
             raise EvaluationBlocked(f"{proposal.blocked_reason}: {proposal.error}")
         await internal_request(
@@ -450,17 +542,19 @@ async def scheduler(
     settings: EvaluatorRuntimeSettings,
     instance_id: str,
     state: WorkerState,
-    harness: Literal["codex", "muse"],
+    harness: Literal["codex", "muse", "opencode"],
 ) -> None:
     active_tasks: set[asyncio.Task[None]] = set()
     catalog_imported = False
     try:
         while True:
             try:
-                if harness == "muse":
-                    write_muse_config(settings)
-                else:
-                    write_codex_config(settings)
+                config_writers = {
+                    "codex": write_codex_config,
+                    "muse": write_muse_config,
+                    "opencode": prepare_opencode,
+                }
+                config_writers[harness](settings)
                 if not settings.massive_api_key:
                     state.status = "configuration_error"
                     state.authenticated = False
@@ -469,18 +563,30 @@ async def scheduler(
                     if harness == "muse":
                         state.harness_version = await muse_version(settings)
                         state.authenticated = bool(muse_credential(settings))
-                    else:
+                    elif harness == "codex":
                         state.harness_version = await codex_version()
                         state.authenticated = await codex_is_authenticated(settings)
+                    elif harness == "opencode":
+                        state.harness_version = await opencode_version(settings)
+                        state.authenticated = any(
+                            model.get("capabilities", {}).get("toolcall") is True
+                            for model in (await opencode_available_models(settings)).values()
+                        )
                     if not state.authenticated:
                         state.status = "authentication_required"
-                        state.last_error = (
-                            f"Run `XDG_CONFIG_HOME={settings.muse_config_home} muse login` "
-                            "in the application terminal or configure META_API_KEY."
-                            if harness == "muse"
-                            else f"Run `CODEX_HOME={shlex.quote(str(settings.codex_home))} "
-                            "codex login --device-auth` in the application terminal."
-                        )
+                        login_hints = {
+                            "codex": f"Run `CODEX_HOME={shlex.quote(str(settings.codex_home))} "
+                            "codex login --device-auth` in the application terminal.",
+                            "muse": f"Run `XDG_CONFIG_HOME={shlex.quote(str(settings.muse_config_home))} "
+                            "muse login` in the application terminal or configure META_API_KEY.",
+                            "opencode": (
+                                f"Run `XDG_CONFIG_HOME={shlex.quote(str(settings.opencode_home / 'config'))} "
+                                f"XDG_DATA_HOME={shlex.quote(str(settings.opencode_home / 'data'))} "
+                                "opencode auth login` in the application terminal, or configure a provider "
+                                "with a tool-capable model."
+                            ),
+                        }
+                        state.last_error = login_hints[harness]
                     else:
                         if harness == "muse" and not catalog_imported:
                             catalog = await fetch_muse_catalog(settings)
@@ -519,6 +625,7 @@ async def scheduler(
                 logger.exception("evaluator_request_failed harness=%s", harness)
             except Exception as exc:
                 state.status = "error"
+                state.authenticated = False
                 state.last_error = f"{type(exc).__name__}: {exc}"[-4000:]
                 logger.exception("evaluator_poll_failed")
 
@@ -544,7 +651,7 @@ async def heartbeat_loop(
     settings: EvaluatorRuntimeSettings,
     instance_id: str,
     state: WorkerState,
-    harness: Literal["codex", "muse"],
+    harness: Literal["codex", "muse", "opencode"],
 ) -> None:
     while True:
         try:

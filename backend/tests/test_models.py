@@ -2,9 +2,110 @@
 
 from datetime import UTC, datetime
 
+import pytest
+
 from app.services import evaluator
 
 from .util import backdate_allocation
+
+
+@pytest.mark.parametrize("execution_id", ["model", "/model", "provider/", " / "])
+def test_opencode_requires_provider_and_model(client, admin_headers, execution_id):
+    response = client.post(
+        "/api/models",
+        headers=admin_headers,
+        json={
+            "name": "OpenCode test",
+            "capabilities": [
+                {
+                    "harness": "opencode",
+                    "execution_model_id": execution_id,
+                    "reasoning_efforts": [],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 422
+    assert "provider/model" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "efforts", [[""], [" "], ["careful", " careful "], ["x" * 51], [str(i) for i in range(21)]]
+)
+def test_opencode_rejects_invalid_variants(client, admin_headers, efforts):
+    response = client.post(
+        "/api/models",
+        headers=admin_headers,
+        json={
+            "name": "OpenCode test",
+            "capabilities": [
+                {
+                    "harness": "opencode",
+                    "execution_model_id": "provider/model",
+                    "reasoning_efforts": efforts,
+                }
+            ],
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("efforts,selected", [([" careful ", "fast"], "careful"), ([], None)])
+def test_opencode_manual_model_and_agent_profile(client, admin_headers, sample_prompt, efforts, selected):
+    created = client.post(
+        "/api/models",
+        headers=admin_headers,
+        json={
+            "name": "OpenCode test",
+            "capabilities": [
+                {
+                    "harness": "opencode",
+                    "execution_model_id": "provider/model/version",
+                    "reasoning_efforts": efforts,
+                }
+            ],
+        },
+    )
+    assert created.status_code == 201
+    model = created.json()
+    assert model["capabilities"][0]["reasoning_efforts"] == [effort.strip() for effort in efforts]
+    profile = {"model_id": model["id"], "harness": "opencode", "reasoning_effort": selected}
+    agent_response = client.post("/api/agents", headers=admin_headers, json=profile)
+    assert agent_response.status_code == 201
+    agent = agent_response.json()
+    assert agent["harness"] == {"id": "opencode", "name": "OpenCode"}
+    assert agent["execution_model_id"] == "provider/model/version"
+    assert agent["reasoning_effort"] == selected
+    assert (
+        client.post(
+            "/api/agents",
+            headers=admin_headers,
+            json={
+                **profile,
+                "reasoning_effort": "undeclared",
+            },
+        ).status_code
+        == 422
+    )
+    portfolio = client.post(
+        "/api/portfolios",
+        headers=admin_headers,
+        json={
+            "name": "OpenCode portfolio",
+            "agent_id": agent["id"],
+            "prompt_id": sample_prompt["id"],
+            "prompt_mode": "managed",
+            "version_id": 1,
+            "direction": "long",
+        },
+    )
+    assert portfolio.status_code == 201
+    dashboard = client.get("/api/evaluator", headers=admin_headers)
+    assert dashboard.status_code == 200
+    config = next(
+        item for item in dashboard.json()["portfolios"] if item["portfolio"]["id"] == portfolio.json()["id"]
+    )
+    assert config["enabled"] is False
 
 
 def test_harness_registry_exposes_harness_reasoning_vocabularies(client, admin_headers):
@@ -17,6 +118,7 @@ def test_harness_registry_exposes_harness_reasoning_vocabularies(client, admin_h
                 "id": "codex",
                 "name": "Codex",
                 "automation_supported": True,
+                "reasoning_effort_mode": "fixed",
                 "reasoning_efforts": [
                     {"id": "low", "name": "Low"},
                     {"id": "medium", "name": "Medium"},
@@ -30,6 +132,7 @@ def test_harness_registry_exposes_harness_reasoning_vocabularies(client, admin_h
                 "id": "muse",
                 "name": "Muse Code",
                 "automation_supported": True,
+                "reasoning_effort_mode": "fixed",
                 "reasoning_efforts": [
                     {"id": "none", "name": "None"},
                     {"id": "minimal", "name": "Minimal"},
@@ -40,6 +143,13 @@ def test_harness_registry_exposes_harness_reasoning_vocabularies(client, admin_h
                     {"id": "max", "name": "Max"},
                     {"id": "ultra", "name": "Ultra"},
                 ],
+            },
+            {
+                "id": "opencode",
+                "name": "OpenCode",
+                "automation_supported": True,
+                "reasoning_effort_mode": "custom",
+                "reasoning_efforts": [],
             },
         ]
     }

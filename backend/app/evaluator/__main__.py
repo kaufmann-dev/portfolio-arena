@@ -5,6 +5,7 @@ import logging
 import signal
 import uuid
 
+from ..services.harnesses import automation_harness_ids
 from .config import load_settings
 from .worker import WorkerState, heartbeat_loop, scheduler
 
@@ -12,7 +13,7 @@ from .worker import WorkerState, heartbeat_loop, scheduler
 async def _run() -> None:
     settings = load_settings()
     tasks = []
-    for harness in ("codex", "muse"):
+    for harness in automation_harness_ids():
         instance_id = uuid.uuid4().hex
         state = WorkerState()
         tasks.extend(

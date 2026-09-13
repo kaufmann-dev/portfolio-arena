@@ -177,7 +177,7 @@ admin-only access; provider policy defines who is admitted.
 
 The evaluator is part of Portfolio Arena. Models declare their execution ID and available reasoning
 efforts per supported harness. Agents select one of those valid profiles; their display names are
-generated from it. A portfolio whose Agent uses Codex or Muse Code automatically appears in the admin
+generated from it. A portfolio whose Agent uses Codex, Muse Code, or OpenCode appears in the admin
 **Automation** tab, initially disabled. Rebuilt automation runs every Monday through Friday; managed
 automation can run on any selected weekdays or remain manual-only. If a selected day is an NYSE
 holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected days
@@ -201,7 +201,7 @@ Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It 
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Muse Code runs via `muse exec`
 with web tools enabled and shell/file writes disabled. It uses the same read-only Arena MCP token
 and Massive MCP server. Muse returns JSON in its root terminal event; the worker validates the
-structured response before submission. Both harnesses return `proposal` for full or partial selections,
+structured response before submission. All three harnesses return `proposal` for full or partial selections,
 `abstained` for completed research with no qualifying securities, or `blocked` only when portfolio
 context or required research is unavailable. The latter requires `blocked_reason` of
 `portfolio_unavailable` or `research_unavailable`. Partial allocations and abstentions require a note
@@ -215,10 +215,31 @@ imports the visible models and explicit reasoning variants from Meta's authentic
 catalog once through the CLI, which handles account-token exchange and renewal. Model discovery
 does not start an agent turn. Existing model capabilities and admin edits are preserved. No models or
 reasoning tiers are guessed when the catalog is unavailable. Restart the worker to discover newly
-available models. Authentication and runtime health are shown separately per harness. The concurrency
+available models.
+
+OpenCode runs via `opencode run --format json` with web research and the same read-only Arena and
+Massive MCP tools. Shell execution, file access/modification, delegation, and interactive questions
+are denied. Each attempt starts a fresh session in a temporary workspace; sharing is disabled.
+The worker validates only the final completed assistant message before submitting a decision.
+
+OpenCode models are managed manually. In **Models**, enable OpenCode for a model and enter its
+`provider/model` execution ID. Add optional variant names one per line; agents choose from that list.
+Leave the list empty to use OpenCode's default. Provider model IDs may contain additional slashes.
+The worker uses native `opencode models --verbose` for readiness and to check the selected model's
+tool support and variant before execution, without importing models or starting inference.
+Readiness means OpenCode exposes a tool-capable model; actual provider access is checked during
+execution, and authentication failures appear on the failed run.
+
+All providers configured in OpenCode are supported, using its saved credentials or native provider
+environment variables (including `OPENAI_API_KEY`). Configure providers in
+`/var/lib/opencode/config/opencode/opencode.json` (JSONC is also supported). Native configuration and
+login files are preserved; Arena applies its MCP and permission settings through a runtime overlay.
+Project instructions, Claude Code context, and external skills are disabled for evaluation.
+
+Authentication and runtime health are shown separately per harness. The concurrency
 setting applies separately to each harness across all of its workers: a limit of 8 permits up to 8
-Codex and 8 Muse Code evaluations at once. Runs awaiting cancellation count against their harness's
-limit until they stop. An unconfigured Muse login does not stop Codex evaluations.
+Codex, 8 Muse Code, and 8 OpenCode evaluations at once. Runs awaiting cancellation count against their
+harness's limit until they stop. An unavailable harness does not stop the other harnesses' evaluations.
 
 Runtime credentials are deployment-only: `MASSIVE_API_KEY` is passed to both the web process for
 valuations and the worker for research, while the internal worker bearer token is generated in
@@ -288,13 +309,19 @@ an in-memory HTTP transport, so nothing hits the network.
 - Add persistent storage at `/var/lib/muse`. Run `XDG_CONFIG_HOME=/var/lib/muse muse login` in the
   application terminal, or set `META_API_KEY` for the worker. Muse models and their available
   reasoning efforts appear automatically after authentication and successful catalog import.
+- Add persistent storage at `/var/lib/opencode`. In the application terminal, run
+  `XDG_CONFIG_HOME=/var/lib/opencode/config XDG_DATA_HOME=/var/lib/opencode/data opencode auth login`
+  for the desired providers, or set their native API-key environment variables. OpenCode stores its
+  login under `data/opencode/auth.json`; its `config`, `cache`, and `state` directories share the volume.
+  Add only the desired OpenCode model capabilities in the admin **Models** tab.
 - Set the required variables below. Coolify injects `PORT`; no custom start command or Dockerfile is
   needed.
 - Deploy. The tracked `nixpacks.toml` builds the SPA and starts one supervisor that runs migrations,
   FastAPI, the scheduler, and the evaluator worker automatically.
 - Each deployment or container restart runs `npm run update:harnesses` to install the latest stable
-  Codex and Muse Code CLIs before launching the supervisor, including when the image build was cached.
-  Startup requires npm registry and Meta download access and stops if either update fails. Redeploy
+  Codex, Muse Code, and OpenCode CLIs before launching the supervisor, including when the image build was cached.
+  Codex and OpenCode npm packages are refreshed together to retain both executables.
+  Startup requires npm registry and Meta download access and stops if any update fails. Redeploy
   or restart to pick up subsequent releases.
   The image includes `bubblewrap` for Linux sandboxing and `curl` for the Muse installer.
 - When replacing the former two-application setup, stop the old standalone evaluator before
@@ -320,19 +347,20 @@ Web app:
 
 Web app:
 
-| Variable                        | Default          | Purpose                                                            |
-| ------------------------------- | ---------------- | ------------------------------------------------------------------ |
-| `ARENA_DB_CONNECT_RETRIES`      | `30`             | Retries before failing startup                                     |
-| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`            | Seconds between retries                                            |
-| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`           | Seconds before a price refresh is due                              |
-| `CODEX_HOME`                    | `/var/lib/codex` | Codex authentication and generated config dir                      |
-| `MUSE_CONFIG_HOME`              | `/var/lib/muse`  | Muse XDG config root; login and generated config are under `muse/` |
-| `META_API_KEY`                  | unset            | Optional Muse credential instead of a persisted Meta login         |
-| `PORT`                          | `8000`           | Listen port; normally injected by Coolify                          |
+| Variable                        | Default             | Purpose                                                             |
+| ------------------------------- | ------------------- | ------------------------------------------------------------------- |
+| `ARENA_DB_CONNECT_RETRIES`      | `30`                | Retries before failing startup                                      |
+| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`               | Seconds between retries                                             |
+| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`              | Seconds before a price refresh is due                               |
+| `CODEX_HOME`                    | `/var/lib/codex`    | Codex authentication and generated config dir                       |
+| `MUSE_CONFIG_HOME`              | `/var/lib/muse`     | Muse XDG config root; login and generated config are under `muse/`  |
+| `OPENCODE_HOME`                 | `/var/lib/opencode` | OpenCode root for XDG config, data/authentication, cache, and state |
+| `META_API_KEY`                  | unset               | Optional Muse credential instead of a persisted Meta login          |
+| `PORT`                          | `8000`              | Listen port; normally injected by Coolify                           |
 
 ## Non-goals
 
-No broker integration, OpenAI Platform API execution, mixed long/short or market-neutral books,
+No broker integration, mixed long/short or market-neutral books,
 leverage, broker-native borrow availability, margin, borrow or financing fees, options/futures,
-intraday quotes beyond opening/closing boundaries, cash positions, OpenCode automation,
+intraday quotes beyond opening/closing boundaries, cash positions,
 application-managed user accounts, external notifications, or historical backtesting.

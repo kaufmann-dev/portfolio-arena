@@ -74,6 +74,13 @@ class TestMcpAuth:
 
 
 class TestMcpTools:
+    def test_harness_registry_matches_api_with_opencode(self, client, mcp_headers, admin_headers):
+        registry = _call_tool(client, mcp_headers, "list_harnesses")
+        assert registry == client.get("/api/harnesses", headers=admin_headers).json()
+        opencode = next(item for item in registry["harnesses"] if item["id"] == "opencode")
+        assert opencode["reasoning_effort_mode"] == "custom"
+        assert opencode["reasoning_efforts"] == []
+
     def test_endpoint_works_without_trailing_slash(self, client, mcp_headers):
         # Clients may hit /mcp or /mcp/; both must reach the MCP app, not the SPA.
         response = client.post(

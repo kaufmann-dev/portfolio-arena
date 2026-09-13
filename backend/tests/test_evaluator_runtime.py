@@ -49,7 +49,7 @@ def test_runtime_lists_every_harness_before_workers_connect():
     assert runtime["status"] == "offline"
     assert runtime["instance_count"] == 0
     assert runtime["last_heartbeat_at"] is None
-    assert {row["harness"] for row in runtime["harnesses"]} == {"codex", "muse"}
+    assert {row["harness"] for row in runtime["harnesses"]} == {"codex", "muse", "opencode"}
     for row in runtime["harnesses"]:
         assert row["harness_name"]
         assert row["online"] is False
@@ -163,29 +163,53 @@ def test_global_pause_applies_to_online_harnesses_and_preserves_missing_workers(
     assert runtime["active_run_count"] == 1
     assert harnesses["codex"]["status"] == "paused"
     assert harnesses["muse"]["status"] == "offline"
+    assert harnesses["opencode"]["status"] == "offline"
 
 
-@pytest.mark.parametrize("first_harness", ["codex", "muse"])
+def test_unavailable_opencode_does_not_mask_healthy_codex_and_muse():
+    now = datetime(2026, 7, 20, 13, tzinfo=UTC)
+    with session_factory()() as session:
+        for harness in ("codex", "muse"):
+            _heartbeat(session, harness=harness, now=now)
+        _heartbeat(
+            session,
+            harness="opencode",
+            now=now,
+            status="authentication_required",
+            authenticated=False,
+            last_error="Configure an OpenCode provider.",
+        )
+        runtime = evaluator.get_dashboard(session, now=now)["runtime"]
+    assert runtime["status"] == "idle"
+    assert runtime["instance_count"] == 3
+    harnesses = {row["harness"]: row for row in runtime["harnesses"]}
+    assert harnesses["opencode"]["authenticated"] is False
+    assert harnesses["opencode"]["last_error"] == "Configure an OpenCode provider."
+    for harness in ("codex", "muse"):
+        assert harnesses[harness]["authenticated"] is True
+        assert harnesses[harness]["last_error"] is None
+
+
+@pytest.mark.parametrize("first_harness", ["codex", "muse", "opencode"])
 def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, sample_prompt, first_harness):
     now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
-        muse_model = admin_ops.create_model(
-            session,
-            name="Muse test model",
-            capabilities=[
-                {
-                    "harness": "muse",
-                    "execution_model_id": "muse-test-model",
-                    "reasoning_efforts": ["high"],
-                }
-            ],
-        )
-        muse_agent = admin_ops.create_agent(
-            session,
-            model_id=muse_model["id"],
-            harness="muse",
-            reasoning_effort="high",
-        )
+        agents = {"codex": sample_agent["id"]}
+        for harness, execution_id in [("muse", "muse-test-model"), ("opencode", "test/model")]:
+            model = admin_ops.create_model(
+                session,
+                name=f"{harness} test model",
+                capabilities=[
+                    {
+                        "harness": harness,
+                        "execution_model_id": execution_id,
+                        "reasoning_efforts": ["high"],
+                    }
+                ],
+            )
+            agents[harness] = admin_ops.create_agent(
+                session, model_id=model["id"], harness=harness, reasoning_effort="high"
+            )["id"]
         portfolios_by_harness = {
             harness: [
                 admin_ops.create_portfolio(
@@ -199,23 +223,18 @@ def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, 
                 )
                 for index in range(3)
             ]
-            for harness, agent_id in [("muse", muse_agent["id"]), ("codex", sample_agent["id"])]
+            for harness, agent_id in agents.items()
         }
         portfolios = [portfolio for group in portfolios_by_harness.values() for portfolio in group]
         for portfolio in portfolios:
             evaluator.update_portfolio_config(
-                session,
-                portfolio_id=portfolio["id"],
-                enabled=True,
-                weekdays=[],
+                session, portfolio_id=portfolio["id"], enabled=True, weekdays=[]
             )
         evaluator.update_settings(session, max_concurrency=2)
         queued = evaluator.enqueue_manual_runs(
-            session,
-            portfolio_ids=[portfolio["id"] for portfolio in portfolios],
-            now=now,
+            session, portfolio_ids=[portfolio["id"] for portfolio in portfolios], now=now
         )
-        assert [item["action"] for item in queued["items"]] == ["queued"] * 6
+        assert [item["action"] for item in queued["items"]] == ["queued"] * 9
 
         def claim(harness, limit=20, worker="first"):
             return evaluator.claim_runs(
@@ -227,26 +246,25 @@ def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, 
                 now=now,
             )["runs"]
 
-        other_harness = "muse" if first_harness == "codex" else "codex"
         first_run = claim(first_harness, limit=1)
         assert [run["portfolio"]["id"] for run in first_run] == [
             portfolios_by_harness[first_harness][0]["id"]
         ]
-        other_runs = claim(other_harness)
-        assert [run["portfolio"]["id"] for run in other_runs] == [
-            portfolio["id"] for portfolio in portfolios_by_harness[other_harness][:2]
-        ]
+        other_runs = {harness: claim(harness) for harness in agents if harness != first_harness}
+        for harness, runs in other_runs.items():
+            assert [run["portfolio"]["id"] for run in runs] == [
+                portfolio["id"] for portfolio in portfolios_by_harness[harness][:2]
+            ]
         next_run = claim(first_harness, worker="second")
         assert [run["portfolio"]["id"] for run in next_run] == [portfolios_by_harness[first_harness][1]["id"]]
-        for expected_harness, runs in [(first_harness, first_run + next_run), (other_harness, other_runs)]:
+        for expected_harness, runs in {first_harness: first_run + next_run, **other_runs}.items():
             for run in runs:
                 assert run["harness"] == expected_harness
                 assert run["harness_version"] == f"{expected_harness}-test-version"
-                if run["harness"] == "muse":
-                    assert run["execution_model_id"] == "muse-test-model"
+                if expected_harness == "opencode":
+                    assert run["execution_model_id"] == "test/model"
                     assert run["reasoning_effort"] == "high"
-        assert claim(first_harness, worker="third") == []
-        assert claim(other_harness, worker="second") == []
+            assert claim(expected_harness, worker="third") == []
 
         run_id = first_run[0]["id"]
         evaluator.cancel_run(session, run_id=run_id, now=now)
@@ -254,5 +272,5 @@ def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, 
         evaluator.fail_run(session, run_id=run_id, error="Cancelled.", cancelled=True, now=now)
         released = claim(first_harness, worker="third")
         assert [run["portfolio"]["id"] for run in released] == [portfolios_by_harness[first_harness][2]["id"]]
-        assert claim(first_harness) == []
-        assert claim(other_harness, worker="second") == []
+        for harness in agents:
+            assert claim(harness, worker="fourth") == []

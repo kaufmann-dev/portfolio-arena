@@ -490,6 +490,7 @@ export interface ReasoningEffortDefinition {
 
 export interface HarnessDefinition extends HarnessRef {
   automation_supported: boolean;
+  reasoning_effort_mode: "fixed" | "custom";
   reasoning_efforts: ReasoningEffortDefinition[];
 }
 

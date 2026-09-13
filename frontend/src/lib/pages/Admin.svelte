@@ -43,6 +43,7 @@
   import ConfirmDialog from "../components/ui/ConfirmDialog.svelte";
   import { fmtDate, num, pctPoints, pctPointsSignClass } from "../format";
   import { selectedVersion } from "../arena";
+  import { parseModelVariants } from "../modelVariants";
   import { auth } from "../stores/auth.svelte";
 
   type Tab =
@@ -594,11 +595,17 @@
   let newModelNotes = $state("");
   let newModelCapabilities = $state<ModelHarnessCapability[]>([]);
 
+  function usesCustomVariants(harness: string) {
+    return harnesses.find((item) => item.id === harness)?.reasoning_effort_mode === "custom";
+  }
+
   function capabilityPayload(capabilities: ModelHarnessCapability[]) {
     return capabilities.map(({ harness, execution_model_id, reasoning_efforts }) => ({
       harness,
       execution_model_id,
-      reasoning_efforts,
+      reasoning_efforts: usesCustomVariants(harness)
+        ? parseModelVariants(reasoning_efforts.join("\n"))
+        : reasoning_efforts,
     }));
   }
 
@@ -2006,28 +2013,50 @@
                       id="nm-execution-{harness.id}"
                       type="text"
                       bind:value={capability.execution_model_id}
-                      placeholder="gpt-5.6-sol"
+                      placeholder={harness.id === "opencode" ? "provider/model" : "gpt-5.6-sol"}
                     />
+                    {#if harness.id === "opencode"}
+                      <p class="muted hint">Use the provider/model ID from OpenCode.</p>
+                    {/if}
                   </div>
-                  <span class="field-label">Supported reasoning efforts for this model on {harness.name}</span
-                  >
-                  <div class="check-group">
-                    {#each harness.reasoning_efforts as effort (effort.id)}
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={capability.reasoning_efforts.includes(effort.id)}
-                          onchange={(event) =>
-                            toggleCapabilityEffort(capability, effort.id, event.currentTarget.checked)}
-                        />
-                        {effort.name}
-                      </label>
-                    {/each}
-                  </div>
-                  <p class="muted hint">
-                    Select only the efforts this model exposes through {harness.name}. Leave every effort
-                    unchecked when this model exposes no effort control.
-                  </p>
+                  {#if harness.reasoning_effort_mode === "custom"}
+                    <div class="field">
+                      <label for="nm-variants-{harness.id}">Supported variants</label>
+                      <textarea
+                        id="nm-variants-{harness.id}"
+                        rows="3"
+                        bind:value={
+                          () => capability.reasoning_efforts.join("\n"),
+                          (value) => (capability.reasoning_efforts = value.split("\n"))
+                        }
+                        aria-describedby="nm-variants-hint-{harness.id}"></textarea>
+                      <p id="nm-variants-hint-{harness.id}" class="muted hint">
+                        One variant per line, up to 20 unique names of 50 characters each. Leave blank to use
+                        {harness.name}'s default.
+                      </p>
+                    </div>
+                  {:else}
+                    <span class="field-label"
+                      >Supported reasoning efforts for this model on {harness.name}</span
+                    >
+                    <div class="check-group">
+                      {#each harness.reasoning_efforts as effort (effort.id)}
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={capability.reasoning_efforts.includes(effort.id)}
+                            onchange={(event) =>
+                              toggleCapabilityEffort(capability, effort.id, event.currentTarget.checked)}
+                          />
+                          {effort.name}
+                        </label>
+                      {/each}
+                    </div>
+                    <p class="muted hint">
+                      Select only the efforts this model exposes through {harness.name}. Leave every effort
+                      unchecked when this model exposes no effort control.
+                    </p>
+                  {/if}
                 {/if}
               </fieldset>
             {/each}
@@ -2072,24 +2101,47 @@
                           id="em-execution-{model.id}-{harness.id}"
                           type="text"
                           bind:value={capability.execution_model_id}
+                          placeholder={harness.id === "opencode" ? "provider/model" : "gpt-5.6-sol"}
                         />
+                        {#if harness.id === "opencode"}
+                          <p class="muted hint">Use the provider/model ID from OpenCode.</p>
+                        {/if}
                       </div>
-                      <span class="field-label"
-                        >Supported reasoning efforts for this model on {harness.name}</span
-                      >
-                      <div class="check-group">
-                        {#each harness.reasoning_efforts as effort (effort.id)}
-                          <label>
-                            <input
-                              type="checkbox"
-                              checked={capability.reasoning_efforts.includes(effort.id)}
-                              onchange={(event) =>
-                                toggleCapabilityEffort(capability, effort.id, event.currentTarget.checked)}
-                            />
-                            {effort.name}
-                          </label>
-                        {/each}
-                      </div>
+                      {#if harness.reasoning_effort_mode === "custom"}
+                        <div class="field">
+                          <label for="em-variants-{model.id}-{harness.id}">Supported variants</label>
+                          <textarea
+                            id="em-variants-{model.id}-{harness.id}"
+                            rows="3"
+                            bind:value={
+                              () => capability.reasoning_efforts.join("\n"),
+                              (value) => (capability.reasoning_efforts = value.split("\n"))
+                            }
+                            aria-describedby="em-variants-hint-{model.id}-{harness.id}"></textarea>
+                          <p id="em-variants-hint-{model.id}-{harness.id}" class="muted hint">
+                            One variant per line, up to 20 unique names of 50 characters each. Leave blank to
+                            use
+                            {harness.name}'s default.
+                          </p>
+                        </div>
+                      {:else}
+                        <span class="field-label"
+                          >Supported reasoning efforts for this model on {harness.name}</span
+                        >
+                        <div class="check-group">
+                          {#each harness.reasoning_efforts as effort (effort.id)}
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={capability.reasoning_efforts.includes(effort.id)}
+                                onchange={(event) =>
+                                  toggleCapabilityEffort(capability, effort.id, event.currentTarget.checked)}
+                              />
+                              {effort.name}
+                            </label>
+                          {/each}
+                        </div>
+                      {/if}
                     {/if}
                   </fieldset>
                 {/each}
@@ -2114,7 +2166,9 @@
                       {capability.harness_name}: {capability.execution_model_id}
                       · {capability.reasoning_efforts.length
                         ? capability.reasoning_efforts.join(", ")
-                        : "no reasoning control"}
+                        : usesCustomVariants(capability.harness)
+                          ? "default variant"
+                          : "no reasoning control"}
                     </div>
                   {/each}
                   {#if model.delete_blocker}<p class="muted hint">{model.delete_blocker}</p>{/if}
@@ -2175,7 +2229,9 @@
             </div>
             {#if newAgentCapability?.reasoning_efforts.length}
               <div class="field">
-                <label for="na-reasoning">Reasoning effort</label>
+                <label for="na-reasoning"
+                  >{usesCustomVariants(newAgentHarness) ? "Variant" : "Reasoning effort"}</label
+                >
                 <select id="na-reasoning" bind:value={newAgentReasoningEffort} required>
                   {#each newAgentCapability.reasoning_efforts as effort (effort)}
                     <option value={effort}>{effort}</option>
@@ -2218,7 +2274,9 @@
                 </div>
                 {#if editAgentCapability?.reasoning_efforts.length}
                   <div class="field">
-                    <label for="ea-reasoning-{agent.id}">Reasoning effort</label>
+                    <label for="ea-reasoning-{agent.id}"
+                      >{usesCustomVariants(editAgent.harness) ? "Variant" : "Reasoning effort"}</label
+                    >
                     <select id="ea-reasoning-{agent.id}" bind:value={editAgent.reasoning_effort} required>
                       {#each editAgentCapability.reasoning_efforts as effort (effort)}
                         <option value={effort}>{effort}</option>
