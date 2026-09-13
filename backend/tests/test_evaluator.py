@@ -26,6 +26,7 @@ def _settings(tmp_path: Path) -> EvaluatorRuntimeSettings:
         massive_api_key="massive-secret",
         codex_home=tmp_path,
         muse_config_home=tmp_path / "muse-config",
+        opencode_home=tmp_path / "opencode",
     )
 
 

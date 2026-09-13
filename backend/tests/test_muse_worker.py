@@ -24,6 +24,7 @@ def _settings(tmp_path):
         massive_api_key="massive-secret",
         codex_home=tmp_path / "codex",
         muse_config_home=tmp_path / "muse-config",
+        opencode_home=tmp_path / "opencode",
     )
 
 

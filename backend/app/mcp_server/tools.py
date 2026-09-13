@@ -269,7 +269,7 @@ def list_agents() -> dict:
 
 @mcp.tool()
 def list_harnesses() -> dict:
-    """List integrated execution harnesses and their reasoning-effort vocabulary."""
+    """List harnesses with fixed reasoning choices or custom provider variant support."""
     return harnesses_out()
 
 
