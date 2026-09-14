@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PositionNote from "./PositionNote.svelte";
   import { decisionOutcomeLabel, referenceLabel } from "../allocation";
   import { apiJson } from "../api/client";
   import type { Direction, SignalOut, SignalsPage } from "../api/types";
@@ -75,7 +76,9 @@
               <tbody>
                 {#each signal.positions as position (position.symbol)}
                   <tr>
-                    <td class="num">{position.symbol}</td>
+                    <td class="num"
+                      >{position.symbol}<PositionNote symbol={position.symbol} note={position.note} /></td
+                    >
                     <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
                   </tr>
                 {/each}

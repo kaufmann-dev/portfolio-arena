@@ -1,5 +1,4 @@
-"""Per-position notes and the admin handoff view: notes round-trip for admins,
-never leak on public payloads, and holdings carry buy/current prices."""
+"""Position notes are public; holding buy/current prices remain admin-only."""
 
 from .util import backdate_allocation
 
@@ -49,13 +48,16 @@ class TestPositionNotes:
         notes = {p["symbol"]: p["note"] for p in positions}
         assert notes == {"AAPL": "earnings 08/01, trimming", "MSFT": "cloud demand intact"}
 
-    def test_public_detail_hides_notes(self, client, admin_headers, sample_agent, sample_prompt):
+    def test_public_detail_includes_notes(self, client, admin_headers, sample_agent, sample_prompt):
         created = _create_with_notes(client, admin_headers, sample_agent["id"], sample_prompt["id"])
         public = client.get(f"/api/portfolios/{created['slug']}")
         assert public.status_code == 200
         for allocation in public.json()["portfolio"]["allocations"]:
             for position in allocation["positions"]:
-                assert "note" not in position
+                assert (
+                    position["note"]
+                    == {"AAPL": "earnings 08/01, trimming", "MSFT": "cloud demand intact"}[position["symbol"]]
+                )
 
     def test_admin_detail_requires_auth(self, client, sample_portfolio):
         assert client.get(f"/api/portfolios/{sample_portfolio['id']}/detail").status_code == 401
@@ -77,7 +79,9 @@ class TestHandoffHoldings:
         assert aapl["entry_price"] and aapl["current_price"]
         assert aapl["note"] == "earnings 08/01, trimming"
 
-    def test_public_holdings_omit_handoff_fields(self, client, admin_headers, sample_agent, sample_prompt):
+    def test_public_holdings_include_notes_but_omit_prices(
+        self, client, admin_headers, sample_agent, sample_prompt
+    ):
         created = _create_with_notes(client, admin_headers, sample_agent["id"], sample_prompt["id"])
         backdate_allocation(created["allocation"]["id"])
         public = client.get(f"/api/portfolios/{created['slug']}").json()["portfolio"]
@@ -85,4 +89,7 @@ class TestHandoffHoldings:
         for holding in public["holdings"]:
             assert "entry_price" not in holding
             assert "current_price" not in holding
-            assert "note" not in holding
+            assert (
+                holding["note"]
+                == {"AAPL": "earnings 08/01, trimming", "MSFT": "cloud demand intact"}[holding["symbol"]]
+            )

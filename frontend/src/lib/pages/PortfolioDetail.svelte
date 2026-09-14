@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PositionNote from "../components/PositionNote.svelte";
   import { decisionOutcomeLabel, referenceLabel } from "../allocation";
   import { onMount } from "svelte";
   import { getPublicQuery, PUBLIC_REFRESH_MS } from "../api/publicCache";
@@ -146,7 +147,9 @@
                 <tbody>
                   {#each allocation.positions as position (position.symbol)}
                     <tr>
-                      <td class="num">{position.symbol}</td>
+                      <td class="num"
+                        >{position.symbol}<PositionNote symbol={position.symbol} note={position.note} /></td
+                      >
                       <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
                     </tr>
                   {/each}
@@ -421,7 +424,9 @@
             <tbody>
               {#each managedPortfolio.holdings as holding (holding.symbol)}
                 <tr>
-                  <td class="num">{holding.symbol}</td>
+                  <td class="num"
+                    >{holding.symbol}<PositionNote symbol={holding.symbol} note={holding.note} /></td
+                  >
                   <td class="right num">{pctPoints(holding.weight_pct)}</td>
                   <td class="right num">{pctPoints(holding.target_weight_pct)}</td>
                   <td class="right num {pctPointsSignClass(holding.weight_pct - holding.target_weight_pct)}">
@@ -463,7 +468,18 @@
             <tbody>
               {#each rebuiltPortfolio.holdings as holding (holding.symbol)}
                 <tr>
-                  <td class="num">{holding.symbol}</td>
+                  <td class="num">
+                    {holding.symbol}
+                    {#each rebuiltPortfolio.active_cohorts.filter( (cohort) => cohort.positions.some((position) => position.symbol === holding.symbol) ) as cohort (cohort.signal_id)}
+                      <div>
+                        <span>Signal #{cohort.signal_id} · {fmtDate(cohort.start_at)}</span>
+                        <PositionNote
+                          symbol={holding.symbol}
+                          note={cohort.positions.find((position) => position.symbol === holding.symbol)?.note}
+                        />
+                      </div>
+                    {/each}
+                  </td>
                   <td class="right num">{pctPoints(holding.weight_pct, 2)}</td>
                 </tr>
               {/each}
@@ -518,7 +534,12 @@
                     <tbody>
                       {#each cohort.positions as position (position.symbol)}
                         <tr>
-                          <td class="num">{position.symbol}</td>
+                          <td class="num"
+                            >{position.symbol}<PositionNote
+                              symbol={position.symbol}
+                              note={position.note}
+                            /></td
+                          >
                           <td class="right num">{pctPoints(position.weight_pct, 2)}</td>
                         </tr>
                       {/each}

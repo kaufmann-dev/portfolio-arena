@@ -411,9 +411,9 @@ def test_mcp_reference_decisions_public_participation_and_locking(
     assert {decision["outcome"] for decision in history} == {"abstained", "partially_allocated"}
     for decision in history:
         for position in decision["positions"]:
-            assert "note" not in position
+            assert "note" in position
     for holding in detail["holdings"]:
-        assert "note" not in holding and "entry_price" not in holding and "current_price" not in holding
+        assert "entry_price" not in holding and "current_price" not in holding
     assert (
         client.put(
             f"/api/{kind}s/{saved[0]['id']}",
