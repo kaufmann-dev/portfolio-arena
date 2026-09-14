@@ -10,6 +10,7 @@
   }
 
   const { rows, benchmarkName }: Props = $props();
+  const sortedRows = $derived([...rows].sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id));
   const horizons = Array.from({ length: 40 }, (_, index) => (index + 1) / 2);
   const maxMagnitude = $derived.by(() => {
     let maximum = 0;
@@ -75,12 +76,12 @@
   <div class="table-scroll" role="region" aria-labelledby="signal-matrix-title" tabindex="0">
     <table class="matrix-table">
       <caption class="visually-hidden">
-        Portfolio rows by half through twenty trading-session holding periods. Every cell contains its numeric
-        result or pending state.
+        Portfolio rows sorted by name, A–Z, with the benchmark pinned first, by half through twenty
+        trading-session holding periods. Every cell contains its numeric result or pending state.
       </caption>
       <thead>
         <tr>
-          <th class="portfolio-head" scope="col">Portfolio</th>
+          <th class="portfolio-head" scope="col" aria-sort="ascending">Portfolio</th>
           {#each horizons as horizon (horizon)}
             <th scope="col">
               H{horizon}
@@ -95,7 +96,7 @@
             <td>0.00%</td>
           {/each}
         </tr>
-        {#each rows as row (row.id)}
+        {#each sortedRows as row (row.id)}
           <tr>
             <th scope="row">
               <a href={detailHref(row)} onclick={(event) => link(event, detailHref(row))}>

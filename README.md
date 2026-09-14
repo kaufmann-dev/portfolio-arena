@@ -111,10 +111,12 @@ expand the note controls in holdings, active cohorts, or decision history to ins
   one session; Portfolio α/day averages the simulated portfolio’s full-session return minus SPY return.
   The signal objective uses `signal_mean_daily_alpha`; portfolio alpha uses `mean_daily_alpha`.
   Rank remains based on the adjusted lower confidence bound of portfolio alpha.
-  Column sorting only changes row order. The objective is preserved in the URL, comparisons, and
+  Column sorting only changes row order. Click Portfolio to toggle name sorting A–Z/Z–A;
+  name sorting is also available in the mobile sort selector. SPY stays pinned first. The objective is preserved in the URL, comparisons, and
   portfolio details. The Signal Alpha matrix shows all forty horizons alongside rankings
   and in portfolio details; the table’s Signal α/day matches the selected horizon’s matrix cell.
-  Matrix row labels show saved portfolio names without separate Open/Close badges.
+  Matrix rows are sorted by saved portfolio name A–Z with the reference pinned first;
+  labels show saved names without separate Open/Close badges.
   Cell backgrounds show alpha sign (red negative, green positive), with
   intensity scaled by absolute signal alpha across all displayed rows and horizons; zero is neutral.
   About’s Metrics explained section covers the calculations and worked examples.
