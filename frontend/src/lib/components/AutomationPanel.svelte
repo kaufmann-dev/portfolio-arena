@@ -306,8 +306,8 @@
     }
   }
 
-  function statusClass(status: EvaluationRunStatus): string {
-    if (status === "succeeded") return "success";
+  function statusClass({ status, outcome }: EvaluationRun): string {
+    if (status === "succeeded") return outcome === "abstained" ? "warn" : "success";
     if (status === "failed" || status === "cancelled") return "neg";
     if (status === "running" || status === "cancel_requested") return "warn";
     if (status === "queued") return "accent";
@@ -654,7 +654,7 @@
                 <div class="cell-line muted num">{run.harness_version ?? "not claimed"}</div>
               </td>
               <td
-                ><span class={`badge ${statusClass(run.status)}`}
+                ><span class={["badge", statusClass(run)]}
                   >{run.status === "succeeded" && run.outcome
                     ? decisionOutcomeLabel(run.outcome)
                     : run.status}</span

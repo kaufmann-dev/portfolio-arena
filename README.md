@@ -82,6 +82,10 @@ The project measures cost-free paper performance for research.
 - **Research context depends on track.** Managed evaluations receive holdings, notes, allocation
   history and performance. Rebuilt evaluations receive no prior portfolio state. Strategy and
   direction instructions are inserted into the editable track-specific wrapper in Admin → Settings.
+  Shared wrapper instructions define comparative, probabilistic selection and abstention; short
+  strategy texts define the investment mechanism, key evidence, and invalidation. Indicator lists
+  guide relevant research rather than imposing universal checklists. Processing gaps and recognition
+  deadlines apply only when the strategy explicitly requires them.
 - **Books have one direction.** Selected weights are positive and total `min(100, count × maximum weight)`.
   Server-enforced sizing defaults are 10–25% for Managed and 10–100% for Rebuilt, with at most four
   decimal places. The remainder follows the direction-matched SPY reference, outside ticker limits.
@@ -205,7 +209,8 @@ structured response before submission. All three harnesses return `proposal` for
 `abstained` for completed research with no qualifying securities, or `blocked` only when portfolio
 context or required research is unavailable. The latter requires `blocked_reason` of
 `portfolio_unavailable` or `research_unavailable`. Partial allocations and abstentions require a note
-and report. They save normal decisions and finish successfully without retries. Actual execution,
+and report. They save normal decisions and finish successfully without retries. Automation shows
+abstentions in yellow and completed allocations in green. Actual execution,
 research-access, and response-validation failures remain retryable. Successful recovery clears the
 terminal error; blocked reports are retained. Existing historical failures are left unchanged.
 
