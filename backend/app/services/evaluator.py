@@ -495,12 +495,11 @@ def _new_run(
     )
 
 
-def _pending_result(
+def _result_for_session(
     session: Session,
     portfolio: Portfolio,
-    now: datetime,
+    effective: date,
 ) -> Allocation | Signal | None:
-    effective = effective_date_for(now, portfolio.execution_boundary)
     if portfolio.prompt_mode == "managed":
         return session.scalars(
             select(Allocation).where(
@@ -581,7 +580,8 @@ def enqueue_manual_runs(
                 }
             )
             continue
-        if _pending_result(session, portfolio, current_time) is not None:
+        effective = effective_date_for(current_time, portfolio.execution_boundary)
+        if _result_for_session(session, portfolio, effective) is not None:
             items.append(
                 {
                     "portfolio_id": portfolio_id,
@@ -629,8 +629,9 @@ def retry_run(session: Session, *, run_id: int, now: datetime | None = None) -> 
     active = _active_run(session, source.portfolio_id)
     if active is not None:
         return {"action": "existing", "run": run_out(active)}
-    if _pending_result(session, source.portfolio, current_time) is not None:
-        raise AdminOpError(409, "A result already targets the next effective session")
+    effective = source.scheduled_for or effective_date_for(current_time, source.execution_boundary)
+    if _result_for_session(session, source.portfolio, effective) is not None:
+        raise AdminOpError(409, "A result already targets this effective session")
     run = _new_run(
         config,
         settings,
@@ -709,6 +710,7 @@ def _enqueue_scheduled(
             or not supports_automation(portfolio.agent.harness)
             or not is_due_on(config, local_date)
             or _active_run(session, portfolio.id) is not None
+            or _result_for_session(session, portfolio, local_date) is not None
         ):
             continue
         existing = session.scalar(
@@ -794,6 +796,27 @@ def _cancel_liquidated_queued_runs(
         run.error = "Cancelled because the short portfolio is liquidated."
 
 
+def _skip_completed_queued_runs(session: Session, now: datetime) -> None:
+    runs = session.scalars(
+        select(EvaluationRun)
+        .where(EvaluationRun.status == "queued")
+        .order_by(EvaluationRun.portfolio_id)
+        .with_for_update(skip_locked=True)
+    ).all()
+    for run in runs:
+        # Match submission's run -> portfolio lock order. A direct decision
+        # already being saved must commit before this run is checked and claimed.
+        portfolio = admin_ops.writable_portfolio(session, run.portfolio_id, lock=True)
+        effective = run.scheduled_for or effective_date_for(now, run.execution_boundary)
+        if _result_for_session(session, portfolio, effective) is not None:
+            run.status = "skipped"
+            run.error = "A result already targets this effective session."
+            run.finished_at = now
+            run.worker_id = None
+            run.lease_expires_at = None
+    session.flush()
+
+
 def claim_runs(
     session: Session,
     *,
@@ -824,6 +847,7 @@ def claim_runs(
     _cancel_disabled_queued_runs(session, current_time)
     _cancel_liquidated_queued_runs(session, liquidated_ids, current_time)
     _enqueue_scheduled(session, settings, current_time, liquidated_ids)
+    _skip_completed_queued_runs(session, current_time)
 
     claimed: list[EvaluationRun] = []
     if settings.enabled:

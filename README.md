@@ -216,7 +216,12 @@ harness, harness-specific execution model ID, optional reasoning effort, timeout
 when it is queued. Harness defaults are used; Portfolio Arena does not configure a service tier.
 Scheduled runs enter the queue at the configured offset before their opening or closing boundary;
 polling and concurrency may delay their actual start. Successful scheduled submissions retain the
-scheduled boundary even when they finish afterward. Pausing stops
+scheduled boundary even when they finish afterward. Manual runs, scheduled runs, and retries share
+one active-run slot per portfolio across all workers, including while cancellation is pending.
+A saved allocation or signal, including an abstention, satisfies its target session regardless of
+the evaluation trigger. Scheduling checks for that result before creating work; queued evaluations
+check again before claiming and skip completed sessions without starting research. Scheduled retries
+check their original session even after its boundary has passed. Pausing stops
 new claims while active work finishes. Queued work can be cancelled immediately; running work
 receives a cancellation request and its harness process and MCP children are terminated. Failed runs can be retried
 manually. All paths use the same server-side proposal and symbol validation and atomically create
