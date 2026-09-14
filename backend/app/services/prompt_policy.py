@@ -76,24 +76,23 @@ def validate_direction_instructions(value: str) -> str:
 
 
 DEFAULT_SELECTION_INSTRUCTIONS = """\
-Select and weight the strongest strategy-aligned opportunities by expected excess return from current
-prices, evidence quality, and adverse scenarios. Use verified facts; label estimates and inferences.
-A defensible positive expectation is enough: certainty, perfect safety, and a flawless candidate
-are not required.
+Select securities with a specific, falsifiable financial thesis and a supported prospective advantage
+over the direction-matched SPY reference at current prices. Compare plausible outcomes, their likelihood,
+and adverse risks; test the strongest opposing interpretation. Use ranges where precision is unsupported.
 
-The strategy defines the economic mechanism and essential requirements. Use indicator lists where
-relevant, not as mandatory checklists. Assess future outcomes and market beliefs probabilistically.
-Public awareness, information age, and a prior price move are not automatic exclusions. Require a
-processing gap or recognition deadline only when the strategy explicitly calls for one.
-An execution boundary alone sets no holding deadline.
+The strategy's mechanism and explicit requirements are essential. Indicator lists guide relevant
+research, not universal checklists. Assess forecasts and market beliefs probabilistically. Publicity,
+information age, or a prior price move alone proves neither opportunity nor disqualification.
+State a plausible thesis horizon; an execution boundary alone sets no holding deadline.
 
-Search the full eligible US market with Massive and live web research. Record material source and price
-timestamps; do not assume future information or execution prices. Follow the returned eligibility and sizing
-policy. Position count follows the evidence; never add unsupported picks or substitute SPY for research.
+Search broadly across the eligible US market with Massive and live web research. Support decisive facts
+with primary evidence where available; label inferences and material gaps. Cite sources and timestamp
+prices, allowing for movement before entry. Never assume future information or execution prices.
 
-Submit qualifying candidates even if they cannot fill the allocation. Abstain only when broad research
-finds no defensible opportunity; explain why the strongest candidates fail. Ordinary uncertainty or
-incomplete diversification is insufficient."""
+Rank and weight qualifying candidates by expected excess return, conviction, and risk within the sizing
+limits. Do not target a position count or abstention rate, add filler, or substitute SPY for research.
+Submit the supported selections; abstain only when completed broad research supports none. Uncertainty
+alone is not disqualifying, but missing evidence essential to a thesis is."""
 
 DEFAULT_MANAGED_WRAPPER_PROMPT = (
     """\
@@ -171,19 +170,22 @@ Both are successful outcomes: use an empty `error` and null `blocked_reason`.
   the error, and set `blocked_reason` to `portfolio_unavailable` or `research_unavailable`.
 
 In `report`, explain the decision, evidence, material risks, and what would change your assessment.
-For partial allocations or abstentions, describe the research and why no more securities qualified.
+Partial allocations and abstentions require both `note` and `report`: explain the research coverage
+and why the strongest excluded candidates failed.
 Preserve any completed research if blocked. Keep position notes concise.
 """
 
 MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS = """\
 When the analysis is complete, call `create_allocation` exactly once with the portfolio id returned by
 `get_portfolio`. Include a concise portfolio-level note and useful per-position notes so the next
-evaluation can understand the decision."""
+evaluation can understand the decision. For a partial allocation or abstention, explain the research
+coverage and why the strongest excluded candidates failed in the portfolio-level note."""
 
 REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS = """\
 When the analysis is complete, call `create_signal` exactly once with the portfolio id returned by
 `get_portfolio`. Include a concise portfolio-level note and useful per-position notes that explain
-the independent signal."""
+the independent signal. For a partial allocation or abstention, explain the research coverage and
+why the strongest excluded candidates failed in the portfolio-level note."""
 
 V2_REBUILT_PROMPTS = {
     "barebones-weekly": {
@@ -391,15 +393,12 @@ def validate_wrapper_prompt(template: str) -> str:
 def allocation_policy_text(policy: dict) -> str:
     return "\n".join(
         [
-            "Select only qualifying securities; do not add marginal or omit qualifying selections.",
             (
                 f"Use 0–{policy['derived_max_positions']} selections, each weighted "
                 f"{policy['min_position_weight_pct']:g}–{policy['max_position_weight_pct']:g}% of NAV."
             ),
             "For n selections, weights must total min(100, n × maximum position weight), to four decimals.",
             "The server puts the remainder in direction-matched SPY, outside these limits; do not submit it.",
-            "If completed research finds nothing qualifying, abstain with no positions.",
-            "Explain any partial allocation or abstention in the decision note.",
             "Use only USD-denominated equities and ETFs, and validate every selected symbol.",
         ]
     )
