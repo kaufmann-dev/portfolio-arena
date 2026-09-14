@@ -1,7 +1,7 @@
 """Version-scoped orchestration for deterministic open/close analytics.
 
 Only prices and decisions persist. Exact-input caches reuse pure computations;
-all public reads stay independent of evaluator enablement.
+paused versions cap managed performance at five trading days after the last decision.
 """
 
 from __future__ import annotations
@@ -349,13 +349,15 @@ def compute_valuations(
             arena.by_portfolio_id[portfolio.id] = PortfolioValuation(portfolio, None, {"has_data": False})
             continue
 
-        def build(portfolio=portfolio):
+        as_of = managed_valuation_boundary(portfolio, loaded.as_of)
+
+        def build(portfolio=portfolio, as_of=as_of):
             try:
                 result = value_portfolio(
                     [AllocationInput(**item) for item in _inputs(portfolio.allocations)],
                     loaded.series,
                     calendar,
-                    loaded.as_of,
+                    as_of,
                     portfolio.direction,
                     portfolio.execution_boundary,
                 )
@@ -364,12 +366,36 @@ def compute_valuations(
                 return None, {"has_data": False}, str(exc)
 
         result, metrics, error = _managed_cache.get_or_compute(
-            _cache_key(portfolio, portfolio.allocations, loaded.series, calendar, loaded.as_of), build
+            _cache_key(portfolio, portfolio.allocations, loaded.series, calendar, as_of), build
         )
         arena.by_portfolio_id[portfolio.id] = PortfolioValuation(portfolio, result, metrics, error)
         if error:
             arena.market_data_status = "unavailable"
     return arena
+
+
+def managed_valuation_boundary(portfolio: Portfolio, as_of: Boundary) -> Boundary:
+    """Cap paused versions at five sessions after the latest effective decision."""
+    if portfolio.version.evaluation_enabled:
+        return as_of
+    latest = max(
+        (
+            item.effective_date
+            for item in portfolio.allocations
+            if boundary_value(item.effective_date, portfolio.execution_boundary)["timestamp"]
+            <= as_of["timestamp"]
+        ),
+        default=None,
+    )
+    if latest is None:
+        return as_of
+    remaining = 5
+    while remaining:
+        latest += timedelta(days=1)
+        if is_trading_day(latest):
+            remaining -= 1
+    cutoff = boundary_value(latest, portfolio.execution_boundary)
+    return min(as_of, cutoff, key=lambda boundary: boundary["timestamp"])
 
 
 def compute_rebuilt_arena(
