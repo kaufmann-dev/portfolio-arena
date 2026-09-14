@@ -74,6 +74,24 @@ export interface AppSettings {
   rebuilt_manual_submission_instructions: string;
 }
 
+export type SettingsPromptKey = Exclude<
+  keyof AppSettings,
+  "managed_allocation_policy" | "rebuilt_allocation_policy"
+>;
+
+export interface SettingsPromptVersion {
+  version: number;
+  text: string;
+  created_at: string;
+  restored_from_version: number | null;
+}
+
+export interface SettingsPromptVersionsResponse {
+  key: SettingsPromptKey;
+  current_version: number | null;
+  versions: SettingsPromptVersion[];
+}
+
 export interface Metrics {
   has_data: boolean;
   start_at?: Boundary | null;

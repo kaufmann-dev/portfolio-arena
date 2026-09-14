@@ -18,6 +18,9 @@
     AdminPortfolio,
     AdminPortfoliosResponse,
     AppSettings,
+    SettingsPromptKey,
+    SettingsPromptVersion,
+    SettingsPromptVersionsResponse,
     ApiKeyCreated,
     ApiKeyOut,
     ApiKeysResponse,
@@ -1225,15 +1228,92 @@
   let managedMaxPositionWeightPct = $state<string>("");
   let rebuiltMinPositionWeightPct = $state<string>("");
   let rebuiltMaxPositionWeightPct = $state<string>("");
-  let managedWrapperPrompt = $state("");
-  let rebuiltWrapperPrompt = $state("");
-  let longDirectionInstructions = $state("");
-  let shortDirectionInstructions = $state("");
-  let allocationPolicyInstructions = $state("");
-  let automatedSubmissionInstructions = $state("");
-  let managedManualSubmissionInstructions = $state("");
-  let rebuiltManualSubmissionInstructions = $state("");
   let settingsError = $state("");
+  let settingsPrompts = $state<Record<SettingsPromptKey, string>>({
+    managed_wrapper_prompt: "",
+    rebuilt_wrapper_prompt: "",
+    long_direction_instructions: "",
+    short_direction_instructions: "",
+    allocation_policy_instructions: "",
+    automated_submission_instructions: "",
+    managed_manual_submission_instructions: "",
+    rebuilt_manual_submission_instructions: "",
+  });
+  let settingsBusy = $state(false);
+  let settingsLoaded = $state(false);
+  let settingsHistoryKey = $state<SettingsPromptKey | null>(null);
+  let settingsHistory = $state.raw<SettingsPromptVersionsResponse | null>(null);
+  let settingsHistoryLoading = $state(false);
+  let settingsHistoryError = $state("");
+  let settingsHistorySequence = 0;
+
+  async function loadSettingsHistory(key: SettingsPromptKey) {
+    const sequence = ++settingsHistorySequence;
+    settingsHistoryLoading = true;
+    settingsHistoryError = "";
+    try {
+      const result = await apiJson<SettingsPromptVersionsResponse>(
+        `/api/admin/settings/prompts/${key}/versions`,
+      );
+      if (sequence === settingsHistorySequence && settingsHistoryKey === key) settingsHistory = result;
+    } catch (e) {
+      if (sequence === settingsHistorySequence)
+        settingsHistoryError = e instanceof Error ? e.message : "Could not load prompt history.";
+    } finally {
+      if (sequence === settingsHistorySequence) settingsHistoryLoading = false;
+    }
+  }
+
+  function toggleSettingsHistory(key: SettingsPromptKey) {
+    settingsHistorySequence += 1;
+    settingsHistory = null;
+    settingsHistoryError = "";
+    settingsHistoryLoading = false;
+    settingsHistoryKey = settingsHistoryKey === key ? null : key;
+    if (settingsHistoryKey) void loadSettingsHistory(settingsHistoryKey);
+  }
+
+  function restoreSettingsPrompt(key: SettingsPromptKey, version: SettingsPromptVersion) {
+    requestConfirmation({
+      title: `Restore version ${version.version}?`,
+      description:
+        "This saves the selected text immediately as a new version and replaces unsaved edits in this prompt field. Other settings and all older revisions are preserved.",
+      confirmLabel: "Restore version",
+      action: async () => {
+        if (settingsBusy) return false;
+        settingsBusy = true;
+        try {
+          const result = await postJson<SettingsPromptVersionsResponse>(
+            `/api/admin/settings/prompts/${key}/versions/${version.version}/restore`,
+            {},
+          );
+          settingsPrompts[key] = result.versions[0].text;
+          if (settingsHistoryKey === key) {
+            settingsHistorySequence += 1;
+            settingsHistory = result;
+            settingsHistoryLoading = false;
+            settingsHistoryError = "";
+          }
+          flash(`Prompt version ${version.version} restored into a new current version.`);
+          return true;
+        } catch (e) {
+          throw new Error(e instanceof Error ? e.message : "Could not restore prompt version.");
+        } finally {
+          settingsBusy = false;
+        }
+      },
+    });
+  }
+
+  function applySettings(payload: AppSettings) {
+    managedMinPositionWeightPct = String(payload.managed_allocation_policy.min_position_weight_pct);
+    managedMaxPositionWeightPct = String(payload.managed_allocation_policy.max_position_weight_pct);
+    rebuiltMinPositionWeightPct = String(payload.rebuilt_allocation_policy.min_position_weight_pct);
+    rebuiltMaxPositionWeightPct = String(payload.rebuilt_allocation_policy.max_position_weight_pct);
+    for (const key of Object.keys(settingsPrompts) as SettingsPromptKey[]) {
+      settingsPrompts[key] = payload[key];
+    }
+  }
 
   function positionCountRange(minimum: string, maximum: string): string {
     const min = Number(minimum);
@@ -1243,33 +1323,17 @@
   }
 
   async function loadSettings() {
+    if (settingsBusy) return;
+    settingsBusy = true;
+    settingsError = "";
     try {
-      const payload = await apiJson<AppSettings>("/api/settings");
-      managedMinPositionWeightPct = String(payload.managed_allocation_policy.min_position_weight_pct);
-      managedMaxPositionWeightPct = String(payload.managed_allocation_policy.max_position_weight_pct);
-      rebuiltMinPositionWeightPct = String(payload.rebuilt_allocation_policy.min_position_weight_pct);
-      rebuiltMaxPositionWeightPct = String(payload.rebuilt_allocation_policy.max_position_weight_pct);
-      managedWrapperPrompt = payload.managed_wrapper_prompt;
-      rebuiltWrapperPrompt = payload.rebuilt_wrapper_prompt;
-      longDirectionInstructions = payload.long_direction_instructions;
-      shortDirectionInstructions = payload.short_direction_instructions;
-      allocationPolicyInstructions = payload.allocation_policy_instructions;
-      automatedSubmissionInstructions = payload.automated_submission_instructions;
-      managedManualSubmissionInstructions = payload.managed_manual_submission_instructions;
-      rebuiltManualSubmissionInstructions = payload.rebuilt_manual_submission_instructions;
-    } catch {
-      managedMinPositionWeightPct = "";
-      managedMaxPositionWeightPct = "";
-      rebuiltMinPositionWeightPct = "";
-      rebuiltMaxPositionWeightPct = "";
-      managedWrapperPrompt = "";
-      rebuiltWrapperPrompt = "";
-      longDirectionInstructions = "";
-      shortDirectionInstructions = "";
-      allocationPolicyInstructions = "";
-      automatedSubmissionInstructions = "";
-      managedManualSubmissionInstructions = "";
-      rebuiltManualSubmissionInstructions = "";
+      applySettings(await apiJson<AppSettings>("/api/settings"));
+      settingsLoaded = true;
+      if (settingsHistoryKey) await loadSettingsHistory(settingsHistoryKey);
+    } catch (e) {
+      settingsError = e instanceof Error ? e.message : "Could not load settings.";
+    } finally {
+      settingsBusy = false;
     }
   }
 
@@ -1289,9 +1353,11 @@
 
   async function saveSettings(event: SubmitEvent) {
     event.preventDefault();
+    if (settingsBusy || !settingsLoaded) return;
+    settingsBusy = true;
     settingsError = "";
     try {
-      await putJson("/api/settings", {
+      const saved = await putJson<AppSettings>("/api/settings", {
         managed_allocation_policy: {
           min_position_weight_pct: Number(managedMinPositionWeightPct),
           max_position_weight_pct: Number(managedMaxPositionWeightPct),
@@ -1300,18 +1366,15 @@
           min_position_weight_pct: Number(rebuiltMinPositionWeightPct),
           max_position_weight_pct: Number(rebuiltMaxPositionWeightPct),
         },
-        managed_wrapper_prompt: managedWrapperPrompt,
-        rebuilt_wrapper_prompt: rebuiltWrapperPrompt,
-        long_direction_instructions: longDirectionInstructions,
-        short_direction_instructions: shortDirectionInstructions,
-        allocation_policy_instructions: allocationPolicyInstructions,
-        automated_submission_instructions: automatedSubmissionInstructions,
-        managed_manual_submission_instructions: managedManualSubmissionInstructions,
-        rebuilt_manual_submission_instructions: rebuiltManualSubmissionInstructions,
+        ...settingsPrompts,
       });
+      applySettings(saved);
+      if (settingsHistoryKey) await loadSettingsHistory(settingsHistoryKey);
       flash("Settings saved.");
     } catch (e) {
       settingsError = e instanceof Error ? e.message : "Save failed";
+    } finally {
+      settingsBusy = false;
     }
   }
 
@@ -1334,6 +1397,58 @@
     });
   }
 </script>
+
+{#snippet settingsPromptHistory(key: SettingsPromptKey)}
+  <button
+    type="button"
+    class="btn small"
+    aria-expanded={settingsHistoryKey === key}
+    onclick={() => toggleSettingsHistory(key)}
+  >
+    {settingsHistoryKey === key ? "Hide history" : "History"}
+  </button>
+  {#if settingsHistoryKey === key}
+    <section class="prompt-history" aria-label="Prompt version history">
+      <header>
+        <div>
+          <h3>Version history</h3>
+          <p class="muted">Newest first. Restoring saves a new current version.</p>
+        </div>
+        {#if settingsHistory?.current_version != null}<span class="badge"
+            >v{settingsHistory.current_version} current</span
+          >{/if}
+      </header>
+      {#if settingsHistoryLoading}
+        <p aria-live="polite">Loading version history…</p>
+      {:else if settingsHistoryError}
+        <div class="error-box" role="alert">{settingsHistoryError}</div>
+        <button type="button" class="btn small" onclick={() => loadSettingsHistory(key)}>Retry</button>
+      {:else if settingsHistory}
+        {#each settingsHistory.versions as version (version.version)}
+          <details class="settings-revision">
+            <summary>
+              v{version.version}{version.version === settingsHistory.current_version ? " · current" : ""}
+              · {fmtDate(version.created_at)} · {version.restored_from_version === null
+                ? version.version === 1
+                  ? "Before Sep 14, 2026 edits"
+                  : version.version === 2
+                    ? "Imported current text"
+                    : "Edit"
+                : `Restored from v${version.restored_from_version}`}
+            </summary>
+            <pre class="settings-revision-text">{version.text}</pre>
+            <button
+              type="button"
+              class="btn small"
+              disabled={settingsBusy || version.version === settingsHistory.current_version}
+              onclick={() => restoreSettingsPrompt(key, version)}>Restore</button
+            >
+          </details>
+        {/each}
+      {/if}
+    </section>
+  {/if}
+{/snippet}
 
 {#if auth.restoring}
   <div class="loading-block"><span class="spinner" aria-hidden="true"></span></div>
@@ -2825,159 +2940,185 @@
         <section class="card">
           <h2>Defaults</h2>
           <form onsubmit={saveSettings}>
-            <h3>Managed allocation policy</h3>
-            <div class="grid-2 weight-grid">
-              <div class="field">
-                <label for="set-managed-min-weight">Minimum position weight (%)</label>
-                <input
-                  id="set-managed-min-weight"
-                  type="number"
-                  min="0.0001"
-                  max="100"
-                  step="0.0001"
-                  bind:value={managedMinPositionWeightPct}
-                  required
-                />
+            <fieldset class="settings-fields" disabled={settingsBusy || !settingsLoaded}>
+              <h3>Managed allocation policy</h3>
+              <div class="grid-2 weight-grid">
+                <div class="field">
+                  <label for="set-managed-min-weight">Minimum position weight (%)</label>
+                  <input
+                    id="set-managed-min-weight"
+                    type="number"
+                    min="0.0001"
+                    max="100"
+                    step="0.0001"
+                    bind:value={managedMinPositionWeightPct}
+                    required
+                  />
+                </div>
+                <div class="field">
+                  <label for="set-managed-max-weight">Maximum position weight (%)</label>
+                  <input
+                    id="set-managed-max-weight"
+                    type="number"
+                    min="0.0001"
+                    max="100"
+                    step="0.0001"
+                    bind:value={managedMaxPositionWeightPct}
+                    required
+                  />
+                </div>
               </div>
-              <div class="field">
-                <label for="set-managed-max-weight">Maximum position weight (%)</label>
-                <input
-                  id="set-managed-max-weight"
-                  type="number"
-                  min="0.0001"
-                  max="100"
-                  step="0.0001"
-                  bind:value={managedMaxPositionWeightPct}
-                  required
-                />
-              </div>
-            </div>
-            <p class="muted hint">
-              Currently permits {positionCountRange(managedMinPositionWeightPct, managedMaxPositionWeightPct)} positions
-              in every managed portfolio.
-            </p>
-            <h3>Rebuilt allocation policy</h3>
-            <div class="grid-2 weight-grid">
-              <div class="field">
-                <label for="set-rebuilt-min-weight">Minimum position weight (%)</label>
-                <input
-                  id="set-rebuilt-min-weight"
-                  type="number"
-                  min="0.0001"
-                  max="100"
-                  step="0.0001"
-                  bind:value={rebuiltMinPositionWeightPct}
-                  required
-                />
-              </div>
-              <div class="field">
-                <label for="set-rebuilt-max-weight">Maximum position weight (%)</label>
-                <input
-                  id="set-rebuilt-max-weight"
-                  type="number"
-                  min="0.0001"
-                  max="100"
-                  step="0.0001"
-                  bind:value={rebuiltMaxPositionWeightPct}
-                  required
-                />
-              </div>
-            </div>
-            <p class="muted hint">
-              Currently permits {positionCountRange(rebuiltMinPositionWeightPct, rebuiltMaxPositionWeightPct)} positions
-              in every rebuilt signal.
-            </p>
-            <div class="field">
-              <label for="set-allocation-policy-instructions">Shared allocation policy instructions</label>
-              <textarea
-                id="set-allocation-policy-instructions"
-                bind:value={allocationPolicyInstructions}
-                rows="10"
-                aria-describedby="allocation-policy-instructions-hint"
-                required></textarea>
-              <p class="muted hint" id="allocation-policy-instructions-hint">
-                Include <code>{"{{derived_max_positions}}"}</code>,
-                <code>{"{{min_position_weight_pct}}"}</code>, and
-                <code>{"{{max_position_weight_pct}}"}</code>. Each is replaced with the mode's numeric policy
-                value. The server enforces position counts and weights.
-              </p>
-            </div>
-            <h3>Direction instructions</h3>
-            <div class="field">
-              <label for="set-long-direction">Long direction instructions</label>
-              <textarea id="set-long-direction" bind:value={longDirectionInstructions} rows="5" required
-              ></textarea>
-            </div>
-            <div class="field">
-              <label for="set-short-direction">Short direction instructions</label>
-              <textarea id="set-short-direction" bind:value={shortDirectionInstructions} rows="6" required
-              ></textarea>
               <p class="muted hint">
-                The applicable block is inserted into either mode wrapper for every evaluation.
+                Currently permits {positionCountRange(
+                  managedMinPositionWeightPct,
+                  managedMaxPositionWeightPct,
+                )} positions in every managed portfolio.
               </p>
-            </div>
-            <div class="field">
-              <label for="set-managed-wrapper">Managed wrapper prompt</label>
-              <textarea id="set-managed-wrapper" bind:value={managedWrapperPrompt} rows="18" required
-              ></textarea>
+              <h3>Rebuilt allocation policy</h3>
+              <div class="grid-2 weight-grid">
+                <div class="field">
+                  <label for="set-rebuilt-min-weight">Minimum position weight (%)</label>
+                  <input
+                    id="set-rebuilt-min-weight"
+                    type="number"
+                    min="0.0001"
+                    max="100"
+                    step="0.0001"
+                    bind:value={rebuiltMinPositionWeightPct}
+                    required
+                  />
+                </div>
+                <div class="field">
+                  <label for="set-rebuilt-max-weight">Maximum position weight (%)</label>
+                  <input
+                    id="set-rebuilt-max-weight"
+                    type="number"
+                    min="0.0001"
+                    max="100"
+                    step="0.0001"
+                    bind:value={rebuiltMaxPositionWeightPct}
+                    required
+                  />
+                </div>
+              </div>
               <p class="muted hint">
-                Managed evaluations receive holdings, allocation history, notes, and performance.
+                Currently permits {positionCountRange(
+                  rebuiltMinPositionWeightPct,
+                  rebuiltMaxPositionWeightPct,
+                )} positions in every rebuilt signal.
               </p>
-            </div>
-            <div class="field">
-              <label for="set-rebuilt-wrapper">Rebuilt wrapper prompt</label>
-              <textarea id="set-rebuilt-wrapper" bind:value={rebuiltWrapperPrompt} rows="18" required
-              ></textarea>
+              <div class="field">
+                <label for="set-allocation-policy-instructions">Shared allocation policy instructions</label>
+                <textarea
+                  id="set-allocation-policy-instructions"
+                  bind:value={settingsPrompts.allocation_policy_instructions}
+                  rows="10"
+                  aria-describedby="allocation-policy-instructions-hint"
+                  required></textarea>
+                {@render settingsPromptHistory("allocation_policy_instructions")}
+                <p class="muted hint" id="allocation-policy-instructions-hint">
+                  Include <code>{"{{derived_max_positions}}"}</code>,
+                  <code>{"{{min_position_weight_pct}}"}</code>, and
+                  <code>{"{{max_position_weight_pct}}"}</code>. Each is replaced with the mode's numeric
+                  policy value. The server enforces position counts and weights.
+                </p>
+              </div>
+              <h3>Direction instructions</h3>
+              <div class="field">
+                <label for="set-long-direction">Long direction instructions</label>
+                <textarea
+                  id="set-long-direction"
+                  bind:value={settingsPrompts.long_direction_instructions}
+                  rows="5"
+                  required></textarea>
+                {@render settingsPromptHistory("long_direction_instructions")}
+              </div>
+              <div class="field">
+                <label for="set-short-direction">Short direction instructions</label>
+                <textarea
+                  id="set-short-direction"
+                  bind:value={settingsPrompts.short_direction_instructions}
+                  rows="6"
+                  required></textarea>
+                {@render settingsPromptHistory("short_direction_instructions")}
+                <p class="muted hint">
+                  The applicable block is inserted into either mode wrapper for every evaluation.
+                </p>
+              </div>
+              <div class="field">
+                <label for="set-managed-wrapper">Managed wrapper prompt</label>
+                <textarea
+                  id="set-managed-wrapper"
+                  bind:value={settingsPrompts.managed_wrapper_prompt}
+                  rows="18"
+                  required></textarea>
+                {@render settingsPromptHistory("managed_wrapper_prompt")}
+                <p class="muted hint">
+                  Managed evaluations receive holdings, allocation history, notes, and performance.
+                </p>
+              </div>
+              <div class="field">
+                <label for="set-rebuilt-wrapper">Rebuilt wrapper prompt</label>
+                <textarea
+                  id="set-rebuilt-wrapper"
+                  bind:value={settingsPrompts.rebuilt_wrapper_prompt}
+                  rows="18"
+                  required></textarea>
+                {@render settingsPromptHistory("rebuilt_wrapper_prompt")}
+                <p class="muted hint">
+                  Rebuilt evaluations never receive prior portfolio state, regardless of this wording.
+                </p>
+              </div>
               <p class="muted hint">
-                Rebuilt evaluations never receive prior portfolio state, regardless of this wording.
+                Both wrappers must include
+                <code>{"{{portfolio_slug}}"}</code>,
+                <code>{"{{strategy_text}}"}</code>,
+                <code>{"{{direction_instructions}}"}</code>,
+                <code>{"{{allocation_policy}}"}</code>, and
+                <code>{"{{submission_instructions}}"}</code>. Unknown placeholders are rejected.
               </p>
-            </div>
-            <p class="muted hint">
-              Both wrappers must include
-              <code>{"{{portfolio_slug}}"}</code>,
-              <code>{"{{strategy_text}}"}</code>,
-              <code>{"{{direction_instructions}}"}</code>,
-              <code>{"{{allocation_policy}}"}</code>, and
-              <code>{"{{submission_instructions}}"}</code>. Unknown placeholders are rejected.
-            </p>
-            <h3>Submission instructions</h3>
-            <div class="field">
-              <label for="set-automated-submission">Automated submission instructions</label>
-              <textarea
-                id="set-automated-submission"
-                bind:value={automatedSubmissionInstructions}
-                rows="12"
-                aria-describedby="automated-submission-hint"
-                required></textarea>
-              <p class="muted hint" id="automated-submission-hint">
-                Used for every automated evaluation across all harnesses and both portfolio modes.
-              </p>
-            </div>
-            <div class="field">
-              <label for="set-managed-manual-submission">Managed manual submission instructions</label>
-              <textarea
-                id="set-managed-manual-submission"
-                bind:value={managedManualSubmissionInstructions}
-                rows="6"
-                aria-describedby="managed-manual-submission-hint"
-                required></textarea>
-              <p class="muted hint" id="managed-manual-submission-hint">
-                Used for manual managed portfolio submissions.
-              </p>
-            </div>
-            <div class="field">
-              <label for="set-rebuilt-manual-submission">Rebuilt manual submission instructions</label>
-              <textarea
-                id="set-rebuilt-manual-submission"
-                bind:value={rebuiltManualSubmissionInstructions}
-                rows="6"
-                aria-describedby="rebuilt-manual-submission-hint"
-                required></textarea>
-              <p class="muted hint" id="rebuilt-manual-submission-hint">
-                Used for manual rebuilt portfolio submissions.
-              </p>
-            </div>
-            <button class="btn primary settings-submit" type="submit">Save settings</button>
+              <h3>Submission instructions</h3>
+              <div class="field">
+                <label for="set-automated-submission">Automated submission instructions</label>
+                <textarea
+                  id="set-automated-submission"
+                  bind:value={settingsPrompts.automated_submission_instructions}
+                  rows="12"
+                  aria-describedby="automated-submission-hint"
+                  required></textarea>
+                {@render settingsPromptHistory("automated_submission_instructions")}
+                <p class="muted hint" id="automated-submission-hint">
+                  Used for every automated evaluation across all harnesses and both portfolio modes.
+                </p>
+              </div>
+              <div class="field">
+                <label for="set-managed-manual-submission">Managed manual submission instructions</label>
+                <textarea
+                  id="set-managed-manual-submission"
+                  bind:value={settingsPrompts.managed_manual_submission_instructions}
+                  rows="6"
+                  aria-describedby="managed-manual-submission-hint"
+                  required></textarea>
+                {@render settingsPromptHistory("managed_manual_submission_instructions")}
+                <p class="muted hint" id="managed-manual-submission-hint">
+                  Used for manual managed portfolio submissions.
+                </p>
+              </div>
+              <div class="field">
+                <label for="set-rebuilt-manual-submission">Rebuilt manual submission instructions</label>
+                <textarea
+                  id="set-rebuilt-manual-submission"
+                  bind:value={settingsPrompts.rebuilt_manual_submission_instructions}
+                  rows="6"
+                  aria-describedby="rebuilt-manual-submission-hint"
+                  required></textarea>
+                {@render settingsPromptHistory("rebuilt_manual_submission_instructions")}
+                <p class="muted hint" id="rebuilt-manual-submission-hint">
+                  Used for manual rebuilt portfolio submissions.
+                </p>
+              </div>
+              <button class="btn primary settings-submit" type="submit">Save settings</button>
+            </fieldset>
           </form>
           {#if settingsError}
             <div class="error-box" role="alert">{settingsError}</div>
@@ -3008,6 +3149,25 @@
 {/if}
 
 <style>
+  .settings-fields {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+  }
+  .settings-revision {
+    border-top: 1px solid var(--border-subtle);
+    padding: 12px 0;
+  }
+  .settings-revision summary {
+    cursor: pointer;
+  }
+  .settings-revision-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: inherit;
+  }
+
   .login-wrap {
     display: flex;
     justify-content: center;
@@ -3038,7 +3198,7 @@
     margin-top: 28px;
   }
 
-  .card form > h3 {
+  .settings-fields > h3 {
     margin: 24px 0 12px;
   }
 

@@ -53,6 +53,30 @@ class Setting(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class SettingPromptVersion(Base):
+    """Immutable snapshot of one shared Settings prompt."""
+
+    __tablename__ = "setting_prompt_versions"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="setting_prompt_versions_version_check"),
+        UniqueConstraint("key", "version", name="setting_prompt_versions_key_version_key"),
+        ForeignKeyConstraint(
+            ["key", "restored_from_version"],
+            ["setting_prompt_versions.key", "setting_prompt_versions.version"],
+            name="setting_prompt_versions_restore_fkey",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(Text, ForeignKey("settings.key", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    restored_from_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class ModelDefinition(Base):
     """One model plus its harness-specific execution capabilities."""
 
