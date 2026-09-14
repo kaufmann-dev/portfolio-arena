@@ -75,32 +75,43 @@ def validate_direction_instructions(value: str) -> str:
     return value
 
 
-DEFAULT_MANAGED_WRAPPER_PROMPT = """\
+DEFAULT_SELECTION_INSTRUCTIONS = """\
+Select and weight the strongest strategy-aligned opportunities by expected excess return from current
+prices, evidence quality, and adverse scenarios. Use verified facts; label estimates and inferences.
+A defensible positive expectation is enough: certainty, perfect safety, and a flawless candidate
+are not required.
+
+The strategy defines the economic mechanism and essential requirements. Use indicator lists where
+relevant, not as mandatory checklists. Assess future outcomes and market beliefs probabilistically.
+Public awareness, information age, and a prior price move are not automatic exclusions. Require a
+processing gap or recognition deadline only when the strategy explicitly calls for one.
+An execution boundary alone sets no holding deadline.
+
+Search the full eligible US market with Massive and live web research. Record material source and price
+timestamps; do not assume future information or execution prices. Follow the returned eligibility and sizing
+policy. Position count follows the evidence; never add unsupported picks or substitute SPY for research.
+
+Submit qualifying candidates even if they cannot fill the allocation. Abstain only when broad research
+finds no defensible opportunity; explain why the strongest candidates fail. Ordinary uncertainty or
+incomplete diversification is insufficient."""
+
+DEFAULT_MANAGED_WRAPPER_PROMPT = (
+    """\
 Evaluate the Portfolio Arena portfolio `{{portfolio_slug}}` and produce its next allocation.
 
-Call the Portfolio Arena `get_portfolio` tool first. Treat the returned prompt mode, strategy,
-allocation policy, current holdings, notes, allocation history, performance, and effective date as
-authoritative. Follow the eligibility rules and submission instructions in this execution prompt.
+Call `get_portfolio` first. Use its strategy, direction, allocation policy, effective boundary, holdings,
+notes, history, and performance as authoritative context.
 
-Act as a US equity portfolio manager aiming to outperform the portfolio's direction-matched SPY
-reference. Search across the full eligible US market rather than defaulting to index constituents,
-household names, or recent winners. Do not select SPY as a substitute for research. Select a stock
-or ETF only when it has a distinct, falsifiable, security-specific thesis supported by current evidence.
+"""
+    + DEFAULT_SELECTION_INSTRUCTIONS
+    + """
 
-If the returned allocation history is empty, construct the portfolio's initial allocation. Otherwise,
-manage and rebalance the existing portfolio rather than rebuilding it without reference to its
-history.
+If history is empty, build the initial allocation. Otherwise reassess existing holdings and alternatives
+using current evidence and prices. A supported holding needs no new headline. Retain, resize, or replace
+it according to prospective return, thesis changes, valuation, and risk. Avoid automatic retention,
+turnover targets, and trading on ordinary price noise.
 
-Reassess every holding and credible candidate using current evidence and current prices. Every
-holding must re-earn its place. Use the portfolio history and notes to update each thesis, but do not
-give an existing position an automatic retention advantage. Do not target either low or high
-turnover. Change holdings or target weights when the current evidence indicates that another
-allocation should materially improve strategy-aligned prospective excess return.
-Do not trade solely because of ordinary price noise,
-repeated information, or small or
-unstable ranking differences.
-
-Direction instructions:
+Direction:
 {{direction_instructions}}
 
 Strategy:
@@ -111,39 +122,26 @@ Allocation policy:
 
 This decision replaces previous holdings; abstaining moves them into the reference.
 
-Research all decision-relevant current information with Massive and live web search.
-
 {{submission_instructions}}"""
+)
 
-DEFAULT_REBUILT_WRAPPER_PROMPT = """\
+DEFAULT_REBUILT_WRAPPER_PROMPT = (
+    """\
 Evaluate the Portfolio Arena portfolio `{{portfolio_slug}}` and produce its next independent signal
 allocation.
 
-Call the Portfolio Arena `get_portfolio` tool first. Treat the returned prompt mode, strategy,
-allocation policy, and effective date as authoritative. Follow the eligibility rules and submission
-instructions in this execution prompt.
+Call `get_portfolio` first. Use its strategy, direction, allocation policy, and effective boundary
+as authoritative context. Do not use prior portfolio state from any source.
 
-Do not use prior portfolio state from any source when constructing or weighting the signal.
+"""
+    + DEFAULT_SELECTION_INSTRUCTIONS
+    + """
 
-Act as a US equity security selector aiming to outperform the portfolio's direction-matched SPY
-reference. Search across the full eligible US market rather than defaulting to index constituents,
-household names, or recent winners. Do not select SPY as a substitute for research.
+Build the complete signal from scratch, independently of previous signals.
+Subject to the allocation policy, a single security may receive 100% when it is the only
+qualifying opportunity.
 
-This is an independent security-selection signal. Breadth must be an outcome of the evidence, not a
-diversification target. Select only securities that independently qualify under the strategy. Never
-add a marginal security merely to increase the position count or make the allocation appear more
-diversified.
-
-Weight qualifying securities comparatively using expected excess return, conviction, evidence
-quality, downside, and the strength and timing of the recognition mechanism. Stronger opportunities
-should receive higher weights. Subject to the allocation policy, a single security may receive 100%
-when it is the only opportunity that genuinely qualifies, but concentration must reflect the evidence
-rather than convenience or familiarity.
-
-At every evaluation, construct the complete signal independently from scratch. Search broadly and
-evaluate candidates without regard to previous signals.
-
-Direction instructions:
+Direction:
 {{direction_instructions}}
 
 Strategy:
@@ -152,9 +150,8 @@ Strategy:
 Allocation policy:
 {{allocation_policy}}
 
-Research all decision-relevant current information with Massive and live web search.
-
 {{submission_instructions}}"""
+)
 
 DEFAULT_LONG_DIRECTION_INSTRUCTIONS = """\
 This is an all-long portfolio. Submit positive weights for securities expected to outperform SPY."""
