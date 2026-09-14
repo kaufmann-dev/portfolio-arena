@@ -10,6 +10,7 @@
 
   type Row = ManagedArenaResponse["portfolios"][number];
   type SortKey =
+    | "name"
     | "rank_score"
     | "mean_daily_alpha"
     | "cumulative_excess"
@@ -25,6 +26,7 @@
   }
 
   const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+    { value: "name", label: "Portfolio" },
     { value: "rank_score", label: "Adjusted lower 95%" },
     { value: "mean_daily_alpha", label: "Mean daily alpha" },
     { value: "cumulative_excess", label: "Cumulative excess" },
@@ -39,7 +41,7 @@
   let sortKey = $state<SortKey>("rank_score");
   let sortDesc = $state(true);
 
-  function metric(row: ManagedArenaPortfolio, key: SortKey): number | null {
+  function metric(row: ManagedArenaPortfolio, key: Exclude<SortKey, "name">): number | null {
     const value =
       key === "rank_score"
         ? row.rank_score
@@ -50,6 +52,10 @@
   }
 
   function compareRows(a: ManagedArenaPortfolio, b: ManagedArenaPortfolio): number {
+    if (sortKey === "name") {
+      const difference = a.name.localeCompare(b.name) || a.id - b.id;
+      return sortDesc ? -difference : difference;
+    }
     const aValue = metric(a, sortKey);
     const bValue = metric(b, sortKey);
     if (aValue === null && bValue === null) return a.name.localeCompare(b.name);
@@ -73,14 +79,14 @@
       return;
     }
     sortKey = key;
-    sortDesc = key !== "max_drawdown";
+    sortDesc = key !== "name" && key !== "max_drawdown";
   }
 
   function selectMobileSort(value: string): void {
     const next = SORT_OPTIONS.find((option) => option.value === value)?.value;
     if (!next || next === sortKey) return;
     sortKey = next;
-    sortDesc = next !== "max_drawdown";
+    sortDesc = next !== "name" && next !== "max_drawdown";
   }
 
   function ariaSort(key: SortKey): "ascending" | "descending" | undefined {
@@ -94,7 +100,7 @@
 </script>
 
 {#snippet sortHeader(key: SortKey, label: string)}
-  <th scope="col" class="right sortable" aria-sort={ariaSort(key)}>
+  <th scope="col" class={["sortable", key !== "name" && "right"]} aria-sort={ariaSort(key)}>
     <button
       type="button"
       onclick={() => setSort(key)}
@@ -169,7 +175,7 @@
         <tr>
           <th class="compare-col" scope="col"><span class="visually-hidden">Compare</span></th>
           <th class="rank-col" scope="col">Rank</th>
-          <th scope="col">Portfolio</th>
+          {@render sortHeader("name", "Portfolio")}
           <th scope="col">Agent</th>
           <th scope="col">Prompt</th>
           {@render sortHeader("rank_score", "Lower 95%")}

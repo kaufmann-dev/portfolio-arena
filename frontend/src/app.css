@@ -1056,6 +1056,10 @@ th.sortable {
   white-space: nowrap;
 }
 
+.arena-rankings .sortable:not(.right) button {
+  justify-content: flex-start;
+}
+
 .arena-rankings .sortable button:hover,
 .arena-rankings .sortable button:focus-visible {
   color: var(--text-primary);
