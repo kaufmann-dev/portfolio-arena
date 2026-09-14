@@ -51,10 +51,10 @@ def test_paused_cutoff_skips_holidays_and_ignores_pending_decisions(phase):
             Allocation(effective_date=date(2026, 7, 20)),
         ],
     )
-    # July 3 is a market holiday; the fifth following session is July 10.
-    cutoff = boundary_value(date(2026, 7, 10), phase)
+    # July 3 is a market holiday; the next session is July 6.
+    cutoff = boundary_value(date(2026, 7, 6), phase)
     assert managed_valuation_boundary(portfolio, boundary_value(date(2026, 7, 17), "close")) == cutoff
-    before_cutoff = boundary_value(date(2026, 7, 8), "close")
+    before_cutoff = boundary_value(date(2026, 7, 2), "close")
     assert managed_valuation_boundary(portfolio, before_cutoff) == before_cutoff
     portfolio.allocations = []
     assert managed_valuation_boundary(portfolio, before_cutoff) == before_cutoff
@@ -100,12 +100,12 @@ def test_version_pause_caps_valuation_and_resume_restores_all_returns(monkeypatc
     portfolio.version.evaluation_enabled = False
     paused_arena = compute()
     paused = paused_arena.by_portfolio_id[portfolio.id]
-    cutoff = boundary_value(date(2026, 7, 10), phase)
+    cutoff = boundary_value(date(2026, 7, 6), phase)
     assert point_boundary(paused.result.series[-1]) == cutoff
     assert paused.result.series == [
         point for point in enabled.result.series if point["timestamp"] <= cutoff["timestamp"]
     ]
-    truncated_spy = [point for point in prices["SPY"] if point["date"] <= "2026-07-10"]
+    truncated_spy = [point for point in prices["SPY"] if point["date"] <= "2026-07-06"]
     assert paused.metrics == compute_metrics(paused.result, truncated_spy, direction)
     portfolio.version.evaluation_enabled = True
     resumed = compute().by_portfolio_id[portfolio.id]
@@ -124,4 +124,4 @@ def test_latest_effective_abstention_renews_paused_cutoff():
     )
     assert managed_valuation_boundary(
         portfolio, boundary_value(date(2026, 7, 17), "close")
-    ) == boundary_value(date(2026, 7, 16), "close")
+    ) == boundary_value(date(2026, 7, 10), "close")
