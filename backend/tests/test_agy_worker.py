@@ -23,9 +23,7 @@ from .test_muse_worker import _run as muse_run
 
 
 def _run(**kwargs):
-    return muse_run(**kwargs).model_copy(
-        update={"harness": "agy", "execution_model_id": "gemini-3.8-flash-low"}
-    )
+    return muse_run(**kwargs).model_copy(update={"harness": "agy", "execution_model_id": "gemini-3.8-flash"})
 
 
 def _output(proposal):
@@ -139,7 +137,8 @@ def _fake_cli(monkeypatch, result, *, code=0, stderr=b""):
         return Process()
 
     async def available(_settings, run=None):
-        return {_run().execution_model_id}
+        # Native discovery lists variants but accepts the base ID with --effort.
+        return {"gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"}
 
     monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", launch)
     monkeypatch.setattr(worker, "agy_available_models", available)
@@ -187,7 +186,7 @@ def test_execution_submits_only_validated_structured_result(tmp_path, monkeypatc
         assert command[command.index("--effort") + 1] == effort
 
 
-@pytest.mark.parametrize("kind", ["timeout", "invalid", "blocked", "nonzero"])
+@pytest.mark.parametrize("kind", ["timeout", "invalid", "blocked", "nonzero", "model_conflict"])
 def test_failed_execution_never_submits(tmp_path, monkeypatch, kind):
     proposal = _proposal()
     if kind == "invalid":
@@ -199,8 +198,14 @@ def test_failed_execution_never_submits(tmp_path, monkeypatch, kind):
     _fake_cli(
         monkeypatch,
         _output(proposal),
-        code=1 if kind == "nonzero" else 0,
-        stderr=b"[agy] print timeout" if kind == "timeout" else b"",
+        code=1 if kind in {"nonzero", "model_conflict"} else 0,
+        stderr=(
+            b"error: invalid model selection: --model gemini-3.8-flash-medium conflicts with --effort=high"
+            if kind == "model_conflict"
+            else b"[agy] print timeout"
+            if kind == "timeout"
+            else b""
+        ),
     )
     requests = []
 
@@ -214,6 +219,8 @@ def test_failed_execution_never_submits(tmp_path, monkeypatch, kind):
     assert requests[0][0] == "/runs/17/fail"
     if kind == "blocked":
         assert requests[0][1]["report"] == proposal["report"]
+    elif kind == "model_conflict":
+        assert "conflicts with --effort=high" in requests[0][1]["error"]
 
 
 @pytest.mark.parametrize("ending", ["cancel", "timeout", "unavailable"])

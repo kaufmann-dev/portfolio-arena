@@ -278,10 +278,12 @@ and rejects incomplete results and print timeouts, even when the CLI reports `SU
 The generation schema omits the nullable `blocked_reason` enum because Gemini rejects null enum
 entries. Arena's unchanged proposal validator still enforces the exact allowed reasons and status rules.
 
-Antigravity model capabilities are configured manually in **Models** using exact IDs from
-`agy --gemini_dir=/var/lib/agy models`. Agents can use the model default or a configured `low`,
-`medium`, or `high` effort. Model discovery checks readiness and the selected ID before each
-attempt without importing model records. Execution verifies actual model access. The integration's
+Antigravity model capabilities are configured manually in **Models** using native model IDs.
+`agy --gemini_dir=/var/lib/agy models` lists available variants; base IDs such as
+`gemini-3.8-flash` also work with a separate `low`, `medium`, or `high` agent effort.
+Effort-suffixed IDs must match the agent's effort. Model discovery checks readiness before each
+attempt without importing model records or requiring exact catalog membership. Native execution
+validates the model-and-effort combination and actual model access. The integration's
 headless output, isolated login, and local/authenticated HTTP MCP contracts were checked with
 Antigravity CLI 1.2.2. See the [official headless documentation](https://antigravity.google/docs/cli/headless/).
 
@@ -369,7 +371,7 @@ an in-memory HTTP transport, so nothing hits the network.
 - Add persistent storage at `/var/lib/agy`. In the application terminal run
   `agy --gemini_dir=/var/lib/agy` once to complete Google sign-in. The login is stored natively under
   `antigravity-cli/` in that volume. Add desired Antigravity capabilities in **Models** using IDs
-  from `agy --gemini_dir=/var/lib/agy models`.
+  from `agy --gemini_dir=/var/lib/agy models`, or a native base ID with a separate agent effort.
 - Set the required variables below. Coolify injects `PORT`; no custom start command or Dockerfile is
   needed.
 - Deploy. The tracked `nixpacks.toml` builds the SPA and starts one supervisor that runs migrations,
