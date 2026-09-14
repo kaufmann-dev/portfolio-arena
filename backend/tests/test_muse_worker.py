@@ -331,7 +331,6 @@ def test_muse_scheduler_claims_only_muse_work_with_its_own_authentication(tmp_pa
                 imports.append(payload)
                 return {"models_added": 1}
             assert (method, path) == ("POST", "/claim")
-            assert len(imports) == 1
             claims.append(payload)
             claimed.set()
             return {"settings": {"enabled": True, "poll_seconds": 60}, "runs": []}
@@ -348,7 +347,10 @@ def test_muse_scheduler_claims_only_muse_work_with_its_own_authentication(tmp_pa
 
     assert state.authenticated is True
     assert state.status == "idle"
-    assert len(claims) == 1
+    asyncio.run(exercise())
+
+    assert len(claims) == 2
+    assert imports == [], "Worker startups must not recreate administrator-deleted models"
     assert claims[0]["worker_id"] == "muse-worker"
     assert claims[0]["harness"] == "muse"
     assert claims[0]["harness_version"] == "muse-test-version"

@@ -233,11 +233,11 @@ terminal error; blocked reports are retained. Existing historical failures are l
 
 Muse uses its persisted Meta account login and subscription. `META_API_KEY` is an optional alternative
 and takes precedence when set, matching the Muse CLI. After authentication, each Muse worker process
-imports the visible models and explicit reasoning variants from Meta's authenticated Muse Code
-catalog once through the CLI, which handles account-token exchange and renewal. Model discovery
-does not start an agent turn. Existing model capabilities and admin edits are preserved. No models or
-reasoning tiers are guessed when the catalog is unavailable. Restart the worker to discover newly
-available models.
+checks Meta's authenticated Muse Code catalog once through the CLI, which handles account-token
+exchange and renewal. Discovery checks readiness without starting an agent turn or writing model records.
+Model definitions, execution IDs, and reasoning efforts are configured explicitly in the admin Models
+section for every harness. Restarting or redeploying never recreates deleted models or restores removed
+harness capabilities. Existing model records and evaluation history are preserved.
 
 OpenCode runs via `opencode run --format json` with web research and the same read-only Arena and
 Massive MCP tools. Shell execution, file access/modification, delegation, and interactive questions
@@ -351,8 +351,8 @@ an in-memory HTTP transport, so nothing hits the network.
   terminal and run `CODEX_HOME=/var/lib/codex codex login --device-auth`; the login survives
   redeployments in that volume.
 - Add persistent storage at `/var/lib/muse`. Run `XDG_CONFIG_HOME=/var/lib/muse muse login` in the
-  application terminal, or set `META_API_KEY` for the worker. Muse models and their available
-  reasoning efforts appear automatically after authentication and successful catalog import.
+  application terminal, or set `META_API_KEY` for the worker. Add the desired Muse model execution IDs
+  and supported reasoning efforts in the admin Models section; login does not create model records.
 - Add persistent storage at `/var/lib/opencode`. In the application terminal, run
   `XDG_CONFIG_HOME=/var/lib/opencode/config XDG_DATA_HOME=/var/lib/opencode/data opencode auth login`
   for the desired providers, or set their native API-key environment variables. OpenCode stores its
