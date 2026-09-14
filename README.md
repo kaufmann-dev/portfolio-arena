@@ -285,7 +285,8 @@ attempt without importing model records. Execution verifies actual model access.
 headless output, isolated login, and local/authenticated HTTP MCP contracts were checked with
 Antigravity CLI 1.2.2. See the [official headless documentation](https://antigravity.google/docs/cli/headless/).
 
-Authentication and runtime health are shown separately per harness. The concurrency
+Authentication and runtime health are shown separately per harness. Login shows a neutral
+“Checking…” badge while a worker is starting, before its authentication check completes. The concurrency
 setting applies separately to each harness across all of its workers: a limit of 8 permits up to 8
 Codex, 8 Muse Code, 8 OpenCode, and 8 Antigravity evaluations at once. Runs awaiting cancellation count against their
 harness's limit until they stop. An unavailable harness does not stop the other harnesses' evaluations.

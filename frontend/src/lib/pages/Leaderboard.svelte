@@ -348,7 +348,7 @@
     {#each DIRECTIONS as item (item.value)}
       <button
         type="button"
-        class={{ active: direction === item.value }}
+        class={[item.value, { active: direction === item.value }]}
         aria-pressed={direction === item.value}
         onclick={() => changeDirection(item.value)}
       >
@@ -563,21 +563,19 @@
     text-align: left;
   }
 
-  .direction-selector button:hover,
-  .direction-selector button:focus-visible,
   .track-selector button:hover,
   .track-selector button:focus-visible {
     background: var(--bg-surface-hover);
     color: var(--text-primary);
   }
 
-  .direction-selector button.active,
   .track-selector button.active {
     color: var(--text-inverse);
     background: var(--accent);
   }
 
   .direction-selector button {
+    color: var(--direction-color);
     min-height: 46px;
     justify-content: center;
     font-size: 12px;
@@ -585,6 +583,24 @@
     letter-spacing: 0.08em;
     text-align: center;
     text-transform: uppercase;
+  }
+
+  .direction-selector button.long {
+    --direction-color: var(--pos);
+  }
+
+  .direction-selector button.short {
+    --direction-color: var(--neg);
+  }
+
+  .direction-selector button:hover,
+  .direction-selector button:focus-visible {
+    background: var(--bg-surface-hover);
+  }
+
+  .direction-selector button.active {
+    color: var(--text-inverse);
+    background: var(--direction-color);
   }
 
   .track-selector strong {

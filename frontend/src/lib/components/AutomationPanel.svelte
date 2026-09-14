@@ -362,8 +362,13 @@
             </div>
             <div>
               <span class="runtime-label">Login</span>
-              <span class={["badge", runtime.authenticated ? "success" : "warn"]}>
-                {runtime.authenticated ? "ready" : "required"}
+              <span
+                class={[
+                  "badge",
+                  runtime.status === "starting" ? "" : runtime.authenticated ? "success" : "warn",
+                ]}
+              >
+                {runtime.status === "starting" ? "checking…" : runtime.authenticated ? "ready" : "required"}
               </span>
             </div>
             <div>
