@@ -64,7 +64,19 @@ OPENCODE = HarnessDefinition(
     reasoning_efforts=(),
 )
 
-HARNESS_DEFINITIONS = {harness.id: harness for harness in (CODEX, MUSE, OPENCODE)}
+AGY = HarnessDefinition(
+    id="agy",
+    name="Antigravity",
+    automation_supported=True,
+    reasoning_effort_mode="fixed",
+    reasoning_efforts=(
+        ReasoningEffort("low", "Low"),
+        ReasoningEffort("medium", "Medium"),
+        ReasoningEffort("high", "High"),
+    ),
+)
+
+HARNESS_DEFINITIONS = {harness.id: harness for harness in (CODEX, MUSE, OPENCODE, AGY)}
 
 
 def get_harness(harness_id: str) -> HarnessDefinition | None:

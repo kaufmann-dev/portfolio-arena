@@ -3,7 +3,7 @@
 A self-hosted web app that runs a long-term experiment: **can LLM stock-selection strategies
 produce repeatable alpha in all-long or all-short portfolios?**
 
-Portfolio Arena includes website-controlled Codex and Muse Code evaluators. One Nixpacks deployment
+Portfolio Arena includes website-controlled Codex, Muse Code, OpenCode, and Antigravity evaluators. One Nixpacks deployment
 starts the web app, scheduler, and evaluator workers together. The admin panel defines models and their
 harness-specific capabilities, combines them into reusable Agents, and controls weekdays,
 concurrency, immediate runs, cancellation, retries, and history. Manual submissions and authenticated
@@ -23,7 +23,7 @@ expand the note controls in holdings, active cohorts, or decision history to ins
 
 - **Backend:** FastAPI, SQLAlchemy 2, Alembic and PostgreSQL (`backend/`); serves the built SPA.
 - **Frontend:** Svelte 5, Vite and TypeScript (`frontend/`), built to `frontend/dist/`.
-- **Evaluator:** integrated Codex and Muse Code workers with database-backed settings, queue, leases
+- **Evaluator:** integrated Codex, Muse Code, OpenCode, and Antigravity workers with database-backed settings, queue, leases
   and audit history. The production supervisor starts the web app and workers together.
 - **Authentication:** OIDC Authorization Code + PKCE with opaque browser sessions. Rankings and
   portfolio details are public; `/mcp` requires an API key.
@@ -194,7 +194,7 @@ admin-only access; provider policy defines who is admitted.
 
 The evaluator is part of Portfolio Arena. Models declare their execution ID and available reasoning
 efforts per supported harness. Agents select one of those valid profiles; their display names are
-generated from it. A portfolio whose Agent uses Codex, Muse Code, or OpenCode appears in the admin
+generated from it. A portfolio whose Agent uses Codex, Muse Code, OpenCode, or Antigravity appears in the admin
 **Automation** tab, initially disabled. Rebuilt automation runs every Monday through Friday; managed
 automation can run on any selected weekdays or remain manual-only. If a selected day is an NYSE
 holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected days
@@ -218,7 +218,7 @@ Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It 
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Muse Code runs via `muse exec`
 with web tools enabled and shell/file writes disabled. It uses the same read-only Arena MCP token
 and Massive MCP server. Muse returns JSON in its root terminal event; the worker validates the
-structured response before submission. All three harnesses return `proposal` for full or partial selections,
+structured response before submission. All four harnesses return `proposal` for full or partial selections,
 `abstained` for completed research with no qualifying securities, or `blocked` only when portfolio
 context or required research is unavailable. The latter requires `blocked_reason` of
 `portfolio_unavailable` or `research_unavailable`. Partial allocations and abstentions require a note
@@ -254,9 +254,27 @@ environment variables (including `OPENAI_API_KEY`). Configure providers in
 login files are preserved; Arena applies its MCP and permission settings through a runtime overlay.
 Project instructions, Claude Code context, and external skills are disabled for evaluation.
 
+Antigravity runs through `agy --print --output-format json --json-schema` using its persisted
+Google account login. Its dedicated `AGY_HOME` is passed through the native `--gemini_dir` option;
+`HOME` is unchanged. Arena replaces only `antigravity-cli/settings.json` and `config/mcp_config.json`
+in that directory, preserving native login and conversation storage. Evaluations use temporary
+workspaces, allow web reads and the same read-only Arena/Massive MCP tools, deny shell commands,
+file access and browser interaction, and disable slash-command expansion. Unapproved tools are
+rejected by headless mode. The worker validates `structured_output` and rejects incomplete results
+and print timeouts, even when the CLI reports `SUCCESS` with exit code zero.
+The generation schema omits the nullable `blocked_reason` enum because Gemini rejects null enum
+entries. Arena's unchanged proposal validator still enforces the exact allowed reasons and status rules.
+
+Antigravity model capabilities are configured manually in **Models** using exact IDs from
+`agy --gemini_dir=/var/lib/agy models`. Agents can use the model default or a configured `low`,
+`medium`, or `high` effort. Model discovery checks readiness and the selected ID before each
+attempt without importing model records. Execution verifies actual model access. The integration's
+headless output, isolated login, and local/authenticated HTTP MCP contracts were checked with
+Antigravity CLI 1.2.2. See the [official headless documentation](https://antigravity.google/docs/cli/headless/).
+
 Authentication and runtime health are shown separately per harness. The concurrency
 setting applies separately to each harness across all of its workers: a limit of 8 permits up to 8
-Codex, 8 Muse Code, and 8 OpenCode evaluations at once. Runs awaiting cancellation count against their
+Codex, 8 Muse Code, 8 OpenCode, and 8 Antigravity evaluations at once. Runs awaiting cancellation count against their
 harness's limit until they stop. An unavailable harness does not stop the other harnesses' evaluations.
 
 Runtime credentials are deployment-only: `MASSIVE_API_KEY` is passed to both the web process for
@@ -332,16 +350,20 @@ an in-memory HTTP transport, so nothing hits the network.
   for the desired providers, or set their native API-key environment variables. OpenCode stores its
   login under `data/opencode/auth.json`; its `config`, `cache`, and `state` directories share the volume.
   Add only the desired OpenCode model capabilities in the admin **Models** tab.
+- Add persistent storage at `/var/lib/agy`. In the application terminal run
+  `agy --gemini_dir=/var/lib/agy` once to complete Google sign-in. The login is stored natively under
+  `antigravity-cli/` in that volume. Add desired Antigravity capabilities in **Models** using IDs
+  from `agy --gemini_dir=/var/lib/agy models`.
 - Set the required variables below. Coolify injects `PORT`; no custom start command or Dockerfile is
   needed.
 - Deploy. The tracked `nixpacks.toml` builds the SPA and starts one supervisor that runs migrations,
   FastAPI, the scheduler, and the evaluator worker automatically.
 - Each deployment or container restart runs `npm run update:harnesses` to install the latest stable
-  Codex, Muse Code, and OpenCode CLIs before launching the supervisor, including when the image build was cached.
+  Codex, Muse Code, OpenCode, and Antigravity CLIs before launching the supervisor, including when the image build was cached.
   Codex and OpenCode npm packages are refreshed together to retain both executables.
-  Startup requires npm registry and Meta download access and stops if any update fails. Redeploy
+  Startup requires npm registry, Meta, and Google Antigravity download access and stops if any update fails. Redeploy
   or restart to pick up subsequent releases.
-  The image includes `bubblewrap` for Linux sandboxing and `curl` for the Muse installer.
+  The image includes `bubblewrap` for Linux sandboxing and `curl` for the Muse and Antigravity installers.
 - When replacing the former two-application setup, stop the old standalone evaluator before
   deploying this version so both schedulers cannot create work during the cutover.
 
@@ -365,16 +387,17 @@ Web app:
 
 Web app:
 
-| Variable                        | Default             | Purpose                                                             |
-| ------------------------------- | ------------------- | ------------------------------------------------------------------- |
-| `ARENA_DB_CONNECT_RETRIES`      | `30`                | Retries before failing startup                                      |
-| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`               | Seconds between retries                                             |
-| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`              | Seconds before a price refresh is due                               |
-| `CODEX_HOME`                    | `/var/lib/codex`    | Codex authentication and generated config dir                       |
-| `MUSE_CONFIG_HOME`              | `/var/lib/muse`     | Muse XDG config root; login and generated config are under `muse/`  |
-| `OPENCODE_HOME`                 | `/var/lib/opencode` | OpenCode root for XDG config, data/authentication, cache, and state |
-| `META_API_KEY`                  | unset               | Optional Muse credential instead of a persisted Meta login          |
-| `PORT`                          | `8000`              | Listen port; normally injected by Coolify                           |
+| Variable                        | Default             | Purpose                                                                                  |
+| ------------------------------- | ------------------- | ---------------------------------------------------------------------------------------- |
+| `ARENA_DB_CONNECT_RETRIES`      | `30`                | Retries before failing startup                                                           |
+| `ARENA_DB_CONNECT_RETRY_DELAY`  | `2.0`               | Seconds between retries                                                                  |
+| `ARENA_PRICE_CACHE_TTL_SECONDS` | `3600`              | Seconds before a price refresh is due                                                    |
+| `CODEX_HOME`                    | `/var/lib/codex`    | Codex authentication and generated config dir                                            |
+| `MUSE_CONFIG_HOME`              | `/var/lib/muse`     | Muse XDG config root; login and generated config are under `muse/`                       |
+| `OPENCODE_HOME`                 | `/var/lib/opencode` | OpenCode root for XDG config, data/authentication, cache, and state                      |
+| `AGY_HOME`                      | `/var/lib/agy`      | Antigravity native login, generated settings/MCP configuration, and conversation storage |
+| `META_API_KEY`                  | unset               | Optional Muse credential instead of a persisted Meta login                               |
+| `PORT`                          | `8000`              | Listen port; normally injected by Coolify                                                |
 
 ## Non-goals
 

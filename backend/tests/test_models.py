@@ -151,6 +151,17 @@ def test_harness_registry_exposes_harness_reasoning_vocabularies(client, admin_h
                 "reasoning_effort_mode": "custom",
                 "reasoning_efforts": [],
             },
+            {
+                "id": "agy",
+                "name": "Antigravity",
+                "automation_supported": True,
+                "reasoning_effort_mode": "fixed",
+                "reasoning_efforts": [
+                    {"id": "low", "name": "Low"},
+                    {"id": "medium", "name": "Medium"},
+                    {"id": "high", "name": "High"},
+                ],
+            },
         ]
     }
 

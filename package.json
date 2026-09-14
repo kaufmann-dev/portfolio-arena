@@ -5,7 +5,8 @@
   "scripts": {
     "update:node-harnesses": "npm install --no-save --package-lock=false --prefer-online @openai/codex@latest opencode-ai@latest && codex --version && opencode --version",
     "update:muse": "bash scripts/install-muse.sh",
-    "update:harnesses": "npm run update:node-harnesses && npm run update:muse"
+    "update:agy": "bash scripts/install-agy.sh",
+    "update:harnesses": "npm run update:node-harnesses && npm run update:muse && npm run update:agy"
   },
   "dependencies": {
     "@openai/codex": "latest",

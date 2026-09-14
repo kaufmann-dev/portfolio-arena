@@ -15,6 +15,15 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .agy import (
+    AgyAuthenticationRequired,
+    agy_command,
+    agy_environment,
+    agy_models,
+    agy_proposal_schema,
+    agy_result,
+    write_agy_config,
+)
 from .config import EvaluatorRuntimeSettings
 from .muse import (
     fetch_muse_catalog,
@@ -91,7 +100,7 @@ class ClaimedRun(BaseModel):
     id: int
     portfolio: PortfolioRef
     trigger_kind: Literal["scheduled", "manual", "retry"]
-    harness: Literal["codex", "muse", "opencode"]
+    harness: Literal["codex", "muse", "opencode", "agy"]
     execution_model_id: str
     reasoning_effort: str | None
     timeout_seconds: int
@@ -290,6 +299,49 @@ def evaluator_prompt(run: ClaimedRun) -> str:
     return run.execution_prompt
 
 
+async def _agy_probe(
+    settings: EvaluatorRuntimeSettings,
+    *arguments: str,
+    run: ClaimedRun | None = None,
+) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="arena-agy-probe-") as directory:
+        process = await asyncio.create_subprocess_exec(
+            *agy_command(settings, *arguments),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=directory,
+            env=agy_environment(settings),
+            start_new_session=True,
+        )
+        if run is not None:
+            stdout, stderr = await _communicate_run(settings, run, process, None)
+        else:
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            except TimeoutError:
+                raise RuntimeError("Antigravity readiness check timed out") from None
+            finally:
+                await _stop_process(process)
+        if process.returncode != 0:
+            detail = stderr.decode(errors="replace")[-4000:]
+            if "authentication required" in detail.lower() or "not logged in" in detail.lower():
+                raise AgyAuthenticationRequired(
+                    f"Run `agy --gemini_dir={shlex.quote(str(settings.agy_home))}` "
+                    "in the application terminal to sign in to Antigravity."
+                )
+            raise RuntimeError(detail or "Antigravity readiness check failed")
+        return stdout
+
+
+async def agy_version(settings: EvaluatorRuntimeSettings) -> str:
+    return (await _agy_probe(settings, "--version")).decode().strip()
+
+
+async def agy_available_models(settings: EvaluatorRuntimeSettings, run: ClaimedRun | None = None) -> set[str]:
+    return agy_models(await _agy_probe(settings, "models", run=run))
+
+
 async def _wait_for_cancellation(
     settings: EvaluatorRuntimeSettings,
     run: ClaimedRun,
@@ -482,13 +534,57 @@ async def run_opencode(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> P
         raise RuntimeError(f"opencode attempt exceeded {run.timeout_seconds} seconds") from None
 
 
+async def run_agy(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Proposal:
+    try:
+        async with asyncio.timeout(run.timeout_seconds):
+            models = await agy_available_models(settings, run=run)
+            if run.execution_model_id not in models:
+                raise ValueError(
+                    f"Antigravity model {run.execution_model_id} is unavailable; check agy models"
+                )
+            with tempfile.TemporaryDirectory(prefix="arena-agy-") as directory:
+                command = agy_command(
+                    settings,
+                    "--print",
+                    evaluator_prompt(run),
+                    "--model",
+                    run.execution_model_id,
+                    "--output-format",
+                    "json",
+                    "--json-schema",
+                    json.dumps(agy_proposal_schema()),
+                    "--print-timeout",
+                    f"{run.timeout_seconds}s",
+                    "--disable-slash-commands",
+                )
+                if run.reasoning_effort is not None:
+                    command.extend(["--effort", run.reasoning_effort])
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=directory,
+                    env=agy_environment(settings),
+                    start_new_session=True,
+                )
+                stdout, stderr = await _communicate_run(settings, run, process, None)
+                if process.returncode != 0:
+                    raise RuntimeError(
+                        stderr.decode(errors="replace")[-4000:] or "Antigravity execution failed"
+                    )
+                return Proposal.model_validate(agy_result(stdout, stderr))
+    except TimeoutError:
+        raise RuntimeError(f"agy attempt exceeded {run.timeout_seconds} seconds") from None
+
+
 async def evaluate_run(
     settings: EvaluatorRuntimeSettings,
     run: ClaimedRun,
 ) -> None:
     proposal = None
     try:
-        runners = {"codex": run_codex, "muse": run_muse, "opencode": run_opencode}
+        runners = {"codex": run_codex, "muse": run_muse, "opencode": run_opencode, "agy": run_agy}
         proposal = await runners[run.harness](settings, run)
         if proposal.status == "blocked":
             raise EvaluationBlocked(f"{proposal.blocked_reason}: {proposal.error}")
@@ -542,7 +638,7 @@ async def scheduler(
     settings: EvaluatorRuntimeSettings,
     instance_id: str,
     state: WorkerState,
-    harness: Literal["codex", "muse", "opencode"],
+    harness: Literal["codex", "muse", "opencode", "agy"],
 ) -> None:
     active_tasks: set[asyncio.Task[None]] = set()
     catalog_imported = False
@@ -553,6 +649,7 @@ async def scheduler(
                     "codex": write_codex_config,
                     "muse": write_muse_config,
                     "opencode": prepare_opencode,
+                    "agy": write_agy_config,
                 }
                 config_writers[harness](settings)
                 if not settings.massive_api_key:
@@ -572,9 +669,16 @@ async def scheduler(
                             model.get("capabilities", {}).get("toolcall") is True
                             for model in (await opencode_available_models(settings)).values()
                         )
+                    elif harness == "agy":
+                        state.harness_version = await agy_version(settings)
+                        state.authenticated = bool(await agy_available_models(settings))
                     if not state.authenticated:
                         state.status = "authentication_required"
                         login_hints = {
+                            "agy": (
+                                f"Run `agy --gemini_dir={shlex.quote(str(settings.agy_home))}` "
+                                "in the application terminal to sign in to Antigravity."
+                            ),
                             "codex": f"Run `CODEX_HOME={shlex.quote(str(settings.codex_home))} "
                             "codex login --device-auth` in the application terminal.",
                             "muse": f"Run `XDG_CONFIG_HOME={shlex.quote(str(settings.muse_config_home))} "
@@ -619,6 +723,10 @@ async def scheduler(
                             state.status = "idle"
             except asyncio.CancelledError:
                 raise
+            except AgyAuthenticationRequired as exc:
+                state.status = "authentication_required"
+                state.authenticated = False
+                state.last_error = str(exc)
             except httpx.HTTPStatusError as exc:
                 state.status = "error"
                 state.last_error = f"HTTP {exc.response.status_code}: evaluator request failed."
@@ -651,7 +759,7 @@ async def heartbeat_loop(
     settings: EvaluatorRuntimeSettings,
     instance_id: str,
     state: WorkerState,
-    harness: Literal["codex", "muse", "opencode"],
+    harness: Literal["codex", "muse", "opencode", "agy"],
 ) -> None:
     while True:
         try:

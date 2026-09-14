@@ -14,6 +14,7 @@ class EvaluatorRuntimeSettings:
     codex_home: Path
     muse_config_home: Path
     opencode_home: Path
+    agy_home: Path
 
 
 def load_settings() -> EvaluatorRuntimeSettings:
@@ -27,4 +28,5 @@ def load_settings() -> EvaluatorRuntimeSettings:
         codex_home=Path(os.environ.get("CODEX_HOME", "/var/lib/codex")),
         muse_config_home=Path(os.environ.get("MUSE_CONFIG_HOME", "/var/lib/muse")),
         opencode_home=Path(os.environ.get("OPENCODE_HOME", "/var/lib/opencode")),
+        agy_home=Path(os.environ.get("AGY_HOME", "/var/lib/agy")).resolve(),
     )
