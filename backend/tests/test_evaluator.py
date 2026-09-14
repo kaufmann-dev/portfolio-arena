@@ -27,6 +27,7 @@ def _settings(tmp_path: Path) -> EvaluatorRuntimeSettings:
         codex_home=tmp_path,
         muse_config_home=tmp_path / "muse-config",
         opencode_home=tmp_path / "opencode",
+        agy_home=tmp_path / "agy",
     )
 
 

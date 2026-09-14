@@ -2029,10 +2029,18 @@
                       id="nm-execution-{harness.id}"
                       type="text"
                       bind:value={capability.execution_model_id}
-                      placeholder={harness.id === "opencode" ? "provider/model" : "gpt-5.6-sol"}
+                      placeholder={harness.id === "opencode"
+                        ? "provider/model"
+                        : harness.id === "agy"
+                          ? "gemini-3.8-flash-low"
+                          : "gpt-5.6-sol"}
                     />
                     {#if harness.id === "opencode"}
                       <p class="muted hint">Use the provider/model ID from OpenCode.</p>
+                    {:else if harness.id === "agy"}
+                      <p class="muted hint">
+                        Use a model ID listed by Antigravity’s <code>agy models</code> command.
+                      </p>
                     {/if}
                   </div>
                   {#if harness.reasoning_effort_mode === "custom"}
@@ -2117,10 +2125,18 @@
                           id="em-execution-{model.id}-{harness.id}"
                           type="text"
                           bind:value={capability.execution_model_id}
-                          placeholder={harness.id === "opencode" ? "provider/model" : "gpt-5.6-sol"}
+                          placeholder={harness.id === "opencode"
+                            ? "provider/model"
+                            : harness.id === "agy"
+                              ? "gemini-3.8-flash-low"
+                              : "gpt-5.6-sol"}
                         />
                         {#if harness.id === "opencode"}
                           <p class="muted hint">Use the provider/model ID from OpenCode.</p>
+                        {:else if harness.id === "agy"}
+                          <p class="muted hint">
+                            Use a model ID listed by Antigravity’s <code>agy models</code> command.
+                          </p>
                         {/if}
                       </div>
                       {#if harness.reasoning_effort_mode === "custom"}

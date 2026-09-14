@@ -49,7 +49,7 @@ def test_runtime_lists_every_harness_before_workers_connect():
     assert runtime["status"] == "offline"
     assert runtime["instance_count"] == 0
     assert runtime["last_heartbeat_at"] is None
-    assert {row["harness"] for row in runtime["harnesses"]} == {"codex", "muse", "opencode"}
+    assert {row["harness"] for row in runtime["harnesses"]} == {"codex", "muse", "opencode", "agy"}
     for row in runtime["harnesses"]:
         assert row["harness_name"]
         assert row["online"] is False
@@ -190,12 +190,16 @@ def test_unavailable_opencode_does_not_mask_healthy_codex_and_muse():
         assert harnesses[harness]["last_error"] is None
 
 
-@pytest.mark.parametrize("first_harness", ["codex", "muse", "opencode"])
+@pytest.mark.parametrize("first_harness", ["codex", "muse", "opencode", "agy"])
 def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, sample_prompt, first_harness):
     now = datetime(2026, 7, 20, 13, tzinfo=UTC)
     with session_factory()() as session:
         agents = {"codex": sample_agent["id"]}
-        for harness, execution_id in [("muse", "muse-test-model"), ("opencode", "test/model")]:
+        for harness, execution_id in [
+            ("muse", "muse-test-model"),
+            ("opencode", "test/model"),
+            ("agy", "gemini-3.8-flash-low"),
+        ]:
             model = admin_ops.create_model(
                 session,
                 name=f"{harness} test model",
@@ -234,7 +238,7 @@ def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, 
         queued = evaluator.enqueue_manual_runs(
             session, portfolio_ids=[portfolio["id"] for portfolio in portfolios], now=now
         )
-        assert [item["action"] for item in queued["items"]] == ["queued"] * 9
+        assert [item["action"] for item in queued["items"]] == ["queued"] * 12
 
         def claim(harness, limit=20, worker="first"):
             return evaluator.claim_runs(
