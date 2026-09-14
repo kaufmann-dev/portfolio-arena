@@ -10,11 +10,15 @@ from .harnesses import get_harness
 
 def capability_out(capability: ModelHarnessCapability) -> dict:
     harness = get_harness(capability.harness)
+    efforts = list(capability.reasoning_efforts)
+    if harness and harness.reasoning_effort_mode == "fixed":
+        order = {effort.id: index for index, effort in enumerate(harness.reasoning_efforts)}
+        efforts.sort(key=lambda effort: order.get(effort, len(order)))
     return {
         "harness": capability.harness,
         "harness_name": harness.name if harness else capability.harness,
         "execution_model_id": capability.execution_model_id,
-        "reasoning_efforts": list(capability.reasoning_efforts),
+        "reasoning_efforts": efforts,
     }
 
 
