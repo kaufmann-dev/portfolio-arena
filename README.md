@@ -58,7 +58,7 @@ expand the note controls in holdings, active cohorts, or decision history to ins
   already-running attempts may finish without retries. Portfolio schedules remain intact. Only
   empty versions may be deleted; portfolio IDs and URLs survive a move between versions.
 - **Paused versions limit managed performance.** Managed portfolios and their performance benchmarks
-  stop at the earlier of the latest market boundary or five trading days after their last effective
+  stop at the earlier of the latest market boundary or one trading day after their last effective
   decision, using the portfolio's open/close execution boundary and skipping weekends and market
   holidays. Successful abstentions also count as decisions. This cap applies only when the version's
   evaluation switch is off; global or portfolio pauses do not impose it. Re-enabling the version

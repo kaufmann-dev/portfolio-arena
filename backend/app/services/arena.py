@@ -1,7 +1,7 @@
 """Version-scoped orchestration for deterministic open/close analytics.
 
 Only prices and decisions persist. Exact-input caches reuse pure computations;
-paused versions cap managed performance at five trading days after the last decision.
+paused versions cap managed performance at one trading day after the last decision.
 """
 
 from __future__ import annotations
@@ -375,7 +375,7 @@ def compute_valuations(
 
 
 def managed_valuation_boundary(portfolio: Portfolio, as_of: Boundary) -> Boundary:
-    """Cap paused versions at five sessions after the latest effective decision."""
+    """Cap paused versions at one trading session after the latest effective decision."""
     if portfolio.version.evaluation_enabled:
         return as_of
     latest = max(
@@ -389,11 +389,9 @@ def managed_valuation_boundary(portfolio: Portfolio, as_of: Boundary) -> Boundar
     )
     if latest is None:
         return as_of
-    remaining = 5
-    while remaining:
+    latest += timedelta(days=1)
+    while not is_trading_day(latest):
         latest += timedelta(days=1)
-        if is_trading_day(latest):
-            remaining -= 1
     cutoff = boundary_value(latest, portfolio.execution_boundary)
     return min(as_of, cutoff, key=lambda boundary: boundary["timestamp"])
 
