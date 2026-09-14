@@ -29,6 +29,9 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   (raising `AdminOpError`); the admin router and MCP tools are thin callers. Evaluator
   configuration, scheduling, queue, lease, and run lifecycle logic lives in
   `backend/app/services/evaluator.py`. Put rules in the relevant service, not in a router.
+  Keep the shared queue lock and database constraint enforcing one queued/running/cancellation-pending
+  evaluation per portfolio across workers. Check for an existing decision before scheduling and claiming;
+  all decision outcomes satisfy their session, and scheduled retries retain their original session.
 - Reset deletes all portfolio decisions and evaluation runs while preserving configuration.
   Individual history deletion removes the decision and its run together, including locked results.
   Use the shared lifecycle lock order so deleted runs cannot recreate decisions through late submissions.
