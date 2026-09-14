@@ -197,7 +197,9 @@ admin-only access; provider policy defines who is admitted.
 The evaluator is part of Portfolio Arena. Models declare their execution ID and available reasoning
 efforts per supported harness. Agents select one of those valid profiles; their display names are
 generated from it. A portfolio whose Agent uses Codex, Muse Code, OpenCode, or Antigravity appears in the admin
-**Automation** tab, initially disabled. Rebuilt automation runs every Monday through Friday; managed
+**Automation** tab, initially disabled. Portfolio automation shows five portfolios at a time; **Load more**
+reveals the next five. **Run all now** includes all enabled, eligible portfolios, including those not yet shown.
+Rebuilt automation runs every Monday through Friday; managed
 automation can run on any selected weekdays or remain manual-only. If a selected day is an NYSE
 holiday, that evaluation shifts to the next trading day and is deduplicated if multiple selected days
 converge on the same session. Opening and closing times honor early closes and daylight-saving changes.

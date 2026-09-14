@@ -18,6 +18,7 @@
   const { versionId, onHistoryChange }: { versionId: number; onHistoryChange: () => Promise<void> } =
     $props();
 
+  const PORTFOLIO_PAGE_SIZE = 5;
   const WEEKDAYS = [
     { value: 0, label: "Mon" },
     { value: 1, label: "Tue" },
@@ -41,6 +42,7 @@
     weekdays: number[];
   }
 
+  let visiblePortfolioCount = $state(PORTFOLIO_PAGE_SIZE);
   let dashboard = $state.raw<EvaluatorDashboard | null>(null);
   let settingsDraft = $state<EvaluatorSettings | null>(null);
   let configDrafts = $state<Record<number, ConfigDraft>>({});
@@ -57,6 +59,8 @@
   let runAction = $state<"cancel" | "delete">("cancel");
   let actionDialogOpen = $state(false);
   let expandedRunIds = $state<number[]>([]);
+
+  const visiblePortfolios = $derived(dashboard?.portfolios.slice(0, visiblePortfolioCount) ?? []);
 
   const enabledPortfolioIds = $derived(
     dashboard?.portfolios
@@ -487,7 +491,7 @@
         </div>
       </div>
       <div class="portfolio-configs">
-        {#each dashboard.portfolios as config (config.portfolio.id)}
+        {#each visiblePortfolios as config (config.portfolio.id)}
           {@const draft = configDrafts[config.portfolio.id]}
           {#if draft}
             <article class="portfolio-config">
@@ -570,6 +574,21 @@
             </article>
           {/if}
         {/each}
+      </div>
+      <div class="more portfolio-pagination">
+        <span class="muted num" role="status">
+          {visiblePortfolios.length} of {dashboard.portfolios.length} portfolios shown
+        </span>
+        {#if visiblePortfolios.length < dashboard.portfolios.length}
+          <button
+            class="btn"
+            type="button"
+            aria-label="Load more portfolios"
+            onclick={() => (visiblePortfolioCount += PORTFOLIO_PAGE_SIZE)}
+          >
+            Load more
+          </button>
+        {/if}
       </div>
     </section>
   {/if}
@@ -1073,6 +1092,12 @@
     display: flex;
     justify-content: center;
     margin-top: 14px;
+  }
+
+  .portfolio-pagination {
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
   }
 
   @media (max-width: 900px) {
