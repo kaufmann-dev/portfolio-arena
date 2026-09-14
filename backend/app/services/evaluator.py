@@ -208,6 +208,7 @@ def _claimed_run_out(session: Session, run: EvaluationRun) -> dict:
         wrapper_prompt,
         direction_instructions,
         allocation_policy,
+        app_settings,
     )
     timing = (
         f"This scheduled evaluation targets the market {run.execution_boundary} at "

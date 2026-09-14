@@ -29,33 +29,23 @@ INTERNAL_READ_TOOLS = frozenset(
 )
 
 INSTRUCTIONS = """\
-Portfolio Arena measures all-long or all-short managed allocations and
-independent daily rebuilt signals against a direction-matched synthetic SPY
-reference. Results are recomputed from inputs and cached prices; NAVs are never
-snapshotted.
+Portfolio Arena evaluates managed portfolios and independent rebuilt signals against a
+direction-matched SPY reference. Prices, execution boundaries, and sizing rules are server-controlled.
 
-For administration, start with `list_versions()` and `list_portfolios(version_id)`
-for the inventory. Each version independently enables or pauses evaluation.
+For administration, start with `list_versions` and `list_portfolios`.
+Use `get_settings` / `update_settings` for shared prompt blocks and sizing;
+use `get_prompt` / `update_prompt` for strategy text.
+Use `preview_execution_prompt` to review the assembled prompt without starting an evaluation.
+For a manual evaluation, request its preview with automated=false.
 
-For portfolio evaluation:
-1. `get_portfolio(slug_or_id)` — read its canonical prompt, prompt mode, and
-allowed evaluation context. Managed portfolios include holdings, notes, history,
-and performance. Rebuilt portfolios intentionally expose none of their prior
-signals, notes, holdings, or performance.
-2. Follow the returned portfolio direction and allocation policy. Weights are
-   positive for selected USD-denominated equities and ETFs, totaling min(100,
-   selected count × maximum position weight). The server puts the remainder
-   in direction-matched SPY. No qualifying securities is a successful decision:
-   submit an empty positions list with an explanation, never a placeholder ticker.
-   Validate unfamiliar tickers with `validate_symbol` / `search_symbols`.
-3. Managed: call `create_allocation(...)` exactly once. Rebuilt: call
-   `create_signal(...)` exactly once. Entry time and the first future effective
-   opening or closing boundary are server-set. Rebuilt signals are complete independent portfolios;
-   never infer or preserve a previous signal.
+For evaluation, follow the supplied execution prompt. Call `get_portfolio` for the applicable
+strategy, direction, allocation policy, and permitted context. Managed portfolios include holdings,
+notes, history, and performance; rebuilt portfolios exclude all prior portfolio state.
+Use `validate_symbol` / `search_symbols` for ticker checks. Follow the execution prompt's submission
+instructions: automated workers return structured results; manual evaluations submit through the
+mode-specific write tool.
 
-`get_arena_overview(direction, version_id)` returns separate managed and rebuilt summaries
-for one direction. `get_rebuilt_analysis(direction, version_id)` exposes portfolio-tuned results
-and signal alpha over H0.5 through H20.
+`get_arena_overview` and `get_rebuilt_analysis` provide version- and direction-scoped results.
 """
 
 mcp = FastMCP(

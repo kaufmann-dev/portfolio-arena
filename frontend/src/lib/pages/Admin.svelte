@@ -1229,6 +1229,10 @@
   let rebuiltWrapperPrompt = $state("");
   let longDirectionInstructions = $state("");
   let shortDirectionInstructions = $state("");
+  let allocationPolicyInstructions = $state("");
+  let automatedSubmissionInstructions = $state("");
+  let managedManualSubmissionInstructions = $state("");
+  let rebuiltManualSubmissionInstructions = $state("");
   let settingsError = $state("");
 
   function positionCountRange(minimum: string, maximum: string): string {
@@ -1249,6 +1253,10 @@
       rebuiltWrapperPrompt = payload.rebuilt_wrapper_prompt;
       longDirectionInstructions = payload.long_direction_instructions;
       shortDirectionInstructions = payload.short_direction_instructions;
+      allocationPolicyInstructions = payload.allocation_policy_instructions;
+      automatedSubmissionInstructions = payload.automated_submission_instructions;
+      managedManualSubmissionInstructions = payload.managed_manual_submission_instructions;
+      rebuiltManualSubmissionInstructions = payload.rebuilt_manual_submission_instructions;
     } catch {
       managedMinPositionWeightPct = "";
       managedMaxPositionWeightPct = "";
@@ -1258,6 +1266,10 @@
       rebuiltWrapperPrompt = "";
       longDirectionInstructions = "";
       shortDirectionInstructions = "";
+      allocationPolicyInstructions = "";
+      automatedSubmissionInstructions = "";
+      managedManualSubmissionInstructions = "";
+      rebuiltManualSubmissionInstructions = "";
     }
   }
 
@@ -1292,6 +1304,10 @@
         rebuilt_wrapper_prompt: rebuiltWrapperPrompt,
         long_direction_instructions: longDirectionInstructions,
         short_direction_instructions: shortDirectionInstructions,
+        allocation_policy_instructions: allocationPolicyInstructions,
+        automated_submission_instructions: automatedSubmissionInstructions,
+        managed_manual_submission_instructions: managedManualSubmissionInstructions,
+        rebuilt_manual_submission_instructions: rebuiltManualSubmissionInstructions,
       });
       flash("Settings saved.");
     } catch (e) {
@@ -2855,6 +2871,21 @@
               Currently permits {positionCountRange(rebuiltMinPositionWeightPct, rebuiltMaxPositionWeightPct)} positions
               in every rebuilt signal.
             </p>
+            <div class="field">
+              <label for="set-allocation-policy-instructions">Shared allocation policy instructions</label>
+              <textarea
+                id="set-allocation-policy-instructions"
+                bind:value={allocationPolicyInstructions}
+                rows="10"
+                aria-describedby="allocation-policy-instructions-hint"
+                required></textarea>
+              <p class="muted hint" id="allocation-policy-instructions-hint">
+                Include <code>{"{{derived_max_positions}}"}</code>,
+                <code>{"{{min_position_weight_pct}}"}</code>, and
+                <code>{"{{max_position_weight_pct}}"}</code>. Each is replaced with the mode's numeric policy
+                value. The server enforces position counts and weights.
+              </p>
+            </div>
             <h3>Direction instructions</h3>
             <div class="field">
               <label for="set-long-direction">Long direction instructions</label>
@@ -2893,6 +2924,43 @@
               <code>{"{{allocation_policy}}"}</code>, and
               <code>{"{{submission_instructions}}"}</code>. Unknown placeholders are rejected.
             </p>
+            <h3>Submission instructions</h3>
+            <div class="field">
+              <label for="set-automated-submission">Automated submission instructions</label>
+              <textarea
+                id="set-automated-submission"
+                bind:value={automatedSubmissionInstructions}
+                rows="12"
+                aria-describedby="automated-submission-hint"
+                required></textarea>
+              <p class="muted hint" id="automated-submission-hint">
+                Used for every automated evaluation across all harnesses and both portfolio modes.
+              </p>
+            </div>
+            <div class="field">
+              <label for="set-managed-manual-submission">Managed manual submission instructions</label>
+              <textarea
+                id="set-managed-manual-submission"
+                bind:value={managedManualSubmissionInstructions}
+                rows="6"
+                aria-describedby="managed-manual-submission-hint"
+                required></textarea>
+              <p class="muted hint" id="managed-manual-submission-hint">
+                Used for manual managed portfolio submissions.
+              </p>
+            </div>
+            <div class="field">
+              <label for="set-rebuilt-manual-submission">Rebuilt manual submission instructions</label>
+              <textarea
+                id="set-rebuilt-manual-submission"
+                bind:value={rebuiltManualSubmissionInstructions}
+                rows="6"
+                aria-describedby="rebuilt-manual-submission-hint"
+                required></textarea>
+              <p class="muted hint" id="rebuilt-manual-submission-hint">
+                Used for manual rebuilt portfolio submissions.
+              </p>
+            </div>
             <button class="btn primary settings-submit" type="submit">Save settings</button>
           </form>
           {#if settingsError}

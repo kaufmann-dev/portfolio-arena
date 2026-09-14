@@ -539,3 +539,110 @@ def test_rebuilt_mcp_default_matches_public_signal_alpha(
         item for item in row["signal_horizons"] if item["horizon"] == row["selected_policy"]["horizon"]
     )
     assert row["metrics"]["signal_mean_daily_alpha"] == selected_signal["mean_daily_alpha"]
+
+
+def test_prompt_settings_roundtrip_preview_and_seed_preservation(
+    client, mcp_headers, admin_headers, sample_agent, sample_prompt
+):
+    from app.db import session_factory
+    from app.seed import seed_settings
+
+    original = _call_tool(client, mcp_headers, "get_settings")
+    updated = {
+        **original,
+        "allocation_policy_instructions": "Limits {{derived_max_positions}}: "
+        "{{min_position_weight_pct}}–{{max_position_weight_pct}}%.",
+        "automated_submission_instructions": "Worker output marker; keep {{strategy_text}} literal.",
+        "managed_manual_submission_instructions": "Managed submission marker.",
+        "rebuilt_manual_submission_instructions": "Rebuilt submission marker.",
+    }
+    assert _call_tool(client, mcp_headers, "update_settings", updated) == updated
+    with session_factory()() as session:
+        seed_settings(session)
+    assert _call_tool(client, mcp_headers, "get_settings") == updated
+    assert client.get("/api/settings", headers=admin_headers).json() == updated
+
+    for mode in ("managed", "rebuilt"):
+        for direction in ("long", "short"):
+            portfolio = _call_tool(
+                client,
+                mcp_headers,
+                "create_portfolio",
+                {
+                    "name": f"Preview {mode} {direction}",
+                    "version_id": 1,
+                    "agent_id": sample_agent["id"],
+                    "prompt_id": sample_prompt["id"],
+                    "prompt_mode": mode,
+                    "direction": direction,
+                },
+            )
+            for automated in (False, True):
+                preview = _call_tool(
+                    client,
+                    mcp_headers,
+                    "preview_execution_prompt",
+                    {"portfolio_id": portfolio["id"], "automated": automated},
+                )
+                rendered = preview["execution_prompt"]
+                assert preview["prompt_mode"] == mode
+                assert preview["direction"] == direction
+                assert preview["automated"] == automated
+                assert "Limits 10: 10–100%." in rendered
+                assert sample_prompt[f"{mode}_{direction}_text"] in rendered
+                assert updated[f"{direction}_direction_instructions"] in rendered
+                if automated:
+                    assert updated["automated_submission_instructions"] in rendered
+                    assert "Managed submission marker" not in rendered
+                    assert "Rebuilt submission marker" not in rendered
+                else:
+                    assert updated[f"{mode}_manual_submission_instructions"] in rendered
+                    assert "Worker output marker" not in rendered
+                    public = client.get(f"/api/portfolios/{portfolio['slug']}")
+                    assert public.status_code == 200, public.text
+                    assert public.json()["portfolio"]["execution_prompt"] == rendered
+                    admin = client.get(f"/api/portfolios/{portfolio['id']}/detail", headers=admin_headers)
+                    assert admin.status_code == 200, admin.text
+                    assert admin.json()["portfolio"]["execution_prompt"] == rendered
+
+
+def test_prompt_settings_invalid_edits_are_atomic_in_mcp_and_rest(client, mcp_headers, admin_headers):
+    original = _call_tool(client, mcp_headers, "get_settings")
+    template = original["allocation_policy_instructions"]
+    invalid = [
+        ("allocation_policy_instructions", " "),
+        ("allocation_policy_instructions", template.replace("{{derived_max_positions}}", "")),
+        ("allocation_policy_instructions", template + " {{unknown}}"),
+        ("allocation_policy_instructions", template + " {{unclosed"),
+        ("automated_submission_instructions", "\n"),
+        ("managed_manual_submission_instructions", " "),
+        ("rebuilt_manual_submission_instructions", "\t"),
+    ]
+    for field, value in invalid:
+        arguments = {
+            **original,
+            "long_direction_instructions": "This must not be saved.",
+            field: value,
+        }
+        response = _rpc(
+            client, mcp_headers, "tools/call", {"name": "update_settings", "arguments": arguments}
+        )
+        assert response.json()["result"]["isError"], response.text
+        assert _call_tool(client, mcp_headers, "get_settings") == original
+        response = client.put("/api/settings", json=arguments, headers=admin_headers)
+        assert response.status_code == 422, response.text
+        assert _call_tool(client, mcp_headers, "get_settings") == original
+
+
+def test_execution_prompt_preview_is_admin_only_and_rejects_missing_portfolio(client, mcp_headers):
+    headers = {**mcp_headers, "Authorization": "Bearer test-internal-worker-token"}
+    arguments = {"portfolio_id": 999999}
+    response = _rpc(
+        client, headers, "tools/call", {"name": "preview_execution_prompt", "arguments": arguments}
+    )
+    assert response.status_code == 403
+    response = _rpc(
+        client, mcp_headers, "tools/call", {"name": "preview_execution_prompt", "arguments": arguments}
+    )
+    assert response.json()["result"]["isError"]
+    assert "Portfolio not found" in response.json()["result"]["content"][0]["text"]

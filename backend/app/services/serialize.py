@@ -170,6 +170,7 @@ def serialize_detail(
     valuations: ArenaValuations,
     allocation_policy: dict,
     direction_instructions: str,
+    execution_instructions: dict[str, str],
     admin: bool = False,
     wrapper_prompt: str | None = None,
 ) -> dict:
@@ -180,7 +181,7 @@ def serialize_detail(
     return {
         **serialize_summary(valuation, valuations, allocation_policy),
         "execution_prompt": manual_execution_prompt(
-            portfolio, wrapper_prompt or "", direction_instructions, allocation_policy
+            portfolio, wrapper_prompt or "", direction_instructions, allocation_policy, execution_instructions
         ),
         "series": series,
         "spy_series": rebase_series(
@@ -325,6 +326,7 @@ def serialize_rebuilt_detail(
     arena: RebuiltArena,
     allocation_policy: dict,
     direction_instructions: str,
+    execution_instructions: dict[str, str],
     *,
     admin: bool = False,
     wrapper_prompt: str = "",
@@ -334,7 +336,11 @@ def serialize_rebuilt_detail(
     return {
         **serialize_rebuilt_summary(analysis, arena, allocation_policy),
         "execution_prompt": manual_execution_prompt(
-            analysis.portfolio, wrapper_prompt, direction_instructions, allocation_policy
+            analysis.portfolio,
+            wrapper_prompt,
+            direction_instructions,
+            allocation_policy,
+            execution_instructions,
         ),
         "series": policy.series if policy else [],
         "spy_series": policy.spy_series if policy else [],

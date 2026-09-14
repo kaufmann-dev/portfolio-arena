@@ -160,7 +160,7 @@ This is an all-short portfolio. Select securities whose prices are expected to u
 so the short book can outperform the Short SPY reference. Submit positive weights; the server
 interprets them as short exposure."""
 
-AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
+DEFAULT_AUTOMATED_SUBMISSION_INSTRUCTIONS = """\
 Do not call any write tool; return the structured response for the worker to submit.
 
 - `proposal`: selected securities, including partial allocations.
@@ -175,13 +175,13 @@ and why the strongest excluded candidates failed.
 Preserve any completed research if blocked. Keep position notes concise.
 """
 
-MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS = """\
+DEFAULT_MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS = """\
 When the analysis is complete, call `create_allocation` exactly once with the portfolio id returned by
 `get_portfolio`. Include a concise portfolio-level note and useful per-position notes so the next
 evaluation can understand the decision. For a partial allocation or abstention, explain the research
 coverage and why the strongest excluded candidates failed in the portfolio-level note."""
 
-REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS = """\
+DEFAULT_REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS = """\
 When the analysis is complete, call `create_signal` exactly once with the portfolio id returned by
 `get_portfolio`. Include a concise portfolio-level note and useful per-position notes that explain
 the independent signal. For a partial allocation or abstention, explain the research coverage and
@@ -309,6 +309,21 @@ lasting deterioration in business value.""",
 }
 
 
+DEFAULT_ALLOCATION_POLICY_INSTRUCTIONS = """\
+Use 0–{{derived_max_positions}} selections, each weighted
+{{min_position_weight_pct}}–{{max_position_weight_pct}}% of NAV.
+For n selections, weights must total min(100, n × maximum position weight), to four decimals.
+The server puts the remainder in direction-matched SPY, outside these limits; do not submit it.
+Use only USD-denominated equities and ETFs, and validate every selected symbol."""
+
+DEFAULT_EXECUTION_INSTRUCTIONS = {
+    "allocation_policy_instructions": DEFAULT_ALLOCATION_POLICY_INSTRUCTIONS,
+    "automated_submission_instructions": DEFAULT_AUTOMATED_SUBMISSION_INSTRUCTIONS,
+    "managed_manual_submission_instructions": DEFAULT_MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS,
+    "rebuilt_manual_submission_instructions": DEFAULT_REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS,
+}
+
+
 def allocation_policy_from_limits(minimum: float, maximum: float) -> dict:
     if not all(math.isfinite(value) for value in (minimum, maximum)) or not 0 < minimum <= maximum <= 100:
         raise ValueError("Position weights must satisfy 0 < minimum <= maximum <= 100.")
@@ -370,38 +385,46 @@ def validate_decision_note(positions: list[dict], note: str) -> None:
         raise ValueError("Partial allocations and abstentions require an explanation in the note.")
 
 
-def validate_wrapper_prompt(template: str) -> str:
-    """Validate and return an editable execution-wrapper template."""
+def _validate_template(template: str, placeholders: set[str], label: str) -> str:
     if not template.strip():
-        raise ValueError("Wrapper prompt cannot be blank.")
+        raise ValueError(f"{label} cannot be blank.")
     matches = _WRAPPER_PLACEHOLDER_RE.findall(template)
     unmatched = _WRAPPER_PLACEHOLDER_RE.sub("", template)
     if "{{" in unmatched or "}}" in unmatched:
-        raise ValueError("Wrapper prompt contains a malformed placeholder.")
+        raise ValueError(f"{label} contains a malformed placeholder.")
     found = set(matches)
-    missing = sorted(WRAPPER_PLACEHOLDERS - found)
-    unknown = sorted(found - WRAPPER_PLACEHOLDERS)
+    missing = sorted(placeholders - found)
+    unknown = sorted(found - placeholders)
     if missing:
         missing_text = ", ".join(f"{{{{{value}}}}}" for value in missing)
-        raise ValueError(f"Wrapper prompt is missing placeholders: {missing_text}.")
+        raise ValueError(f"{label} is missing placeholders: {missing_text}.")
     if unknown:
         unknown_text = ", ".join(f"{{{{{value}}}}}" for value in unknown)
-        raise ValueError(f"Wrapper prompt contains unknown placeholders: {unknown_text}.")
+        raise ValueError(f"{label} contains unknown placeholders: {unknown_text}.")
     return template
 
 
-def allocation_policy_text(policy: dict) -> str:
-    return "\n".join(
-        [
-            (
-                f"Use 0–{policy['derived_max_positions']} selections, each weighted "
-                f"{policy['min_position_weight_pct']:g}–{policy['max_position_weight_pct']:g}% of NAV."
-            ),
-            "For n selections, weights must total min(100, n × maximum position weight), to four decimals.",
-            "The server puts the remainder in direction-matched SPY, outside these limits; do not submit it.",
-            "Use only USD-denominated equities and ETFs, and validate every selected symbol.",
-        ]
+def validate_wrapper_prompt(template: str) -> str:
+    return _validate_template(template, WRAPPER_PLACEHOLDERS, "Wrapper prompt")
+
+
+def validate_allocation_policy_instructions(template: str) -> str:
+    return _validate_template(
+        template,
+        {"derived_max_positions", "min_position_weight_pct", "max_position_weight_pct"},
+        "Allocation policy instructions",
     )
+
+
+def validate_submission_instructions(value: str) -> str:
+    if not value.strip():
+        raise ValueError("Submission instructions cannot be blank.")
+    return value
+
+
+def allocation_policy_text(policy: dict, template: str) -> str:
+    validated = validate_allocation_policy_instructions(template)
+    return _WRAPPER_PLACEHOLDER_RE.sub(lambda match: f"{policy[match.group(1)]:g}", validated).strip()
 
 
 def render_execution_prompt(
@@ -410,6 +433,7 @@ def render_execution_prompt(
     direction_instructions: str,
     submission_instructions: str,
     allocation_policy: dict,
+    allocation_policy_instructions: str,
 ) -> str:
     """Render one wrapper in a single pass so inserted text is never re-expanded."""
     prompt = portfolio.prompt
@@ -419,8 +443,8 @@ def render_execution_prompt(
         "portfolio_slug": portfolio.slug,
         "strategy_text": prompt.text_for(portfolio.prompt_mode, portfolio.direction).strip(),
         "direction_instructions": validate_direction_instructions(direction_instructions).strip(),
-        "allocation_policy": allocation_policy_text(allocation_policy),
-        "submission_instructions": submission_instructions.strip(),
+        "allocation_policy": allocation_policy_text(allocation_policy, allocation_policy_instructions),
+        "submission_instructions": validate_submission_instructions(submission_instructions).strip(),
     }
     validated = validate_wrapper_prompt(wrapper_prompt)
     return _WRAPPER_PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], validated).strip()
@@ -431,19 +455,19 @@ def manual_execution_prompt(
     wrapper_prompt: str,
     direction_instructions: str,
     allocation_policy: dict,
+    execution_instructions: dict[str, str],
 ) -> str:
     """Build the complete prompt copied from a portfolio's public detail page."""
-    submission_instructions = (
-        REBUILT_MANUAL_SUBMISSION_INSTRUCTIONS
-        if portfolio.prompt_mode == "rebuilt"
-        else MANAGED_MANUAL_SUBMISSION_INSTRUCTIONS
-    )
+    submission_instructions = execution_instructions[
+        f"{portfolio.prompt_mode}_manual_submission_instructions"
+    ]
     return render_execution_prompt(
         portfolio,
         wrapper_prompt,
         direction_instructions,
         submission_instructions,
         allocation_policy,
+        execution_instructions["allocation_policy_instructions"],
     )
 
 
@@ -452,13 +476,15 @@ def automated_execution_prompt(
     wrapper_prompt: str,
     direction_instructions: str,
     allocation_policy: dict,
+    execution_instructions: dict[str, str],
 ) -> str:
     """Build the complete prompt sent to an integrated evaluator worker."""
-    submission_instructions = AUTOMATED_SUBMISSION_INSTRUCTIONS
+    submission_instructions = execution_instructions["automated_submission_instructions"]
     return render_execution_prompt(
         portfolio,
         wrapper_prompt,
         direction_instructions,
         submission_instructions,
         allocation_policy,
+        execution_instructions["allocation_policy_instructions"],
     )

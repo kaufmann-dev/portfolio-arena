@@ -85,8 +85,8 @@ The project measures cost-free paper performance for research.
   Shared wrapper instructions define comparative, probabilistic selection and abstention; short
   strategy texts define the investment mechanism, key evidence, and invalidation. Indicator lists
   guide relevant research rather than imposing universal checklists. Processing gaps and recognition
-  deadlines apply only when the strategy explicitly requires them. Generated allocation instructions
-  specify eligibility and sizing; submission instructions define result states and required explanations.
+  deadlines apply only when the strategy explicitly requires them. Editable allocation instructions
+  specify eligibility and sizing; editable submission instructions define result states and required explanations.
 - **Books have one direction.** Selected weights are positive and total `min(100, count × maximum weight)`.
   Server-enforced sizing defaults are 10–25% for Managed and 10–100% for Rebuilt, with at most four
   decimal places. The remainder follows the direction-matched SPY reference, outside ticker limits.
@@ -154,9 +154,20 @@ shown once and only SHA-256 hashes are stored.
   `sharpe`, `mean_daily_alpha`, or `hit_rate`. Rebuilt analysis includes the forty-column signal matrix.
 - Model, agent, prompt and portfolio tools expose administration with reference-aware deletion.
   Prompt revision history/restore and API-key management remain browser-only.
-- Settings tools manage allocation policies, wrappers and direction instructions. Evaluator tools
-  mirror dashboard, scheduling, queue, cancellation and retry controls. Inventory, dashboard and
-  run history support optional version filters.
+- `get_settings` / `update_settings` manage allocation policies and every shared research/submission
+  prompt block: mode wrappers, direction instructions, `allocation_policy_instructions`,
+  `automated_submission_instructions`, `managed_manual_submission_instructions`, and
+  `rebuilt_manual_submission_instructions`. Read settings first and send all fields back; updates
+  validate atomically. Allocation wording requires `{{derived_max_positions}}`,
+  `{{min_position_weight_pct}}`, and `{{max_position_weight_pct}}`; submission blocks are literal text.
+  These fields are also editable in Admin → Settings. Startup seeds missing fields without replacing
+  saved edits. Changes apply to subsequent manual prompts and worker claims, not already-running workers.
+- Edit strategy variants with `update_prompt`; use `preview_execution_prompt(portfolio_id, automated)`
+  to inspect the assembled saved text without running a portfolio. Previews omit run-specific timing
+  and harness JSON framing. Server-enforced sizing, market timing, permissions, and result schemas
+  remain code-controlled. Internal worker credentials cannot change settings or access admin previews.
+- Evaluator tools mirror dashboard, scheduling, queue, cancellation and retry controls. Inventory,
+  dashboard and run history support optional version filters.
 - `delete_evaluation_run(run_id)` removes one run and its result. `delete_allocation(allocation_id)`
   and `delete_signal(signal_id)` also remove the associated run, including for locked decisions.
   `reset_portfolio(portfolio_id)` clears all decisions and runs for that portfolio.
