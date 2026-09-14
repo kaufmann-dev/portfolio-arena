@@ -48,7 +48,9 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   `AGY_HOME`. Send one user message per attempt, preserve native login, allow only research tools,
   and require one completed result with validated `structured_output`;
   print timeouts can report `SUCCESS` with exit code zero and must still fail. Model IDs are manually
-  configured from `agy models`, with optional low/medium/high effort; discovery never imports records.
+  configured using native IDs, including base IDs with separate low/medium/high effort.
+  Discovery checks readiness without requiring exact catalog membership or importing records;
+  native execution validates model selection. Effort-suffixed IDs must match the agent's effort.
   Its generation schema omits the nullable reason enum unsupported by Gemini; keep the shared
   proposal schema and strict final `Proposal` validation unchanged.
   Fence private worker control, submit, and fail requests with the claimed `attempt_count`.

@@ -561,10 +561,10 @@ async def run_agy(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Propos
     try:
         async with asyncio.timeout(run.timeout_seconds):
             models = await agy_available_models(settings, run=run)
-            if run.execution_model_id not in models:
-                raise ValueError(
-                    f"Antigravity model {run.execution_model_id} is unavailable; check agy models"
-                )
+            if not models:
+                raise ValueError("Antigravity models are unavailable; check agy models")
+            # The catalog lists effort-specific IDs, while the CLI also accepts
+            # base IDs with --effort. Let native execution validate the selection.
             with tempfile.TemporaryDirectory(prefix="arena-agy-") as directory:
                 command = agy_command(
                     settings,
