@@ -164,6 +164,7 @@ def test_reset_stops_running_submission_from_recreating_an_allocation(
         with pytest.raises(AdminOpError, match="not found"):
             evaluator.submit_run(
                 session,
+                attempt_count=1,
                 run_id=run_id,
                 positions=[{"symbol": "AAPL", "weight_pct": 100, "note": "stale run"}],
                 note="must not land",
@@ -205,6 +206,7 @@ def test_reset_deletes_succeeded_run_and_report(
         )
         evaluator.submit_run(
             session,
+            attempt_count=1,
             run_id=run_id,
             positions=[{"symbol": "AAPL", "weight_pct": 100, "note": "new thesis"}],
             note="completed run",

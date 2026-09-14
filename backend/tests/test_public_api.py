@@ -171,11 +171,9 @@ class TestPortfolioDetail:
         assert sample_prompt["managed_long_text"] in execution_prompt
         assert sample_prompt["managed_short_text"] not in execution_prompt
         assert sample_prompt["rebuilt_long_text"] not in execution_prompt
-        assert execution_prompt.count("If the returned allocation history is empty") == 1
-        assert "construct the portfolio's initial allocation" in execution_prompt
-        assert "rather than rebuilding it without reference to its\nhistory" in execution_prompt
-        assert "automatic retention advantage" in execution_prompt
-        assert "Do not target either low or high\nturnover" in execution_prompt
+        assert execution_prompt.count("If history is empty, build the initial allocation.") == 1
+        assert "reassess existing holdings and alternatives" in execution_prompt
+        assert "Avoid automatic retention,\nturnover targets" in execution_prompt
         assert "prefer retaining the existing allocation" not in execution_prompt
         assert "call `create_allocation` exactly once" in execution_prompt
         assert execution_prompt.count("This is an all-long portfolio") == 1
@@ -223,8 +221,9 @@ class TestPortfolioDetail:
 
         assert payload["portfolio"]["prompt_mode"] == "rebuilt"
         assert reconstruction_strategy in execution_prompt
-        assert "construct the complete signal independently from scratch" in execution_prompt
-        assert "without regard to previous signals" in execution_prompt
+        assert (
+            "Build the complete signal from scratch, independently of previous signals." in execution_prompt
+        )
         assert "Do not use prior portfolio state from any source" in execution_prompt
         assert "continuity is useful" not in execution_prompt
         assert "prefer retaining the existing allocation" not in execution_prompt

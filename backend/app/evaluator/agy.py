@@ -5,7 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from .config import EvaluatorRuntimeSettings
+from .config import EvaluatorRuntimeSettings, without_web_credentials
 
 
 class AgyAuthenticationRequired(RuntimeError):
@@ -69,7 +69,7 @@ def write_agy_config(settings: EvaluatorRuntimeSettings) -> None:
 def agy_environment(settings: EvaluatorRuntimeSettings) -> dict[str, str]:
     environment = {
         key: value
-        for key, value in os.environ.items()
+        for key, value in without_web_credentials(os.environ).items()
         if not key.startswith(("AGY_", "ANTIGRAVITY_", "CASCADE_", "CODEX_", "OPENCODE_"))
     }
     for name in (
@@ -125,7 +125,18 @@ def agy_result(stdout: bytes, stderr: bytes) -> dict:
     # response can include extra prose and internal task-completion fields.
     if b"[agy] print timeout" in stderr:
         raise ValueError("Antigravity timed out before completing its structured result")
-    result = json.loads(stdout)
+    results = []
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError("Antigravity returned an invalid stream event")
+        if event.get("event") == "result":
+            results.append(event.get("result"))
+    if len(results) != 1:
+        raise ValueError("Antigravity must return exactly one completed result")
+    result = results[0]
     if not isinstance(result, dict) or result.get("status") != "SUCCESS" or result.get("error"):
         raise ValueError("Antigravity evaluation did not complete successfully")
     structured = result.get("structured_output")

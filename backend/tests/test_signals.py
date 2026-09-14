@@ -248,6 +248,7 @@ def test_rebuilt_evaluator_forces_daily_schedule_and_routes_manual_result_to_sig
         )
         submitted = evaluator.submit_run(
             session,
+            attempt_count=1,
             run_id=run_id,
             positions=_signal_body()["positions"],
             note="manual integrated signal",
@@ -300,6 +301,7 @@ def test_scheduled_rebuilt_submission_keeps_scheduled_close_after_market(
         )
         submitted = evaluator.submit_run(
             session,
+            attempt_count=1,
             run_id=claimed["runs"][0]["id"],
             positions=_signal_body()["positions"],
             note="late scheduled signal",
@@ -351,6 +353,7 @@ def test_duplicate_evaluator_submission_is_skipped_without_claiming_existing_sig
 
         submitted = evaluator.submit_run(
             session,
+            attempt_count=1,
             run_id=claimed["runs"][0]["id"],
             positions=_signal_body("MSFT")["positions"],
             note="must not claim existing",

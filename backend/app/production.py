@@ -8,6 +8,7 @@ import signal
 
 import httpx
 
+from .evaluator.config import without_web_credentials
 from .log import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ async def run() -> int:
     web_environment = base_environment.copy()
     for name in ("OPENAI_API_KEY", "CODEX_API_KEY", "META_API_KEY"):
         web_environment.pop(name, None)
-    evaluator_environment = base_environment.copy()
+    evaluator_environment = without_web_credentials(base_environment)
     # Provider keys remain available to OpenCode. Each other harness filters
     # its own environment before launching the CLI.
 

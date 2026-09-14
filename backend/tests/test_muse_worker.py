@@ -32,6 +32,7 @@ def _settings(tmp_path):
 def _run(*, effort="high", timeout_seconds=300):
     return worker.ClaimedRun(
         id=17,
+        attempt_count=1,
         portfolio={"id": 2, "slug": "muse-portfolio", "name": "Muse Portfolio"},
         trigger_kind="manual",
         harness="muse",
@@ -223,7 +224,7 @@ def test_muse_exec_uses_snapshot_model_and_validates_json_before_submission(tmp_
         (
             "POST",
             "/runs/17/submit",
-            {key: _proposal()[key] for key in ("positions", "note", "report")},
+            {"attempt_count": 1, **{key: _proposal()[key] for key in ("positions", "note", "report")}},
         )
     ]
     command = captured["command"]

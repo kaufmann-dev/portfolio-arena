@@ -220,7 +220,8 @@ def test_price_content_change_invalidates_managed_analysis(
     with session_factory()() as session:
         row = session.get(PriceCache, "SPY")
         updated = [dict(point) for point in row.series]
-        updated[-1]["close"] += 1.0
+        last_close = next(point for point in reversed(updated) if "close" in point)
+        last_close["close"] += 1.0
         row.series = updated
         session.commit()
 

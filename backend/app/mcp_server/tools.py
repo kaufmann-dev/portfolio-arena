@@ -4,7 +4,7 @@ API-key management and prompt revision history/restore remain browser-admin-only
 Reads use the shared serializers; writes call ``services.admin_ops`` so every
 integrity rule is enforced exactly as it is for the REST admin panel.
 
-Each tool opens its own session (FastMCP runs sync tools in a worker thread).
+Each tool opens its own session in a worker thread via ``threaded_tool``.
 ``AdminOpError`` / ``SymbolValidationError`` are surfaced as tool errors.
 """
 
@@ -32,7 +32,7 @@ from ..services.serialize import (
 )
 from ..services.symbols import SymbolValidationError, resolve_symbol, search_symbols_allowed
 from ..services.trading_calendar import boundary_value, effective_date_for
-from .server import mcp
+from .server import threaded_tool
 
 
 @contextmanager
@@ -88,14 +88,14 @@ def _benchmark(arena, rows: list[dict], direction: str) -> dict:
 # --- Flagship reads ---------------------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def list_portfolios(version_id: int | None = None) -> dict:
     """List portfolio assignments, versions, timing and editing blockers, optionally within one version."""
     with _session() as session:
         return _guard(admin_ops.list_portfolios, session, version_id=version_id)
 
 
-@mcp.tool()
+@threaded_tool
 def get_portfolio(slug_or_id: str) -> dict:
     """Everything needed to evaluate ONE portfolio. Managed mode includes
     drifted holdings, notes, allocation history, and performance. Rebuilt
@@ -162,7 +162,7 @@ def get_portfolio(slug_or_id: str) -> dict:
         }
 
 
-@mcp.tool()
+@threaded_tool
 def get_arena_overview(
     direction: str, version_id: int, objective: HorizonObjective = "signal_mean_daily_alpha"
 ) -> dict:
@@ -211,7 +211,7 @@ def get_arena_overview(
         }
 
 
-@mcp.tool()
+@threaded_tool
 def get_rebuilt_analysis(
     direction: str, version_id: int, objective: HorizonObjective = "signal_mean_daily_alpha"
 ) -> dict:
@@ -260,27 +260,27 @@ def _portfolio_prompt_out(
     return payload
 
 
-@mcp.tool()
+@threaded_tool
 def list_agents() -> dict:
     """List all agent execution profiles and deletion blockers."""
     with _session() as session:
         return _guard(admin_ops.list_agents, session)
 
 
-@mcp.tool()
+@threaded_tool
 def list_harnesses() -> dict:
     """List harnesses with fixed reasoning choices or custom provider variant support."""
     return harnesses_out()
 
 
-@mcp.tool()
+@threaded_tool
 def list_models() -> dict:
     """List model definitions with harness capabilities and agent usage counts."""
     with _session() as session:
         return admin_ops.list_models(session)
 
 
-@mcp.tool()
+@threaded_tool
 def list_prompts() -> dict:
     """List prompt support and usage. Use get_prompt for current strategy text."""
     with _session() as session:
@@ -296,7 +296,7 @@ def list_prompts() -> dict:
         return result
 
 
-@mcp.tool()
+@threaded_tool
 def get_prompt(slug_or_id: str) -> dict:
     """Fetch a prompt's current mode-specific text by slug or id."""
     with _session() as session:
@@ -309,14 +309,14 @@ def get_prompt(slug_or_id: str) -> dict:
         return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
 
 
-@mcp.tool()
+@threaded_tool
 def search_symbols(query: str) -> dict:
     """Search the investable universe (equities and ETFs) for tickers matching
     a query, filtered to instrument types the arena accepts."""
     return {"results": search_symbols_allowed(query)}
 
 
-@mcp.tool()
+@threaded_tool
 def validate_symbol(symbol: str) -> dict:
     """Resolve and validate one symbol against Massive. Returns its
     security type/name/currency/exchange, or errors with a hint. Non-USD assets,
@@ -334,7 +334,7 @@ def validate_symbol(symbol: str) -> dict:
     }
 
 
-@mcp.tool()
+@threaded_tool
 def get_effective_date(portfolio_id: int) -> dict:
     """Return the next opening or closing boundary for a manual decision in this portfolio."""
     with _session() as session:
@@ -350,7 +350,7 @@ def get_effective_date(portfolio_id: int) -> dict:
 # --- Writes: models and agents ---------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def create_model(
     name: str,
     capabilities: list[dict],
@@ -367,7 +367,7 @@ def create_model(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def update_model(
     model_id: int,
     name: str | None = None,
@@ -386,14 +386,14 @@ def update_model(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def delete_model(model_id: int) -> dict:
     """Delete an unused model definition."""
     with _session() as session:
         return _guard(admin_ops.delete_model, session, model_id)
 
 
-@mcp.tool()
+@threaded_tool
 def create_agent(
     model_id: int,
     harness: str | None,
@@ -412,7 +412,7 @@ def create_agent(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def update_agent(
     agent_id: int,
     model_id: int,
@@ -433,7 +433,7 @@ def update_agent(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def delete_agent(agent_id: int) -> dict:
     """Permanently delete an unreferenced agent."""
     with _session() as session:
@@ -443,7 +443,7 @@ def delete_agent(agent_id: int) -> dict:
 # --- Writes: prompts --------------------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def create_prompt(
     name: str,
     mode: str,
@@ -474,7 +474,7 @@ def create_prompt(
         return admin_ops.prompt_out(prompt, admin_ops.get_app_settings(session))
 
 
-@mcp.tool()
+@threaded_tool
 def update_prompt(
     prompt_id: int,
     name: str | None = None,
@@ -510,7 +510,7 @@ def update_prompt(
 # --- Writes: portfolios -----------------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def create_portfolio(
     version_id: int,
     name: str,
@@ -537,7 +537,7 @@ def create_portfolio(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def update_portfolio(
     portfolio_id: int,
     name: str | None = None,
@@ -565,14 +565,14 @@ def update_portfolio(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def delete_portfolio(portfolio_id: int) -> dict:
     """Delete a portfolio, its decisions, and all evaluation runs. Irreversible."""
     with _session() as session:
         return _guard(admin_ops.delete_portfolio, session, portfolio_id)
 
 
-@mcp.tool()
+@threaded_tool
 def reset_portfolio(portfolio_id: int) -> dict:
     """Permanently delete all allocations, signals, and evaluation runs, stopping active work.
     Portfolio identity, agent assignment, timing, and evaluator configuration remain."""
@@ -583,7 +583,7 @@ def reset_portfolio(portfolio_id: int) -> dict:
 # --- Writes: allocations ----------------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def create_allocation(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
     """Enter a managed rebalance (or first allocation). Selected weights must total
     min(100, count × maximum weight) and satisfy the position limits. The server
@@ -595,7 +595,7 @@ def create_allocation(portfolio_id: int, positions: list[PositionIn], note: str 
         return _guard(admin_ops.create_allocation, session, portfolio_id, _positions(positions), note)
 
 
-@mcp.tool()
+@threaded_tool
 def update_allocation(
     allocation_id: int, positions: list[PositionIn] | None = None, note: str | None = None
 ) -> dict:
@@ -607,7 +607,7 @@ def update_allocation(
         return _guard(admin_ops.update_allocation, session, allocation_id, pos, note)
 
 
-@mcp.tool()
+@threaded_tool
 def delete_allocation(allocation_id: int) -> dict:
     """Permanently delete an allocation and its evaluation run, even after its effective boundary.
     Portfolio performance is recalculated from the remaining history."""
@@ -618,7 +618,7 @@ def delete_allocation(allocation_id: int) -> dict:
 # --- Writes: rebuilt signals -----------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def create_signal(portfolio_id: int, positions: list[PositionIn], note: str = "") -> dict:
     """Enter one independent rebuilt signal portfolio for the next effective
     boundary. Selected weights total min(100, count × maximum weight); the remainder
@@ -636,7 +636,7 @@ def create_signal(portfolio_id: int, positions: list[PositionIn], note: str = ""
         )
 
 
-@mcp.tool()
+@threaded_tool
 def update_signal(
     signal_id: int,
     positions: list[PositionIn] | None = None,
@@ -649,7 +649,7 @@ def update_signal(
         return _guard(admin_ops.update_signal, session, signal_id, pos, note)
 
 
-@mcp.tool()
+@threaded_tool
 def delete_signal(signal_id: int) -> dict:
     """Permanently delete a rebuilt signal and its evaluation run, even after its effective boundary.
     Portfolio performance is recalculated from the remaining history."""
@@ -660,14 +660,14 @@ def delete_signal(signal_id: int) -> dict:
 # --- Evaluator control -----------------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def get_evaluator_dashboard(version_id: int | None = None) -> dict:
     """Read evaluator settings, per-portfolio configuration, and live worker status."""
     with _session() as session:
         return _guard(evaluator.get_dashboard, session, version_id=version_id)
 
 
-@mcp.tool()
+@threaded_tool
 def update_evaluator_settings(
     enabled: bool,
     max_concurrency: int,
@@ -692,7 +692,7 @@ def update_evaluator_settings(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def configure_portfolio_evaluator(
     portfolio_id: int,
     enabled: bool,
@@ -710,21 +710,21 @@ def configure_portfolio_evaluator(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def run_evaluations(portfolio_ids: list[int]) -> dict:
     """Queue immediate evaluations for enabled portfolios."""
     with _session() as session:
         return _guard(evaluator.enqueue_manual_runs, session, portfolio_ids=portfolio_ids)
 
 
-@mcp.tool()
+@threaded_tool
 def cancel_evaluation_run(run_id: int) -> dict:
     """Cancel queued work or request cancellation of a running Codex process."""
     with _session() as session:
         return _guard(evaluator.cancel_run, session, run_id=run_id)
 
 
-@mcp.tool()
+@threaded_tool
 def delete_evaluation_run(run_id: int) -> dict:
     """Permanently delete one evaluation, its report and its allocation or signal.
     Active work stops; later evaluations remain. Use list_evaluation_runs to find the run ID."""
@@ -732,14 +732,14 @@ def delete_evaluation_run(run_id: int) -> dict:
         return _guard(evaluator.delete_run, session, run_id=run_id)
 
 
-@mcp.tool()
+@threaded_tool
 def retry_evaluation_run(run_id: int) -> dict:
     """Queue a fresh immediate retry linked to a failed evaluation run."""
     with _session() as session:
         return _guard(evaluator.retry_run, session, run_id=run_id)
 
 
-@mcp.tool()
+@threaded_tool
 def list_evaluation_runs(
     version_id: int | None = None,
     portfolio_id: int | None = None,
@@ -763,14 +763,14 @@ def list_evaluation_runs(
 # --- Writes: settings -------------------------------------------------------
 
 
-@mcp.tool()
+@threaded_tool
 def get_settings() -> dict:
     """Read all shared prompt blocks and allocation policies; strategy texts use get_prompt."""
     with _session() as session:
         return admin_ops.get_app_settings(session)
 
 
-@mcp.tool()
+@threaded_tool
 def preview_execution_prompt(portfolio_id: int, automated: bool = True) -> dict:
     """Preview the complete saved prompt for a portfolio without queuing or running it.
 
@@ -782,7 +782,7 @@ def preview_execution_prompt(portfolio_id: int, automated: bool = True) -> dict:
         return _guard(admin_ops.preview_execution_prompt, session, portfolio_id, automated=automated)
 
 
-@mcp.tool()
+@threaded_tool
 def update_settings(
     managed_allocation_policy: AllocationPolicyIn,
     rebuilt_allocation_policy: AllocationPolicyIn,
@@ -822,28 +822,28 @@ def update_settings(
         )
 
 
-@mcp.tool()
+@threaded_tool
 def delete_prompt(prompt_id: int) -> dict:
     """Delete an unused prompt; portfolio and recorded run references prevent deletion."""
     with _session() as session:
         return _guard(admin_ops.delete_prompt, session, prompt_id)
 
 
-@mcp.tool()
+@threaded_tool
 def list_versions() -> dict:
     """List Arena versions newest first, including independent evaluation gates."""
     with _session() as session:
         return admin_ops.list_versions(session)
 
 
-@mcp.tool()
+@threaded_tool
 def create_version(name: str) -> dict:
     """Create an empty Arena version with evaluation paused."""
     with _session() as session:
         return _guard(admin_ops.create_version, session, name=name)
 
 
-@mcp.tool()
+@threaded_tool
 def update_version(version_id: int, name: str | None = None, evaluation_enabled: bool | None = None) -> dict:
     """Rename or pause/resume a version. Pausing cancels queued runs while running attempts may finish."""
     with _session() as session:
@@ -852,7 +852,7 @@ def update_version(version_id: int, name: str | None = None, evaluation_enabled:
         )
 
 
-@mcp.tool()
+@threaded_tool
 def delete_version(version_id: int) -> dict:
     """Delete an empty version. Move or delete its portfolios first."""
     with _session() as session:

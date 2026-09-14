@@ -341,7 +341,18 @@
           <div class="runtime-grid">
             <div>
               <span class="runtime-label">Worker</span>
-              <span class={["badge", runtime.online ? "success" : "neg"]}>
+              <span
+                class={[
+                  "badge",
+                  !runtime.online || ["error", "configuration_error"].includes(runtime.status)
+                    ? "neg"
+                    : runtime.status === "authentication_required"
+                      ? "warn"
+                      : ["idle", "running"].includes(runtime.status)
+                        ? "success"
+                        : "",
+                ]}
+              >
                 {runtime.online ? runtime.status : "offline"}
               </span>
             </div>

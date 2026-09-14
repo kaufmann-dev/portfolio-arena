@@ -8,6 +8,7 @@ access — checked by a thin ASGI wrapper around the streamable-HTTP app.
 import json
 import secrets
 from datetime import UTC, datetime
+from functools import partial, wraps
 
 import anyio
 from mcp.server.fastmcp import FastMCP
@@ -59,6 +60,17 @@ mcp = FastMCP(
     # check is redundant and would otherwise reject the proxied Host header.
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
+
+
+def threaded_tool(fn):
+    """Register a synchronous tool without blocking the ASGI event loop."""
+
+    @wraps(fn)
+    async def invoke(*args, **kwargs):
+        return await anyio.to_thread.run_sync(partial(fn, *args, **kwargs))
+
+    mcp.add_tool(invoke)
+    return fn
 
 
 def _extract_key(headers: list[tuple[bytes, bytes]]) -> str | None:
@@ -166,6 +178,6 @@ class ApiKeyAuth:
 
 
 def build_mcp_asgi_app() -> ASGIApp:
-    from . import tools  # noqa: F401 — importing registers the @mcp.tool functions
+    from . import tools  # noqa: F401 — importing registers the threaded tools
 
     return ApiKeyAuth(mcp.streamable_http_app())

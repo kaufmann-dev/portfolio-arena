@@ -251,12 +251,14 @@ class MuseCatalogImportIn(BaseModel):
 
 
 class EvaluatorRunSubmitIn(BaseModel):
+    attempt_count: int = Field(ge=1)
     positions: list[PositionIn]
     note: str = Field(max_length=4000)
     report: str = Field(max_length=20_000)
 
 
 class EvaluatorRunFailIn(BaseModel):
+    attempt_count: int = Field(ge=1)
     error: str = Field(min_length=1, max_length=4000)
     cancelled: bool = False
     report: str | None = Field(default=None, max_length=20_000)

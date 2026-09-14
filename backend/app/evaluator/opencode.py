@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from .config import EvaluatorRuntimeSettings
+from .config import EvaluatorRuntimeSettings, without_web_credentials
 
 
 def prepare_opencode(settings: EvaluatorRuntimeSettings) -> None:
@@ -16,7 +16,11 @@ def opencode_environment(settings: EvaluatorRuntimeSettings) -> dict[str, str]:
     # The dedicated XDG config retains native provider settings and auth plugins.
     # Ignore inherited OpenCode overrides so they cannot select a foreign home,
     # session database, permissions, or configuration for evaluator attempts.
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("OPENCODE_")}
+    environment = {
+        key: value
+        for key, value in without_web_credentials(os.environ).items()
+        if not key.startswith("OPENCODE_")
+    }
     environment.pop("CODEX_API_KEY", None)
     environment.pop("CODEX_HOME", None)
     for kind in ("config", "data", "cache", "state"):
