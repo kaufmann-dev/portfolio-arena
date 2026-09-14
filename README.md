@@ -85,7 +85,8 @@ The project measures cost-free paper performance for research.
   Shared wrapper instructions define comparative, probabilistic selection and abstention; short
   strategy texts define the investment mechanism, key evidence, and invalidation. Indicator lists
   guide relevant research rather than imposing universal checklists. Processing gaps and recognition
-  deadlines apply only when the strategy explicitly requires them.
+  deadlines apply only when the strategy explicitly requires them. Generated allocation instructions
+  specify eligibility and sizing; submission instructions define result states and required explanations.
 - **Books have one direction.** Selected weights are positive and total `min(100, count × maximum weight)`.
   Server-enforced sizing defaults are 10–25% for Managed and 10–100% for Rebuilt, with at most four
   decimal places. The remainder follows the direction-matched SPY reference, outside ticker limits.
