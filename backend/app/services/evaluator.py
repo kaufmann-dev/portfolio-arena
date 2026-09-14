@@ -191,7 +191,7 @@ def _run_query():
 def _load_run(session: Session, run_id: int, *, lock: bool = False) -> EvaluationRun:
     query = _run_query().where(EvaluationRun.id == run_id)
     if lock:
-        query = query.with_for_update()
+        query = query.with_for_update().execution_options(populate_existing=True)
     run = session.scalars(query).first()
     if run is None:
         raise AdminOpError(404, "Evaluation run not found")
@@ -877,8 +877,14 @@ def claim_runs(
     }
 
 
-def run_control(session: Session, *, run_id: int) -> dict:
+def _require_attempt(run: EvaluationRun, attempt_count: int) -> None:
+    if run.attempt_count != attempt_count:
+        raise AdminOpError(409, "Evaluation attempt is no longer current")
+
+
+def run_control(session: Session, *, run_id: int, attempt_count: int) -> dict:
     run = _load_run(session, run_id)
+    _require_attempt(run, attempt_count)
     return {
         "status": run.status,
         "lease_expires_at": _iso(run.lease_expires_at),
@@ -889,6 +895,7 @@ def submit_run(
     session: Session,
     *,
     run_id: int,
+    attempt_count: int,
     positions: list[dict],
     note: str,
     report: str,
@@ -908,9 +915,11 @@ def submit_run(
             selectinload(EvaluationRun.portfolio).selectinload(Portfolio.agent),
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).first()
     if run is None:
         raise AdminOpError(404, "Evaluation run not found")
+    _require_attempt(run, attempt_count)
     if run.status == "succeeded":
         if run.allocation_id is not None:
             output = run_out(run)
@@ -1015,6 +1024,7 @@ def fail_run(
     session: Session,
     *,
     run_id: int,
+    attempt_count: int,
     error: str,
     cancelled: bool = False,
     report: str | None = None,
@@ -1023,6 +1033,7 @@ def fail_run(
     current_time = now or datetime.now(UTC)
     settings = get_settings(session, lock=True)
     run = _load_run(session, run_id, lock=True)
+    _require_attempt(run, attempt_count)
     if run.status in FINISHED_STATUSES:
         return run_out(run)
     run.error = error[:RUN_ERROR_MAX_LENGTH]

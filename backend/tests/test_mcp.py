@@ -646,3 +646,40 @@ def test_execution_prompt_preview_is_admin_only_and_rejects_missing_portfolio(cl
     )
     assert response.json()["result"]["isError"]
     assert "Portfolio not found" in response.json()["result"]["content"][0]["text"]
+
+
+def test_registered_database_tool_does_not_block_event_loop(sample_portfolio, monkeypatch):
+    import asyncio
+    import threading
+
+    from app.mcp_server import tools
+    from app.mcp_server.server import mcp
+
+    entered = threading.Event()
+    release = threading.Event()
+    original = tools._resolve_portfolio
+
+    def blocking_lookup(*args, **kwargs):
+        entered.set()
+        assert release.wait(2), "MCP database work blocked the event loop"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tools, "_resolve_portfolio", blocking_lookup)
+
+    async def exercise():
+        task = asyncio.create_task(
+            mcp.call_tool("get_portfolio", {"slug_or_id": str(sample_portfolio["id"])})
+        )
+        try:
+            async with asyncio.timeout(2):
+                while not entered.is_set():
+                    await asyncio.sleep(0.001)
+            assert not task.done()
+            release.set()
+            result = await task
+            assert result
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(exercise())

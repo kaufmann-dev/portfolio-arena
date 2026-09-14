@@ -22,6 +22,7 @@ def add_run(portfolio, status):
             execution_model_id="test-model",
             reasoning_effort="high",
             status=status,
+            attempt_count=0 if status == "queued" else 1,
             trigger_kind="manual",
             lease_expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
@@ -44,7 +45,9 @@ def test_delete_portfolio_with_runs(client, admin_headers, sample_portfolio, sta
         assert session.get(PortfolioEvaluatorConfig, sample_portfolio["id"]) is None
         assert session.scalar(select(func.count()).select_from(Allocation)) == 0
         with pytest.raises(AdminOpError, match="not found"):
-            evaluator.submit_run(session, run_id=run_id, positions=[], note="late", report="late")
+            evaluator.submit_run(
+                session, attempt_count=1, run_id=run_id, positions=[], note="late", report="late"
+            )
 
 
 def test_blank_portfolio_name_rejected(client, admin_headers, sample_portfolio):

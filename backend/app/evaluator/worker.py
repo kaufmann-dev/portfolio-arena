@@ -24,7 +24,7 @@ from .agy import (
     agy_result,
     write_agy_config,
 )
-from .config import EvaluatorRuntimeSettings
+from .config import EvaluatorRuntimeSettings, without_web_credentials
 from .muse import (
     fetch_muse_catalog,
     muse_command,
@@ -98,6 +98,7 @@ class PortfolioRef(BaseModel):
 
 class ClaimedRun(BaseModel):
     id: int
+    attempt_count: int = Field(ge=1)
     portfolio: PortfolioRef
     trigger_kind: Literal["scheduled", "manual", "retry"]
     harness: Literal["codex", "muse", "opencode", "agy"]
@@ -166,7 +167,7 @@ required = true
 
 
 def codex_environment(settings: EvaluatorRuntimeSettings) -> dict[str, str]:
-    environment = os.environ.copy()
+    environment = without_web_credentials(os.environ)
     environment["CODEX_HOME"] = str(settings.codex_home)
     environment["ARENA_INTERNAL_MCP_API_KEY"] = settings.internal_token
     environment["MASSIVE_API_KEY"] = settings.massive_api_key
@@ -205,10 +206,18 @@ async def codex_version() -> str:
     process = await asyncio.create_subprocess_exec(
         executable,
         "--version",
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=without_web_credentials(os.environ),
+        start_new_session=True,
     )
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    except TimeoutError:
+        raise RuntimeError("Codex version check timed out") from None
+    finally:
+        await _stop_process(process)
     if process.returncode != 0:
         raise RuntimeError((stderr or stdout).decode(errors="replace").strip())
     return stdout.decode().strip()
@@ -246,11 +255,18 @@ async def codex_is_authenticated(settings: EvaluatorRuntimeSettings) -> bool:
         executable,
         "login",
         "status",
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env=codex_environment(settings),
+        start_new_session=True,
     )
-    return await process.wait() == 0
+    try:
+        return await asyncio.wait_for(process.wait(), timeout=30) == 0
+    except TimeoutError:
+        raise RuntimeError("Codex authentication check timed out") from None
+    finally:
+        await _stop_process(process)
 
 
 async def _opencode_probe(
@@ -325,7 +341,10 @@ async def _agy_probe(
                 await _stop_process(process)
         if process.returncode != 0:
             detail = stderr.decode(errors="replace")[-4000:]
-            if "authentication required" in detail.lower() or "not logged in" in detail.lower():
+            if any(
+                message in detail.lower()
+                for message in ("authentication required", "not logged in", "please sign in")
+            ):
                 raise AgyAuthenticationRequired(
                     f"Run `agy --gemini_dir={shlex.quote(str(settings.agy_home))}` "
                     "in the application terminal to sign in to Antigravity."
@@ -349,10 +368,14 @@ async def _wait_for_cancellation(
     while True:
         await asyncio.sleep(2)
         try:
-            control = await internal_request(settings, "GET", f"/runs/{run.id}/control")
+            control = await internal_request(
+                settings, "GET", f"/runs/{run.id}/control?attempt_count={run.attempt_count}"
+            )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 return "Portfolio or evaluation run was deleted."
+            if exc.response.status_code == 409:
+                return "Evaluation attempt was superseded."
             logger.exception("evaluation_control_poll_failed run_id=%s", run.id)
             continue
         except Exception:
@@ -545,12 +568,12 @@ async def run_agy(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Propos
             with tempfile.TemporaryDirectory(prefix="arena-agy-") as directory:
                 command = agy_command(
                     settings,
-                    "--print",
-                    evaluator_prompt(run),
+                    "--input-format",
+                    "stream-json",
                     "--model",
                     run.execution_model_id,
                     "--output-format",
-                    "json",
+                    "stream-json",
                     "--json-schema",
                     json.dumps(agy_proposal_schema()),
                     "--print-timeout",
@@ -561,14 +584,16 @@ async def run_agy(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Propos
                     command.extend(["--effort", run.reasoning_effort])
                 process = await asyncio.create_subprocess_exec(
                     *command,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=directory,
                     env=agy_environment(settings),
                     start_new_session=True,
                 )
-                stdout, stderr = await _communicate_run(settings, run, process, None)
+                message = {"event": "user", "message": {"content": evaluator_prompt(run)}}
+                stdin = (json.dumps(message) + "\n").encode()
+                stdout, stderr = await _communicate_run(settings, run, process, stdin)
                 if process.returncode != 0:
                     raise RuntimeError(
                         stderr.decode(errors="replace")[-4000:] or "Antigravity execution failed"
@@ -593,6 +618,7 @@ async def evaluate_run(
             "POST",
             f"/runs/{run.id}/submit",
             {
+                "attempt_count": run.attempt_count,
                 "positions": [position.model_dump() for position in proposal.positions],
                 "note": proposal.note,
                 "report": proposal.report,
@@ -606,10 +632,10 @@ async def evaluate_run(
                 settings,
                 "POST",
                 f"/runs/{run.id}/fail",
-                {"error": str(exc), "cancelled": True},
+                {"attempt_count": run.attempt_count, "error": str(exc), "cancelled": True},
             )
         except httpx.HTTPStatusError as failure:
-            if failure.response.status_code != 404:
+            if failure.response.status_code not in {404, 409}:
                 raise
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
@@ -625,6 +651,7 @@ async def evaluate_run(
                 "POST",
                 f"/runs/{run.id}/fail",
                 {
+                    "attempt_count": run.attempt_count,
                     "error": message[-4000:],
                     "cancelled": False,
                     "report": proposal.report if proposal else None,

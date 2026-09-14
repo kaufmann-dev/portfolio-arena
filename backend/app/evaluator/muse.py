@@ -7,11 +7,11 @@ import signal
 import tempfile
 from pathlib import Path
 
-from .config import EvaluatorRuntimeSettings
+from .config import EvaluatorRuntimeSettings, without_web_credentials
 
 
 def muse_environment(settings: EvaluatorRuntimeSettings) -> dict[str, str]:
-    environment = os.environ.copy()
+    environment = without_web_credentials(os.environ)
     environment["XDG_CONFIG_HOME"] = str(settings.muse_config_home)
     environment["XDG_DATA_HOME"] = str(settings.muse_config_home / "data")
     environment["MASSIVE_API_KEY"] = settings.massive_api_key

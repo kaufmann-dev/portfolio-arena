@@ -254,14 +254,16 @@ environment variables (including `OPENAI_API_KEY`). Configure providers in
 login files are preserved; Arena applies its MCP and permission settings through a runtime overlay.
 Project instructions, Claude Code context, and external skills are disabled for evaluation.
 
-Antigravity runs through `agy --print --output-format json --json-schema` using its persisted
-Google account login. Its dedicated `AGY_HOME` is passed through the native `--gemini_dir` option;
+Antigravity runs through `agy --input-format stream-json --output-format stream-json --json-schema`
+using its persisted Google account login. Each attempt sends one complete prompt through stdin,
+avoiding operating-system argument limits. Its dedicated `AGY_HOME` is passed through the native
+`--gemini_dir` option;
 `HOME` is unchanged. Arena replaces only `antigravity-cli/settings.json` and `config/mcp_config.json`
 in that directory, preserving native login and conversation storage. Evaluations use temporary
 workspaces, allow web reads and the same read-only Arena/Massive MCP tools, deny shell commands,
 file access and browser interaction, and disable slash-command expansion. Unapproved tools are
-rejected by headless mode. The worker validates `structured_output` and rejects incomplete results
-and print timeouts, even when the CLI reports `SUCCESS` with exit code zero.
+rejected by headless mode. The worker requires one completed result, validates its `structured_output`,
+and rejects incomplete results and print timeouts, even when the CLI reports `SUCCESS` with exit code zero.
 The generation schema omits the nullable `blocked_reason` enum because Gemini rejects null enum
 entries. Arena's unchanged proposal validator still enforces the exact allowed reasons and status rules.
 
@@ -279,7 +281,9 @@ harness's limit until they stop. An unavailable harness does not stop the other 
 
 Runtime credentials are deployment-only: `MASSIVE_API_KEY` is passed to both the web process for
 valuations and the worker for research, while the internal worker bearer token is generated in
-memory at startup.
+memory at startup. Database and OIDC secrets are excluded from worker and CLI environments.
+Worker control, submission, and failure requests carry the claimed attempt number; requests from
+superseded attempts cannot change the replacement run.
 
 ### Upgrading to versioned experiments
 
@@ -358,11 +362,10 @@ an in-memory HTTP transport, so nothing hits the network.
   needed.
 - Deploy. The tracked `nixpacks.toml` builds the SPA and starts one supervisor that runs migrations,
   FastAPI, the scheduler, and the evaluator worker automatically.
-- Each deployment or container restart runs `npm run update:harnesses` to install the latest stable
-  Codex, Muse Code, OpenCode, and Antigravity CLIs before launching the supervisor, including when the image build was cached.
-  Codex and OpenCode npm packages are refreshed together to retain both executables.
-  Startup requires npm registry, Meta, and Google Antigravity download access and stops if any update fails. Redeploy
-  or restart to pick up subsequent releases.
+- Image builds run `npm run update:harnesses` to install the latest stable Codex, Muse Code,
+  OpenCode, and Antigravity CLIs. Codex and OpenCode npm packages are refreshed together to retain
+  both executables. Installer failures fail the build; container startup uses the installed binaries
+  without downloading updates. Rebuild without cache to pick up subsequent CLI releases.
   The image includes `bubblewrap` for Linux sandboxing and `curl` for the Muse and Antigravity installers.
 - When replacing the former two-application setup, stop the old standalone evaluator before
   deploying this version so both schedulers cannot create work during the cutover.

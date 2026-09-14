@@ -273,7 +273,9 @@ def test_claims_enforce_independent_harness_limits_across_workers(sample_agent, 
         run_id = first_run[0]["id"]
         evaluator.cancel_run(session, run_id=run_id, now=now)
         assert claim(first_harness, worker="third") == []
-        evaluator.fail_run(session, run_id=run_id, error="Cancelled.", cancelled=True, now=now)
+        evaluator.fail_run(
+            session, attempt_count=1, run_id=run_id, error="Cancelled.", cancelled=True, now=now
+        )
         released = claim(first_harness, worker="third")
         assert [run["portfolio"]["id"] for run in released] == [portfolios_by_harness[first_harness][2]["id"]]
         for harness in agents:

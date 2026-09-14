@@ -35,6 +35,7 @@ def _run(reasoning_effort: str | None = "xhigh") -> ClaimedRun:
     return ClaimedRun.model_validate(
         {
             "id": 17,
+            "attempt_count": 1,
             "portfolio": {"id": 2, "slug": "test-portfolio", "name": "Test Portfolio"},
             "trigger_kind": "manual",
             "harness": "codex",
@@ -187,6 +188,7 @@ def test_blocked_codex_result_fails_without_submission(tmp_path, monkeypatch):
             "POST",
             "/runs/17/fail",
             {
+                "attempt_count": 1,
                 "error": "EvaluationBlocked: portfolio_unavailable: get_portfolio was unavailable",
                 "report": "",
                 "cancelled": False,
@@ -206,8 +208,10 @@ def test_scheduler_refills_completed_slots_while_other_runs_continue(tmp_path, m
     def run_payload(run_id: int) -> dict:
         return {
             "id": run_id,
+            "attempt_count": 1,
             "portfolio": {
                 "id": run_id,
+                "attempt_count": 1,
                 "slug": f"portfolio-{run_id}",
                 "name": f"Portfolio {run_id}",
             },
@@ -331,3 +335,57 @@ def test_deleted_run_cancellation_needs_no_failure_record(tmp_path, monkeypatch)
     monkeypatch.setattr("app.evaluator.worker.run_codex", cancelled)
     monkeypatch.setattr("app.evaluator.worker.internal_request", missing_run)
     asyncio.run(evaluate_run(_settings(tmp_path), _run()))
+
+
+def test_all_harnesses_exclude_web_credentials_and_preserve_research_access(tmp_path, monkeypatch):
+    from app.evaluator.agy import agy_environment
+    from app.evaluator.muse import muse_environment
+    from app.evaluator.opencode import opencode_environment
+
+    forbidden = {"DATABASE_URL", "ARENA_OIDC_CLIENT_SECRET", "ARENA_OIDC_STATE_SECRET"}
+    for key in forbidden:
+        monkeypatch.setenv(key, "web-only-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "native-provider-key")
+    for make_environment in (codex_environment, muse_environment, opencode_environment, agy_environment):
+        environment = make_environment(_settings(tmp_path))
+        assert forbidden.isdisjoint(environment)
+        assert environment["MASSIVE_API_KEY"] == "massive-secret"
+    assert opencode_environment(_settings(tmp_path))["ANTHROPIC_API_KEY"] == "native-provider-key"
+
+
+def test_codex_readiness_cancellation_reaps_process(tmp_path, monkeypatch):
+    import sys
+
+    from app.evaluator import worker
+
+    real_launch = asyncio.create_subprocess_exec
+    processes = []
+
+    async def launch(*args, **kwargs):
+        process = await real_launch(sys.executable, "-c", "import time; time.sleep(30)", **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(worker.shutil, "which", lambda _: sys.executable)
+
+    async def exercise(probe):
+        task = asyncio.create_task(probe)
+        try:
+            async with asyncio.timeout(2):
+                while not processes:
+                    await asyncio.sleep(0.001)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            assert processes[0].returncode is not None
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            for process in processes:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            processes.clear()
+
+    asyncio.run(exercise(worker.codex_is_authenticated(_settings(tmp_path))))
+    asyncio.run(exercise(worker.codex_version()))

@@ -30,7 +30,10 @@ def _run(**kwargs):
 
 def _output(proposal):
     return json.dumps(
-        {"status": "SUCCESS", "response": "Ignore this prose", "structured_output": proposal}
+        {
+            "event": "result",
+            "result": {"status": "SUCCESS", "response": "Ignore this prose", "structured_output": proposal},
+        }
     ).encode()
 
 
@@ -92,7 +95,7 @@ def test_invalid_model_listing_is_rejected(value):
 )
 def test_incomplete_or_failed_result_is_rejected(value):
     with pytest.raises(ValueError):
-        agy_result(json.dumps(value).encode(), b"")
+        agy_result(json.dumps({"event": "result", "result": value}).encode(), b"")
 
 
 def test_structured_result_ignores_prose_but_rejects_timeout_even_with_success():
@@ -128,6 +131,7 @@ def _fake_cli(monkeypatch, result, *, code=0, stderr=b""):
         returncode = code
 
         async def communicate(self, prompt=None):
+            captured[-1][1]["prompt"] = prompt
             return result, stderr
 
     async def launch(*command, **options):
@@ -157,17 +161,25 @@ def test_execution_submits_only_validated_structured_result(tmp_path, monkeypatc
 
     monkeypatch.setattr(worker, "internal_request", request)
     asyncio.run(worker.evaluate_run(_settings(tmp_path), _run(effort=effort)))
-    assert requests == [("/runs/17/submit", {key: proposal[key] for key in ("positions", "note", "report")})]
+    assert requests == [
+        (
+            "/runs/17/submit",
+            {"attempt_count": 1, **{key: proposal[key] for key in ("positions", "note", "report")}},
+        )
+    ]
     command, options = calls[0]
     assert command[:2] == ("agy", f"--gemini_dir={_settings(tmp_path).agy_home}")
-    assert command[command.index("--print") + 1] == _run().execution_prompt
+    assert "--print" not in command
+    assert command[command.index("--input-format") + 1] == "stream-json"
+    assert command[command.index("--output-format") + 1] == "stream-json"
+    assert json.loads(options["prompt"]) == {"event": "user", "message": {"content": _run().execution_prompt}}
     assert command[command.index("--model") + 1] == _run().execution_model_id
     assert "--json-schema" in command
     assert json.loads(command[command.index("--json-schema") + 1]) == agy_proposal_schema()
     assert "--disable-slash-commands" in command
     assert "--dangerously-skip-permissions" not in command
     assert options["start_new_session"] is True
-    assert options["stdin"] == asyncio.subprocess.DEVNULL
+    assert options["stdin"] == asyncio.subprocess.PIPE
     assert not Path(options["cwd"]).exists()
     if effort is None:
         assert "--effort" not in command
@@ -221,10 +233,21 @@ def test_preflight_enforces_model_deadline_and_cancellation(tmp_path, monkeypatc
         )
 
 
-def test_native_authentication_error_has_login_hint(tmp_path, monkeypatch):
-    _fake_cli(monkeypatch, b"", code=1, stderr=b"Error: authentication required. Run 'agy' to log in.")
-    with pytest.raises(AgyAuthenticationRequired, match="agy --gemini_dir="):
-        asyncio.run(worker._agy_probe(_settings(tmp_path), "models"))
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        b"Error: authentication required. Run 'agy' to log in.",
+        b"Error: not logged in.",
+        b"Fetching available models...\nError: Please sign in to view available models. "
+        b"Launch the CLI without arguments to sign in.",
+    ],
+)
+def test_native_authentication_error_has_login_hint(tmp_path, monkeypatch, diagnostic):
+    settings = _settings(tmp_path / "directory with spaces")
+    _fake_cli(monkeypatch, b"", code=1, stderr=diagnostic)
+    with pytest.raises(AgyAuthenticationRequired) as error:
+        asyncio.run(worker._agy_probe(settings, "models"))
+    assert f"agy --gemini_dir='{settings.agy_home}'" in str(error.value)
 
 
 @pytest.mark.parametrize("available", [True, False])
@@ -272,3 +295,40 @@ def test_scheduler_claims_only_authenticated_agy_work(tmp_path, monkeypatch, ava
         if available
         else []
     )
+
+
+def test_stream_ignores_progress_and_rejects_missing_or_multiple_results():
+    progress = b'{"event":"init"}\n{"event":"step_update"}\n'
+    result = _output(_proposal())
+    assert agy_result(progress + result, b"") == _proposal()
+    for output in (progress, result + b"\n" + result):
+        with pytest.raises(ValueError, match="exactly one"):
+            agy_result(output, b"")
+
+
+def test_large_prompt_reaches_cli_intact_through_stdin(tmp_path, monkeypatch):
+    import sys
+
+    real_launch = asyncio.create_subprocess_exec
+    prompt = "research context " * 10_000
+    run = _run().model_copy(update={"execution_prompt": prompt})
+    output = _output(_proposal())
+
+    async def launch(*command, **options):
+        assert prompt not in command
+        script = (
+            "import json,sys; value=json.load(sys.stdin); "
+            f"assert value == {{'event':'user','message':{{'content':{prompt!r}}}}}; "
+            f"sys.stdout.buffer.write({output!r})"
+        )
+        # Use a script file so the test itself does not exceed Linux's argv limit.
+        script_path = tmp_path / "fake_agy.py"
+        script_path.write_text(script)
+        return await real_launch(sys.executable, str(script_path), **options)
+
+    async def models(*args, **kwargs):
+        return {run.execution_model_id}
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(worker, "agy_available_models", models)
+    assert asyncio.run(worker.run_agy(_settings(tmp_path), run)).model_dump() == _proposal()

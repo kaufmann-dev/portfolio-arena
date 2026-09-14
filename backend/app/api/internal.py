@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..db import get_session
@@ -58,8 +58,8 @@ def import_muse_catalog(body: MuseCatalogImportIn, session: Session = Depends(ge
 
 
 @router.get("/runs/{run_id}/control")
-def run_control(run_id: int, session: Session = Depends(get_session)):
-    return _run(evaluator.run_control, session, run_id=run_id)
+def run_control(run_id: int, attempt_count: int = Query(ge=1), session: Session = Depends(get_session)):
+    return _run(evaluator.run_control, session, run_id=run_id, attempt_count=attempt_count)
 
 
 @router.post("/runs/{run_id}/submit")
@@ -72,6 +72,7 @@ def submit_run(
         evaluator.submit_run,
         session,
         run_id=run_id,
+        attempt_count=body.attempt_count,
         positions=_positions(body),
         note=body.note,
         report=body.report,
@@ -88,6 +89,7 @@ def fail_run(
         evaluator.fail_run,
         session,
         run_id=run_id,
+        attempt_count=body.attempt_count,
         error=body.error,
         cancelled=body.cancelled,
         report=body.report,

@@ -1,8 +1,17 @@
 """Deployment-only evaluator configuration."""
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def without_web_credentials(environment: Mapping[str, str]) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in environment.items()
+        if key not in {"DATABASE_URL", "ARENA_OIDC_CLIENT_SECRET", "ARENA_OIDC_STATE_SECRET"}
+    }
 
 
 @dataclass(frozen=True)

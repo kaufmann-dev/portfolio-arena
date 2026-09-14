@@ -136,7 +136,9 @@ def test_delete_run_without_result_blocks_late_worker_submission(
         assert session.get(EvaluationRun, run_id) is None
         assert session.get(Allocation, sample_portfolio["allocation"]["id"]) is not None
         with pytest.raises(AdminOpError, match="not found"):
-            evaluator.submit_run(session, run_id=run_id, positions=[], note="late", report="late")
+            evaluator.submit_run(
+                session, attempt_count=1, run_id=run_id, positions=[], note="late", report="late"
+            )
 
 
 def test_delete_failed_parent_keeps_later_retry(client, admin_headers, sample_portfolio):
@@ -184,6 +186,7 @@ def test_history_deletion_waits_for_submission_and_removes_its_result(
         with session_factory()() as session:
             return evaluator.submit_run(
                 session,
+                attempt_count=1,
                 run_id=run_id,
                 positions=[{"symbol": "MSFT", "weight_pct": 100}],
                 note="late",

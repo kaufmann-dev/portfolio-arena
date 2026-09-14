@@ -245,7 +245,11 @@ def test_execution_uses_snapshot_and_submits_validated_result(tmp_path, monkeypa
     monkeypatch.setattr(worker, "internal_request", request)
     asyncio.run(worker.evaluate_run(_settings(tmp_path), _run(effort=variant)))
     assert submissions == [
-        ("POST", "/runs/17/submit", {key: proposal[key] for key in ("positions", "note", "report")})
+        (
+            "POST",
+            "/runs/17/submit",
+            {"attempt_count": 1, **{key: proposal[key] for key in ("positions", "note", "report")}},
+        )
     ]
     call = captured[0]
     command = call["command"]

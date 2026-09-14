@@ -10,10 +10,11 @@ nixpkgsArchive = "23f9169c4ccce521379e602cc82ed873a1f1b52b"
 aptPkgs = ["bubblewrap", "curl"]
 
 [phases.build]
-cmds = ["cd frontend && npm ci && npm run build"]
+dependsOn = ["install", "node:install"]
+cmds = ["npm run update:harnesses", "cd frontend && npm ci && npm run build"]
 
 # Launch one supervisor that starts the web API and integrated evaluator worker.
 # FastAPI's lifespan runs pending Alembic migrations before becoming healthy.
-# Refresh all four harnesses even when the image build was cached, then hand signals to Python.
+# Harnesses are installed during the build; startup needs no installer downloads.
 [start]
-cmd = "npm run update:harnesses && cd backend && exec python -m app.production"
+cmd = "cd backend && exec python -m app.production"

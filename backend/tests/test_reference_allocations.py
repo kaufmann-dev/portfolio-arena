@@ -234,6 +234,7 @@ def test_successful_abstention_is_terminal_and_cannot_retry(
         if recover:
             failed = evaluator.fail_run(
                 session,
+                attempt_count=1,
                 run_id=run_id,
                 error="temporary research outage",
                 report="Research interrupted.",
@@ -244,6 +245,7 @@ def test_successful_abstention_is_terminal_and_cannot_retry(
             assert len(claim()["runs"]) == 1
         submitted = evaluator.submit_run(
             session,
+            attempt_count=2 if recover else 1,
             run_id=run_id,
             positions=[],
             note="No qualifying securities.",
@@ -258,7 +260,10 @@ def test_successful_abstention_is_terminal_and_cannot_retry(
         assert run["report"].startswith("Research completed")
         assert claim()["runs"] == []
         assert (
-            evaluator.fail_run(session, run_id=run_id, error="late failure", now=now)["status"] == "succeeded"
+            evaluator.fail_run(
+                session, attempt_count=2 if recover else 1, run_id=run_id, error="late failure", now=now
+            )["status"]
+            == "succeeded"
         )
         with pytest.raises(AdminOpError, match="Only failed"):
             evaluator.retry_run(session, run_id=run_id)

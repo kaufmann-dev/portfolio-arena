@@ -70,6 +70,7 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
 
         submitted = evaluator.submit_run(
             session,
+            attempt_count=1,
             run_id=run_id,
             positions=[
                 {"symbol": "AAPL", "weight_pct": 55, "note": "consumer resilience"},
@@ -125,6 +126,7 @@ def test_running_managed_short_cannot_submit_after_liquidation(
         with pytest.raises(AdminOpError, match="Reset this liquidated short portfolio"):
             evaluator.submit_run(
                 session,
+                attempt_count=1,
                 run_id=run_id,
                 positions=[
                     {"symbol": "AAPL", "weight_pct": 55, "note": "consumer resilience"},
@@ -218,6 +220,7 @@ def test_queued_scheduled_run_retries_and_submits_after_market_close(sample_port
         run_id = first_claim["runs"][0]["id"]
         failed = evaluator.fail_run(
             session,
+            attempt_count=1,
             run_id=run_id,
             error="temporary research failure",
             now=after_close + timedelta(minutes=1),
@@ -236,6 +239,7 @@ def test_queued_scheduled_run_retries_and_submits_after_market_close(sample_port
 
         submitted = evaluator.submit_run(
             session,
+            attempt_count=2,
             run_id=run_id,
             positions=[
                 {"symbol": "AAPL", "weight_pct": 55, "note": "consumer resilience"},
@@ -330,6 +334,7 @@ def test_running_cancel_request_finishes_as_cancelled(sample_portfolio):
         requested = evaluator.cancel_run(session, run_id=run_id, now=now)
         cancelled = evaluator.fail_run(
             session,
+            attempt_count=1,
             run_id=run_id,
             error="Cancelled by an administrator.",
             cancelled=True,
@@ -362,7 +367,7 @@ def test_failed_run_retry_creates_linked_manual_run(sample_portfolio):
             limit=1,
             now=now,
         )
-        failed = evaluator.fail_run(session, run_id=run_id, error="research failed", now=now)
+        failed = evaluator.fail_run(session, attempt_count=1, run_id=run_id, error="research failed", now=now)
         retried = evaluator.retry_run(session, run_id=run_id, now=now)
 
     assert failed["status"] == "failed"
@@ -477,6 +482,7 @@ def test_opening_scheduled_run_keeps_boundary_when_submitted_late(sample_agent, 
         )
         submitted = evaluator.submit_run(
             session,
+            attempt_count=1,
             run_id=claimed["id"],
             positions=[
                 {"symbol": "AAPL", "weight_pct": 55},
@@ -547,6 +553,7 @@ def test_paused_version_allows_completion_but_not_retries(sample_portfolio, outc
         if outcome == "submit":
             run = evaluator.submit_run(
                 session,
+                attempt_count=1,
                 run_id=run_id,
                 positions=[
                     {"symbol": "AAPL", "weight_pct": 55},
@@ -559,7 +566,7 @@ def test_paused_version_allows_completion_but_not_retries(sample_portfolio, outc
             assert run["status"] == "succeeded"
         else:
             if outcome == "fail":
-                evaluator.fail_run(session, run_id=run_id, error="Research failed", now=now)
+                evaluator.fail_run(session, attempt_count=1, run_id=run_id, error="Research failed", now=now)
             else:
                 evaluator.claim_runs(
                     session,
@@ -634,6 +641,7 @@ def test_evaluator_waits_for_concurrent_manual_decision_before_duplicate_check(s
             worker_started.set()
             return evaluator.submit_run(
                 session,
+                attempt_count=1,
                 run_id=run_id,
                 positions=positions,
                 note="Worker proposal",
@@ -673,3 +681,68 @@ def test_evaluator_waits_for_concurrent_manual_decision_before_duplicate_check(s
         ).all()
         assert len(decisions) == 1
         assert decisions[0].note == "Manual proposal"
+
+
+@pytest.mark.parametrize("action", ["control", "submit", "fail"])
+def test_superseded_attempt_cannot_control_or_modify_replacement(client, sample_agent, sample_prompt, action):
+    from app.db import session_factory
+
+    now = datetime(2026, 9, 14, 13, tzinfo=UTC)
+    later = now + timedelta(seconds=121)
+    with session_factory()() as session:
+        portfolio = admin_ops.create_portfolio(
+            session,
+            name="Lease fencing",
+            agent_id=sample_agent["id"],
+            prompt_id=sample_prompt["id"],
+            version_id=1,
+            prompt_mode="managed",
+            direction="long",
+        )
+        evaluator.update_settings(session, attempt_timeout_seconds=60, max_attempts=2)
+        _enable(session, portfolio)
+        evaluator.enqueue_manual_runs(session, portfolio_ids=[portfolio["id"]], now=now)
+        first = evaluator.claim_runs(
+            session, worker_id="old", harness="codex", harness_version="test", limit=1, now=now
+        )["runs"][0]
+        second = evaluator.claim_runs(
+            session, worker_id="replacement", harness="codex", harness_version="test", limit=1, now=later
+        )["runs"][0]
+    assert first["id"] == second["id"] and second["attempt_count"] == 2
+    headers = {"Authorization": "Bearer test-internal-worker-token"}
+    path = f"/api/internal/evaluator/runs/{first['id']}/{action}"
+    if action == "control":
+        response = client.get(path, params={"attempt_count": first["attempt_count"]}, headers=headers)
+    else:
+        payload = (
+            {"positions": [], "note": "Old attempt", "report": "Old research"}
+            if action == "submit"
+            else {"error": "Old failure", "cancelled": True}
+        )
+        response = client.post(
+            path, json={"attempt_count": first["attempt_count"], **payload}, headers=headers
+        )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "Evaluation attempt is no longer current"
+    with session_factory()() as session:
+        assert evaluator.run_control(session, run_id=second["id"], attempt_count=2)["status"] == "running"
+        submitted = evaluator.submit_run(
+            session,
+            run_id=second["id"],
+            attempt_count=2,
+            positions=[],
+            note="Current research",
+            report="No qualifying positions",
+            now=later + timedelta(seconds=1),
+        )
+        assert submitted["run"]["status"] == "succeeded"
+        replay = evaluator.submit_run(
+            session,
+            run_id=second["id"],
+            attempt_count=2,
+            positions=[],
+            note="Current research",
+            report="No qualifying positions",
+            now=later + timedelta(seconds=2),
+        )
+        assert replay == submitted
