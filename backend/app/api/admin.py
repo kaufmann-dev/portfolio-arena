@@ -412,6 +412,16 @@ def put_app_settings(body: SettingsUpdate, session: Session = Depends(get_sessio
     return _run(admin_ops.update_app_settings, session, **body.model_dump())
 
 
+@router.get("/admin/settings/prompts/{key}/versions")
+def list_setting_prompt_versions(key: str, session: Session = Depends(get_session)):
+    return _run(admin_ops.list_setting_prompt_versions, session, key)
+
+
+@router.post("/admin/settings/prompts/{key}/versions/{version}/restore")
+def restore_setting_prompt_version(key: str, version: int, session: Session = Depends(get_session)):
+    return _run(admin_ops.restore_setting_prompt_version, session, key, version)
+
+
 @router.delete("/prices/cache")
 def clear_price_cache(session: Session = Depends(get_session)):
     deleted = price_cache.clear_cache(session)

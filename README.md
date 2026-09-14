@@ -170,8 +170,16 @@ shown once and only SHA-256 hashes are stored.
   `rebuilt_manual_submission_instructions`. Read settings first and send all fields back; updates
   validate atomically. Allocation wording requires `{{derived_max_positions}}`,
   `{{min_position_weight_pct}}`, and `{{max_position_weight_pct}}`; submission blocks are literal text.
-  These fields are also editable in Admin → Settings. Startup seeds missing fields without replacing
-  saved edits. Changes apply to subsequent manual prompts and worker claims, not already-running workers.
+  These eight fields are also editable in Admin → Settings, each with independent immutable history
+  and a Restore action. Changed text creates a revision through either the UI or MCP; unchanged saves
+  and numeric allocation-policy changes do not. History and restore are browser-admin-only. Restoring
+  saves a new revision immediately for that field, preserving other settings and older revisions.
+  Migration `0030` imports v1 from Git commit `865251e` (before the September 14, 2026 edits) and v2
+  from each currently saved value, falling back to its default only when missing. The two direction
+  blocks have identical historical and default text. Imported timestamps record import time;
+  allocation-policy numeric interpolation is represented by the editable template placeholders.
+  Startup seeds missing fields and history without replacing saved edits. Changes apply to subsequent
+  manual prompts and worker claims, not already-running workers.
 - Edit strategy variants with `update_prompt`; use `preview_execution_prompt(portfolio_id, automated)`
   to inspect the assembled saved text without running a portfolio. Previews omit run-specific timing
   and harness JSON framing. Server-enforced sizing, market timing, permissions, and result schemas

@@ -66,6 +66,11 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   the operational app surface as API-key-authenticated tools (`Authorization: Bearer <key>` or
   `X-API-Key`, no anonymous access). API-key management and prompt revision history/restore
   remain browser-admin-only. Unused prompts may be deleted unless a recorded run references a revision.
+  Settings prompt history and restore are also browser-admin-only. Shared prompt saves (including MCP)
+  append immutable `SettingPromptVersion` rows only for changed text; restores append a new revision.
+  Lock `Setting` rows in key order and commit active values and snapshots together. Numeric sizing
+  settings are not versioned. Seed v1 from the frozen pre-September-14 Git baseline and v2 from saved
+  values; never overwrite existing history. Imported timestamps are import times, not historical edit times.
   Other tools serialize with `admin=True` since the endpoint is key-gated. Keys are stored
   as SHA-256 hashes in the `api_keys` table (`security.py` helpers).
 

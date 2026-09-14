@@ -26,6 +26,7 @@ from ..models import (
     Prompt,
     PromptVersion,
     Setting,
+    SettingPromptVersion,
     Signal,
     SignalPosition,
 )
@@ -37,6 +38,7 @@ from ..seed import (
     REBUILT_MAX_POSITION_WEIGHT_PCT_KEY,
     REBUILT_MIN_POSITION_WEIGHT_PCT_KEY,
     REBUILT_WRAPPER_PROMPT_KEY,
+    SETTINGS_PROMPT_DEFAULTS,
     SHORT_DIRECTION_INSTRUCTIONS_KEY,
 )
 from ..util import slugify
@@ -1595,6 +1597,84 @@ def delete_signal(session: Session, signal_id: int) -> dict:
 # --- Settings ---------------------------------------------------------------
 
 
+def _validate_setting_prompt(key: str, value: str) -> str:
+    if key not in SETTINGS_PROMPT_DEFAULTS:
+        raise AdminOpError(404, "Settings prompt not found")
+    if key.endswith("wrapper_prompt"):
+        validator = validate_wrapper_prompt
+    elif key.endswith("direction_instructions"):
+        validator = validate_direction_instructions
+    elif key == "allocation_policy_instructions":
+        validator = validate_allocation_policy_instructions
+    else:
+        validator = validate_submission_instructions
+    try:
+        return validator(value)
+    except ValueError as exc:
+        raise AdminOpError(422, str(exc)) from None
+
+
+def list_setting_prompt_versions(session: Session, key: str) -> dict:
+    if key not in SETTINGS_PROMPT_DEFAULTS:
+        raise AdminOpError(404, "Settings prompt not found")
+    versions = session.scalars(
+        select(SettingPromptVersion)
+        .where(SettingPromptVersion.key == key)
+        .order_by(SettingPromptVersion.version.desc())
+    ).all()
+    return {
+        "key": key,
+        "current_version": versions[0].version if versions else None,
+        "versions": [
+            {
+                "version": version.version,
+                "text": version.text,
+                "created_at": version.created_at.isoformat(),
+                "restored_from_version": version.restored_from_version,
+            }
+            for version in versions
+        ],
+    }
+
+
+def _write_setting_prompt(
+    session: Session, setting: Setting, value: str, *, restored_from_version: int | None = None
+) -> None:
+    """Caller holds the setting row lock until the value and snapshot are committed."""
+    if setting.value == value and restored_from_version is None:
+        return
+    latest = session.scalar(
+        select(func.max(SettingPromptVersion.version)).where(SettingPromptVersion.key == setting.key)
+    )
+    if latest is None:
+        raise RuntimeError(f"Settings prompt {setting.key} has no initial revision")
+    session.add(
+        SettingPromptVersion(
+            key=setting.key, version=latest + 1, text=value, restored_from_version=restored_from_version
+        )
+    )
+    setting.value = value
+
+
+def restore_setting_prompt_version(session: Session, key: str, version: int) -> dict:
+    if key not in SETTINGS_PROMPT_DEFAULTS:
+        raise AdminOpError(404, "Settings prompt not found")
+    setting = session.scalars(
+        select(Setting).where(Setting.key == key).with_for_update().execution_options(populate_existing=True)
+    ).one()
+    source = session.scalar(
+        select(SettingPromptVersion).where(
+            SettingPromptVersion.key == key, SettingPromptVersion.version == version
+        )
+    )
+    if source is None:
+        raise AdminOpError(404, "Settings prompt version not found")
+    value = _validate_setting_prompt(key, source.text)
+    _write_setting_prompt(session, setting, value, restored_from_version=source.version)
+    session.commit()
+    return list_setting_prompt_versions(session, key)
+
+
 def _setting_value(session: Session, key: str, fallback: str) -> str:
     setting = session.get(Setting, key)
     return setting.value if setting is not None else fallback
@@ -1712,33 +1792,36 @@ def update_app_settings(
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise AdminOpError(422, str(exc)) from None
+    prompts = {
+        "managed_wrapper_prompt": managed_wrapper_prompt,
+        "rebuilt_wrapper_prompt": rebuilt_wrapper_prompt,
+        "long_direction_instructions": long_direction_instructions,
+        "short_direction_instructions": short_direction_instructions,
+        "allocation_policy_instructions": allocation_policy_instructions,
+        "automated_submission_instructions": automated_submission_instructions,
+        "managed_manual_submission_instructions": managed_manual_submission_instructions,
+        "rebuilt_manual_submission_instructions": rebuilt_manual_submission_instructions,
+    }
     values = {
-        "allocation_policy_instructions": validate_allocation_policy_instructions(
-            allocation_policy_instructions
-        ),
-        "automated_submission_instructions": validate_submission_instructions(
-            automated_submission_instructions
-        ),
-        "managed_manual_submission_instructions": validate_submission_instructions(
-            managed_manual_submission_instructions
-        ),
-        "rebuilt_manual_submission_instructions": validate_submission_instructions(
-            rebuilt_manual_submission_instructions
-        ),
+        **{key: _validate_setting_prompt(key, value) for key, value in prompts.items()},
         MANAGED_MIN_POSITION_WEIGHT_PCT_KEY: str(managed_policy["min_position_weight_pct"]),
         MANAGED_MAX_POSITION_WEIGHT_PCT_KEY: str(managed_policy["max_position_weight_pct"]),
         REBUILT_MIN_POSITION_WEIGHT_PCT_KEY: str(rebuilt_policy["min_position_weight_pct"]),
         REBUILT_MAX_POSITION_WEIGHT_PCT_KEY: str(rebuilt_policy["max_position_weight_pct"]),
-        MANAGED_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(managed_wrapper_prompt),
-        REBUILT_WRAPPER_PROMPT_KEY: validate_wrapper_prompt(rebuilt_wrapper_prompt),
-        LONG_DIRECTION_INSTRUCTIONS_KEY: validate_direction_instructions(long_direction_instructions),
-        SHORT_DIRECTION_INSTRUCTIONS_KEY: validate_direction_instructions(short_direction_instructions),
     }
-    for key, value in values.items():
-        setting = session.get(Setting, key)
-        if setting is None:
-            session.add(Setting(key=key, value=value))
+    settings = session.scalars(
+        select(Setting)
+        .where(Setting.key.in_(values))
+        .order_by(Setting.key)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(settings) != len(values):
+        raise RuntimeError("Application settings have not been seeded")
+    for setting in settings:
+        if setting.key in SETTINGS_PROMPT_DEFAULTS:
+            _write_setting_prompt(session, setting, values[setting.key])
         else:
-            setting.value = value
+            setting.value = values[setting.key]
     session.commit()
     return get_app_settings(session)
