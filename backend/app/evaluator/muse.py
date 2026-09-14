@@ -74,7 +74,7 @@ async def fetch_muse_catalog(settings: EvaluatorRuntimeSettings) -> dict:
     appear successful. The handshake creates no session and starts no inference.
     """
     if muse_credential(settings) is None:
-        raise ValueError("Muse authentication is required to import Meta models")
+        raise ValueError("Muse authentication is required to discover Meta models")
     with tempfile.TemporaryDirectory(prefix="arena-muse-catalog-") as directory:
         data_directory = Path(directory) / "data"
         environment = muse_environment(settings)

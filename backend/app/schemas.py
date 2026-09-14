@@ -246,10 +246,6 @@ class EvaluatorClaimIn(BaseModel):
     limit: int = Field(ge=1, le=20)
 
 
-class MuseCatalogImportIn(BaseModel):
-    data: list[dict] = Field(min_length=1, max_length=1000)
-
-
 class EvaluatorRunSubmitIn(BaseModel):
     attempt_count: int = Field(ge=1)
     positions: list[PositionIn]

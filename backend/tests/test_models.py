@@ -469,3 +469,51 @@ def test_runs_snapshot_agent_profile_and_model_execution_id(
     assert second["execution_model_id"] == "gpt-5.6-sol-next"
     assert second["reasoning_effort"] == "high"
     assert second["agent"]["name"] == "GPT-5.6 Sol (Codex, High)"
+
+
+@pytest.mark.parametrize("harness", ["codex", "muse", "opencode", "agy"])
+def test_startup_preserves_removed_models_and_capabilities(client, admin_headers, harness):
+    from app.db import session_factory
+    from app.seed import run_seed
+
+    created = client.post(
+        "/api/models",
+        headers=admin_headers,
+        json={
+            "name": "Admin managed model",
+            "capabilities": [
+                {
+                    "harness": harness,
+                    "execution_model_id": "provider/model" if harness == "opencode" else "test-model",
+                    "reasoning_efforts": [],
+                }
+            ],
+        },
+    )
+    assert created.status_code == 201
+    model_id = created.json()["id"]
+    assert (
+        client.patch(f"/api/models/{model_id}", headers=admin_headers, json={"capabilities": []}).status_code
+        == 200
+    )
+
+    with session_factory()() as session:
+        run_seed(session)
+    models = client.get("/api/models", headers=admin_headers).json()["models"]
+    assert next(model for model in models if model["id"] == model_id)["capabilities"] == []
+
+    assert client.delete(f"/api/models/{model_id}", headers=admin_headers).status_code == 200
+    with session_factory()() as session:
+        run_seed(session)
+    models = client.get("/api/models", headers=admin_headers).json()["models"]
+    assert all(model["id"] != model_id for model in models)
+
+
+def test_internal_workers_cannot_import_models(client):
+    response = client.post(
+        "/api/internal/evaluator/models/import-muse",
+        headers={"Authorization": "Bearer test-internal-worker-token"},
+        json={"data": [{"id": "muse-spark-1.2"}]},
+    )
+    # The SPA catch-all rejects POST requests to removed API routes.
+    assert response.status_code == 405

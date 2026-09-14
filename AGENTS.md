@@ -37,7 +37,8 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   behind the `admin=True` flag in `services/serialize.py`. Never expose them from `public.py`.
 - `backend/app/evaluator/` runs the integrated Codex, Muse Code, OpenCode, and Antigravity workers. Each harness has separate
   authentication and health; the concurrency setting applies separately to each harness across its workers.
-  Muse imports its authenticated model catalog through a private internal route.
+  Muse checks its authenticated catalog for readiness without importing model records.
+  Model definitions and harness capabilities are administrator-managed for every harness.
   OpenCode models are manually configured with `provider/model` execution IDs and optional custom variants;
   native discovery checks readiness and execution support without importing model records. Harness definitions
   declare fixed or custom reasoning-effort controls. OpenCode keeps native provider configuration and login

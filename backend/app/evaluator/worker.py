@@ -668,7 +668,7 @@ async def scheduler(
     harness: Literal["codex", "muse", "opencode", "agy"],
 ) -> None:
     active_tasks: set[asyncio.Task[None]] = set()
-    catalog_imported = False
+    catalog_verified = False
     try:
         while True:
             try:
@@ -719,10 +719,9 @@ async def scheduler(
                         }
                         state.last_error = login_hints[harness]
                     else:
-                        if harness == "muse" and not catalog_imported:
-                            catalog = await fetch_muse_catalog(settings)
-                            await internal_request(settings, "POST", "/models/import-muse", catalog)
-                            catalog_imported = True
+                        if harness == "muse" and not catalog_verified:
+                            await fetch_muse_catalog(settings)
+                            catalog_verified = True
                         response = ClaimResponse.model_validate(
                             await internal_request(
                                 settings,
