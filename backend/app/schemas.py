@@ -6,8 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .services.prompt_policy import (
     allocation_policy_from_limits,
+    validate_allocation_policy_instructions,
     validate_direction_instructions,
     validate_prompt_texts,
+    validate_submission_instructions,
     validate_wrapper_prompt,
 )
 
@@ -156,12 +158,30 @@ class PortfolioPatch(BaseModel):
 
 class SettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    allocation_policy_instructions: str = Field(min_length=1)
+    automated_submission_instructions: str = Field(min_length=1)
+    managed_manual_submission_instructions: str = Field(min_length=1)
+    rebuilt_manual_submission_instructions: str = Field(min_length=1)
     managed_wrapper_prompt: str = Field(min_length=1)
     rebuilt_wrapper_prompt: str = Field(min_length=1)
     long_direction_instructions: str = Field(min_length=1)
     short_direction_instructions: str = Field(min_length=1)
     managed_allocation_policy: AllocationPolicyIn
     rebuilt_allocation_policy: AllocationPolicyIn
+
+    @field_validator("allocation_policy_instructions")
+    @classmethod
+    def validate_allocation_block(cls, value: str) -> str:
+        return validate_allocation_policy_instructions(value)
+
+    @field_validator(
+        "automated_submission_instructions",
+        "managed_manual_submission_instructions",
+        "rebuilt_manual_submission_instructions",
+    )
+    @classmethod
+    def validate_submission_block(cls, value: str) -> str:
+        return validate_submission_instructions(value)
 
     @field_validator("managed_wrapper_prompt", "rebuilt_wrapper_prompt")
     @classmethod

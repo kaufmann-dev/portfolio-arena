@@ -53,6 +53,7 @@ from .model_catalog import (
     validate_capabilities,
 )
 from .prompt_policy import (
+    DEFAULT_EXECUTION_INSTRUCTIONS,
     DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
@@ -63,12 +64,16 @@ from .prompt_policy import (
     allocation_policies_out,
     allocation_policy_from_limits,
     allocation_policy_out,
+    automated_execution_prompt,
+    manual_execution_prompt,
     prompt_supports_direction,
     prompt_supports_mode,
+    validate_allocation_policy_instructions,
     validate_decision_note,
     validate_direction_instructions,
     validate_position_weights,
     validate_prompt_texts,
+    validate_submission_instructions,
     validate_wrapper_prompt,
 )
 from .serialize import (
@@ -1273,6 +1278,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
                 direction_instructions,
                 admin=True,
                 wrapper_prompt=wrapper_prompt,
+                execution_instructions=settings,
             ),
         }
 
@@ -1290,6 +1296,7 @@ def portfolio_admin_detail(session: Session, portfolio_id: int) -> dict:
             direction_instructions,
             admin=True,
             wrapper_prompt=wrapper_prompt,
+            execution_instructions=settings,
         ),
     }
 
@@ -1599,6 +1606,10 @@ def _setting_float(session: Session, key: str, fallback: float) -> float:
 
 def get_app_settings(session: Session) -> dict:
     return {
+        **{
+            key: _setting_value(session, key, default)
+            for key, default in DEFAULT_EXECUTION_INSTRUCTIONS.items()
+        },
         "managed_allocation_policy": allocation_policy_from_limits(
             _setting_float(
                 session,
@@ -1646,6 +1657,27 @@ def get_app_settings(session: Session) -> dict:
     }
 
 
+def preview_execution_prompt(session: Session, portfolio_id: int, *, automated: bool = True) -> dict:
+    portfolio = session.get(Portfolio, portfolio_id)
+    if portfolio is None:
+        raise AdminOpError(404, "Portfolio not found")
+    settings = get_app_settings(session)
+    render = automated_execution_prompt if automated else manual_execution_prompt
+    return {
+        "portfolio_id": portfolio.id,
+        "prompt_mode": portfolio.prompt_mode,
+        "direction": portfolio.direction,
+        "automated": automated,
+        "execution_prompt": render(
+            portfolio,
+            settings[f"{portfolio.prompt_mode}_wrapper_prompt"],
+            settings[f"{portfolio.direction}_direction_instructions"],
+            settings[f"{portfolio.prompt_mode}_allocation_policy"],
+            settings,
+        ),
+    }
+
+
 def wrapper_prompt_for_portfolio(session: Session, portfolio: Portfolio) -> str:
     settings = get_app_settings(session)
     if portfolio.prompt_mode == "managed":
@@ -1664,6 +1696,10 @@ def update_app_settings(
     rebuilt_wrapper_prompt: str,
     long_direction_instructions: str,
     short_direction_instructions: str,
+    allocation_policy_instructions: str,
+    automated_submission_instructions: str,
+    managed_manual_submission_instructions: str,
+    rebuilt_manual_submission_instructions: str,
 ) -> dict:
     try:
         managed_policy = allocation_policy_from_limits(
@@ -1677,6 +1713,18 @@ def update_app_settings(
     except (KeyError, TypeError, ValueError) as exc:
         raise AdminOpError(422, str(exc)) from None
     values = {
+        "allocation_policy_instructions": validate_allocation_policy_instructions(
+            allocation_policy_instructions
+        ),
+        "automated_submission_instructions": validate_submission_instructions(
+            automated_submission_instructions
+        ),
+        "managed_manual_submission_instructions": validate_submission_instructions(
+            managed_manual_submission_instructions
+        ),
+        "rebuilt_manual_submission_instructions": validate_submission_instructions(
+            rebuilt_manual_submission_instructions
+        ),
         MANAGED_MIN_POSITION_WEIGHT_PCT_KEY: str(managed_policy["min_position_weight_pct"]),
         MANAGED_MAX_POSITION_WEIGHT_PCT_KEY: str(managed_policy["max_position_weight_pct"]),
         REBUILT_MIN_POSITION_WEIGHT_PCT_KEY: str(rebuilt_policy["min_position_weight_pct"]),

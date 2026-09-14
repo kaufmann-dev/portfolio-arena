@@ -765,9 +765,21 @@ def list_evaluation_runs(
 
 @mcp.tool()
 def get_settings() -> dict:
-    """Read allocation policies, wrappers, and long/short direction instructions."""
+    """Read all shared prompt blocks and allocation policies; strategy texts use get_prompt."""
     with _session() as session:
         return admin_ops.get_app_settings(session)
+
+
+@mcp.tool()
+def preview_execution_prompt(portfolio_id: int, automated: bool = True) -> dict:
+    """Preview the complete saved prompt for a portfolio without queuing or running it.
+
+    Automated previews use worker submission instructions; manual previews use the mode-specific
+    create_allocation/create_signal instructions. Run-specific timing and harness JSON schema are
+    added at execution. Use after update_settings or update_prompt to review the assembled text.
+    """
+    with _session() as session:
+        return _guard(admin_ops.preview_execution_prompt, session, portfolio_id, automated=automated)
 
 
 @mcp.tool()
@@ -778,8 +790,21 @@ def update_settings(
     rebuilt_wrapper_prompt: str,
     long_direction_instructions: str,
     short_direction_instructions: str,
+    allocation_policy_instructions: str,
+    automated_submission_instructions: str,
+    managed_manual_submission_instructions: str,
+    rebuilt_manual_submission_instructions: str,
 ) -> dict:
-    """Atomically update sizing, wrappers, and direction instructions."""
+    """Atomically replace shared prompt blocks and sizing.
+
+    Read get_settings first and retain unchanged fields.
+
+    Allocation instructions require {{derived_max_positions}}, {{min_position_weight_pct}}, and
+    {{max_position_weight_pct}}. Wrappers require {{portfolio_slug}}, {{strategy_text}},
+    {{direction_instructions}}, {{allocation_policy}}, and {{submission_instructions}}.
+    Submission blocks are literal text. Settings affect future prompt renders and worker claims;
+    server sizing and result validation still apply. Edit strategy texts with update_prompt.
+    """
     with _session() as session:
         return _guard(
             admin_ops.update_app_settings,
@@ -790,6 +815,10 @@ def update_settings(
             rebuilt_wrapper_prompt=rebuilt_wrapper_prompt,
             long_direction_instructions=long_direction_instructions,
             short_direction_instructions=short_direction_instructions,
+            allocation_policy_instructions=allocation_policy_instructions,
+            automated_submission_instructions=automated_submission_instructions,
+            managed_manual_submission_instructions=managed_manual_submission_instructions,
+            rebuilt_manual_submission_instructions=rebuilt_manual_submission_instructions,
         )
 
 

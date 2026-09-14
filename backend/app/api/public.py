@@ -171,12 +171,22 @@ def portfolio_detail(
     if match.prompt_mode == "managed":
         arena = compute_valuations(session, [match])
         detail = serialize_detail(
-            arena.by_portfolio_id[match.id], arena, policy, direction_instructions, wrapper_prompt=wrapper
+            arena.by_portfolio_id[match.id],
+            arena,
+            policy,
+            direction_instructions,
+            settings,
+            wrapper_prompt=wrapper,
         )
     else:
         arena = compute_rebuilt_arena(session, [match], objective=objective)
         detail = serialize_rebuilt_detail(
-            arena.by_portfolio_id[match.id], arena, policy, direction_instructions, wrapper_prompt=wrapper
+            arena.by_portfolio_id[match.id],
+            arena,
+            policy,
+            direction_instructions,
+            settings,
+            wrapper_prompt=wrapper,
         )
     return {
         "version_id": match.version_id,

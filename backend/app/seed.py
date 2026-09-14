@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from .models import ArenaVersion, EvaluatorSettings, Setting
 from .services.prompt_policy import (
+    DEFAULT_EXECUTION_INSTRUCTIONS,
     DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
@@ -24,6 +25,7 @@ REBUILT_MAX_POSITION_WEIGHT_PCT_KEY = "rebuilt_max_position_weight_pct"
 
 def seed_settings(session: Session) -> None:
     defaults = {
+        **DEFAULT_EXECUTION_INSTRUCTIONS,
         MANAGED_WRAPPER_PROMPT_KEY: DEFAULT_MANAGED_WRAPPER_PROMPT,
         REBUILT_WRAPPER_PROMPT_KEY: DEFAULT_REBUILT_WRAPPER_PROMPT,
         LONG_DIRECTION_INSTRUCTIONS_KEY: DEFAULT_LONG_DIRECTION_INSTRUCTIONS,

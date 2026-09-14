@@ -34,12 +34,13 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
         )
         admin_ops.update_app_settings(
             session,
-            managed_allocation_policy=app_settings["managed_allocation_policy"],
-            rebuilt_allocation_policy=app_settings["rebuilt_allocation_policy"],
-            managed_wrapper_prompt=managed_wrapper,
-            rebuilt_wrapper_prompt=app_settings["rebuilt_wrapper_prompt"],
-            long_direction_instructions=app_settings["long_direction_instructions"],
-            short_direction_instructions=app_settings["short_direction_instructions"],
+            **{
+                **app_settings,
+                "managed_wrapper_prompt": managed_wrapper,
+                "automated_submission_instructions": "Custom worker submission block.",
+                "allocation_policy_instructions": "Configured limits: {{derived_max_positions}} / "
+                "{{min_position_weight_pct}} / {{max_position_weight_pct}}.",
+            },
         )
         evaluator.update_settings(session, attempt_timeout_seconds=7200)
         _enable(session, sample_portfolio)
@@ -62,8 +63,9 @@ def test_manual_run_claim_and_submission_use_submission_effective_date(sample_po
         execution_prompt = claimed["runs"][0]["execution_prompt"]
         assert sample_portfolio["slug"] in execution_prompt
         assert "Managed wrapper marker for" in execution_prompt
-        assert "manage and rebalance the existing portfolio" in execution_prompt
-        assert "Do not call any write tool" in execution_prompt
+        assert "reassess existing holdings and alternatives" in execution_prompt
+        assert "Custom worker submission block." in execution_prompt
+        assert "Configured limits:" in execution_prompt
         assert "{{" not in execution_prompt
 
         submitted = evaluator.submit_run(

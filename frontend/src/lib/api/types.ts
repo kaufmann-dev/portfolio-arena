@@ -68,6 +68,10 @@ export interface AppSettings {
   rebuilt_wrapper_prompt: string;
   long_direction_instructions: string;
   short_direction_instructions: string;
+  allocation_policy_instructions: string;
+  automated_submission_instructions: string;
+  managed_manual_submission_instructions: string;
+  rebuilt_manual_submission_instructions: string;
 }
 
 export interface Metrics {

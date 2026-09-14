@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from app.services.prompt_policy import (
+    DEFAULT_EXECUTION_INSTRUCTIONS,
     DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
@@ -48,12 +49,14 @@ def test_managed_execution_instructions_remain_allocation_specific():
         DEFAULT_MANAGED_WRAPPER_PROMPT,
         DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
         policy,
+        DEFAULT_EXECUTION_INSTRUCTIONS,
     )
     automated = automated_execution_prompt(
         portfolio,
         DEFAULT_MANAGED_WRAPPER_PROMPT,
         DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
         policy,
+        DEFAULT_EXECUTION_INSTRUCTIONS,
     )
 
     assert "call `create_allocation` exactly once" in manual
@@ -82,12 +85,14 @@ def test_rebuilt_execution_instructions_are_signal_specific_and_stateless():
         DEFAULT_REBUILT_WRAPPER_PROMPT,
         DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
         policy,
+        DEFAULT_EXECUTION_INSTRUCTIONS,
     )
     automated = automated_execution_prompt(
         portfolio,
         DEFAULT_REBUILT_WRAPPER_PROMPT,
         DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
         policy,
+        DEFAULT_EXECUTION_INSTRUCTIONS,
     )
 
     assert "call `create_signal` exactly once" in manual
@@ -120,6 +125,7 @@ def test_short_execution_policy_uses_positive_weights_and_correct_benchmark_pola
         DEFAULT_MANAGED_WRAPPER_PROMPT,
         DEFAULT_SHORT_DIRECTION_INSTRUCTIONS,
         policy,
+        DEFAULT_EXECUTION_INSTRUCTIONS,
     )
 
     assert "prices are expected to underperform SPY" in prompt

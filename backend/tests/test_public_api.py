@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.services.prompt_policy import (
+    DEFAULT_EXECUTION_INSTRUCTIONS,
     DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
     DEFAULT_MANAGED_WRAPPER_PROMPT,
     DEFAULT_REBUILT_WRAPPER_PROMPT,
@@ -362,6 +363,7 @@ class TestAdminMisc:
                 "derived_min_positions": 0,
                 "derived_max_positions": 10,
             },
+            **DEFAULT_EXECUTION_INSTRUCTIONS,
             "managed_wrapper_prompt": DEFAULT_MANAGED_WRAPPER_PROMPT,
             "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
             "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
@@ -383,6 +385,7 @@ class TestAdminMisc:
                     "min_position_weight_pct": 20,
                     "max_position_weight_pct": 100,
                 },
+                **DEFAULT_EXECUTION_INSTRUCTIONS,
                 "managed_wrapper_prompt": updated_managed,
                 "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
                 "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
@@ -404,6 +407,7 @@ class TestAdminMisc:
                 "derived_min_positions": 0,
                 "derived_max_positions": 5,
             },
+            **DEFAULT_EXECUTION_INSTRUCTIONS,
             "managed_wrapper_prompt": updated_managed,
             "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
             "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
@@ -427,6 +431,7 @@ class TestAdminMisc:
                         "min_position_weight_pct": 10,
                         "max_position_weight_pct": 100,
                     },
+                    **DEFAULT_EXECUTION_INSTRUCTIONS,
                     "managed_wrapper_prompt": invalid,
                     "rebuilt_wrapper_prompt": DEFAULT_REBUILT_WRAPPER_PROMPT,
                     "long_direction_instructions": DEFAULT_LONG_DIRECTION_INSTRUCTIONS,
