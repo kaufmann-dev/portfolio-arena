@@ -16,7 +16,8 @@ direction-matched SPY reference.
 
 Managed portfolios retain holdings and notes between decisions. Rebuilt portfolios submit independent
 daily signals and select their own holding horizon from H0.5 through H20 in half-session increments.
-The project measures cost-free paper performance for research.
+The project measures cost-free paper performance for research. Position handoff notes are public;
+expand the note controls in holdings, active cohorts, or decision history to inspect them.
 
 ## Architecture
 

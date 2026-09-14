@@ -51,7 +51,7 @@ def _insert_signals(portfolio_id: int, effective_dates: list[date], symbol: str 
                 note=f"signal {index}",
                 provenance="integrated",
             )
-            signal.positions.append(SignalPosition(symbol=symbol, weight_pct=100, note="private rationale"))
+            signal.positions.append(SignalPosition(symbol=symbol, weight_pct=100, note="position rationale"))
             session.add(signal)
         session.commit()
     from app.services.market_refresh import refresh_market_data_once
@@ -193,12 +193,13 @@ def test_rebuilt_detail_bounds_recent_signals_and_public_payload_hides_provenanc
         reverse=True,
     )
     assert "provenance" not in detail["signals"][0]
-    assert "note" not in detail["signals"][0]["positions"][0]
+    assert detail["signals"][0]["positions"][0]["note"] == "position rationale"
 
     first_page = client.get(f"/api/portfolios/{portfolio['slug']}/signals?limit=5").json()
     assert len(first_page["signals"]) == 5
     assert first_page["next_cursor"] is not None
     assert "provenance" not in first_page["signals"][0]
+    assert first_page["signals"][0]["positions"][0]["note"] == "position rationale"
     second_page = client.get(
         f"/api/portfolios/{portfolio['slug']}/signals?limit=5&cursor={first_page['next_cursor']}"
     ).json()

@@ -99,6 +99,7 @@ export interface SeriesPoint {
 export interface PositionOut {
   symbol: string;
   weight_pct: number;
+  /** Public position handoff text; may be empty. */
   note?: string;
 }
 
@@ -131,6 +132,7 @@ export interface Holding {
   target_weight_pct: number;
   entry_price?: number | null;
   current_price?: number | null;
+  /** Public position handoff text; may be empty. */
   note?: string;
 }
 

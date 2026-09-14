@@ -71,12 +71,12 @@ def _identity(portfolio: Portfolio, allocation_policy: dict) -> dict:
     }
 
 
-def allocation_positions(allocation: Allocation, admin: bool = False) -> list[dict]:
+def allocation_positions(allocation: Allocation) -> list[dict]:
     return [
         {
             "symbol": position.symbol,
             "weight_pct": float(position.weight_pct),
-            **({"note": position.note} if admin else {}),
+            "note": position.note,
         }
         for position in allocation.positions
     ]
@@ -113,7 +113,7 @@ def serialize_allocation(
         "locked": is_locked(allocation.effective_date, now or datetime.now(UTC), phase),
         "note": allocation.note,
         "turnover_pct": applied.turnover_pct if applied else None,
-        "positions": allocation_positions(allocation, admin),
+        "positions": allocation_positions(allocation),
         **decision_summary(position.weight_pct for position in allocation.positions),
     }
 
@@ -133,7 +133,7 @@ def serialize_signal(signal: Signal, *, admin: bool = False, now: datetime | Non
             {
                 "symbol": position.symbol,
                 "weight_pct": float(position.weight_pct),
-                **({"note": position.note} if admin else {}),
+                "note": position.note,
             }
             for position in signal.positions
         ],
@@ -194,11 +194,11 @@ def serialize_detail(
                 "symbol": holding.symbol,
                 "weight_pct": holding.weight_pct,
                 "target_weight_pct": holding.target_weight_pct,
+                "note": holding.note,
                 **(
                     {
                         "entry_price": holding.entry_price,
                         "current_price": holding.current_price,
-                        "note": holding.note,
                     }
                     if admin
                     else {}
@@ -332,6 +332,7 @@ def serialize_rebuilt_detail(
     wrapper_prompt: str = "",
 ) -> dict:
     policy = analysis.selected
+    position_notes = {(s.id, p.symbol): p.note for s in analysis.portfolio.signals for p in s.positions}
     signals = sorted(analysis.portfolio.signals, key=lambda item: item.id, reverse=True)[:20]
     return {
         **serialize_rebuilt_summary(analysis, arena, allocation_policy),
@@ -346,7 +347,16 @@ def serialize_rebuilt_detail(
         "spy_series": policy.spy_series if policy else [],
         "holdings": policy.holdings if policy else [],
         "reference_holding": policy.reference_holding if policy else None,
-        "active_cohorts": policy.active_cohorts if policy else [],
+        "active_cohorts": [
+            {
+                **cohort,
+                "positions": [
+                    {**position, "note": position_notes[(cohort["signal_id"], position["symbol"])]}
+                    for position in cohort["positions"]
+                ],
+            }
+            for cohort in (policy.active_cohorts if policy else [])
+        ],
         "signals": [serialize_signal(signal, admin=admin) for signal in signals],
         "signals_next_cursor": signals[-1].id if len(analysis.portfolio.signals) > len(signals) else None,
     }
