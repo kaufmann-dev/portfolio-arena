@@ -57,6 +57,13 @@ expand the note controls in holdings, active cohorts, or decision history to ins
   version and portfolio switches must all allow evaluation. Pausing a version cancels queued work;
   already-running attempts may finish without retries. Portfolio schedules remain intact. Only
   empty versions may be deleted; portfolio IDs and URLs survive a move between versions.
+- **Paused versions limit managed performance.** Managed portfolios and their performance benchmarks
+  stop at the earlier of the latest market boundary or five trading days after their last effective
+  decision, using the portfolio's open/close execution boundary and skipping weekends and market
+  holidays. Successful abstentions also count as decisions. This cap applies only when the version's
+  evaluation switch is off; global or portfolio pauses do not impose it. Re-enabling the version
+  restores continuous valuation through the present, including returns during the pause. Rebuilt
+  horizons and market-data refresh are unchanged.
 - **Execution timing belongs to the portfolio.** Choose before-open/opening-price or
   before-close/closing-price evaluation. Timing locks permanently at its first decision, even after
   resetting history. Create another portfolio to change it. Separate opening and closing offsets

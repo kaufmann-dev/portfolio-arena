@@ -65,7 +65,11 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   as SHA-256 hashes in the `api_keys` table (`security.py` helpers).
 
 - `ArenaVersion` scopes comparisons and independently gates evaluation. Visibility and price refresh
-  do not depend on evaluation being enabled. Portfolios have an open/close execution boundary that
+  do not depend on evaluation being enabled. Paused versions cap managed valuation and its benchmark
+  at five trading days after the last effective decision, at the portfolio execution boundary.
+  Enabled versions have no cap; resuming includes all returns during the pause. Global/portfolio
+  switches do not affect this cap, and rebuilt horizons are unchanged.
+  Portfolios have an open/close execution boundary that
   locks permanently at the first decision. API market boundaries are `{timestamp, phase}` values;
   NAV points add `nav`. Keep ordinary audit timestamps as strings.
 - Both modes submit selected weights totaling `min(100, count × maximum position weight)`; unused
