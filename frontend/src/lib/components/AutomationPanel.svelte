@@ -1052,7 +1052,10 @@
   }
 
   .row-actions {
+    flex-direction: column;
+    align-items: stretch;
     justify-content: flex-start;
+    gap: 6px;
   }
 
   .more {
