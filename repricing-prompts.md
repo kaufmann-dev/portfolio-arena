@@ -4,31 +4,31 @@
 
 ### Managed long
 
-Select longs supported by material company-specific information that strengthens or improves the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand. Do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
+Select longs supported by material company-specific information that strengthens or improves the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the resulting investment implications. Do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
 
 Assess the durability, probability, and timing of the development, the observed price response relative to relevant market and sector moves, what appears already reflected in expectations and price, and remaining prospective excess return over SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business improvement still supports further appreciation; the thesis does not require a market-underreaction claim.
 
-Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis. State the expected path of realization and base, upside, and downside cases. Select only opportunities whose probability-weighted expected return remains attractive from the current price relative to downside risk, SPY, and competing opportunities, and explain why meaningful upside remains after the observed price move.
+Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis. State the expected path of realization and base, upside, and downside cases. Select only opportunities whose probability-weighted expected return remains attractive from the current price, and explain why meaningful upside remains after the observed price move.
 
-For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, estimate revisions, valuation, price action, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives. Treat delayed thesis realization, deteriorating reward-to-risk, excessive valuation expansion, weakening catalysts, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
+For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives. Treat delayed thesis realization, deteriorating reward-to-risk, excessive valuation expansion, weakening catalysts, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
 
-Rank held positions and new candidates on prospective expected return, downside risk, confidence, catalyst strength, and expected time to realization.
+Rank held positions and new candidates on prospective expected return, catalyst strength, and expected time to realization.
 
 ### Managed short
 
-Select shorts supported by material company-specific information that weakens or worsens the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand. Do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
+Select shorts supported by material company-specific information that weakens or worsens the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the resulting investment implications. Do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
 
 Assess the durability, probability, and timing of the development, the observed price response relative to relevant market and sector moves, what appears already reflected in expectations and price, and remaining prospective negative excess return versus SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business deterioration still supports further downside; the thesis does not require a market-underreaction claim.
 
-Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis. State the expected path of realization and base, upside, and downside cases, and assess recovery and squeeze risk. Select only opportunities whose probability-weighted expected downside remains attractive from the current price relative to upside risk, SPY, and competing opportunities, and explain why meaningful downside remains after the observed price move.
+Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis. State the expected path of realization and base, upside, and downside cases, and assess recovery and squeeze risk. Select only opportunities whose probability-weighted expected downside remains attractive from the current price, and explain why meaningful downside remains after the observed price move.
 
-For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, mitigation, estimate revisions, valuation, price action, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives. Treat delayed thesis realization, deteriorating reward-to-risk, downside already largely realized, weakening catalysts, recovery or squeeze risk, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
+For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, mitigation, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives. Treat delayed thesis realization, deteriorating reward-to-risk, downside already largely realized, weakening catalysts, recovery or squeeze risk, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
 
-Rank held positions and new candidates on prospective expected downside, upside risk, confidence, catalyst strength, and expected time to realization.
+Rank held positions and new candidates on prospective expected downside, catalyst strength, and expected time to realization.
 
 ### Rebuilt long
 
-Select longs supported by material company-specific information that strengthens or improves the company’s economic outlook. For each candidate, identify the original disclosure, publication time, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
+Select longs supported by material company-specific information that strengthens or improves the company’s economic outlook. For each candidate, identify the original disclosure, publication time, the economic assumption that changes, and the resulting investment implications.
 
 Assess the durability of the development, the observed price response, and remaining prospective excess return over SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business improvement still supports further appreciation; the thesis does not require a market-underreaction claim.
 
@@ -38,7 +38,7 @@ At each rebuild, retain a name only if it still ranks as a qualifying long on th
 
 ### Rebuilt short
 
-Select shorts supported by material company-specific information that weakens or worsens the company’s economic outlook. For each candidate, identify the original disclosure, publication time, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
+Select shorts supported by material company-specific information that weakens or worsens the company’s economic outlook. For each candidate, identify the original disclosure, publication time, the economic assumption that changes, and the resulting investment implications.
 
 Assess the durability of the development, the observed price response, and remaining prospective negative excess return versus SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business deterioration still supports further downside; the thesis does not require a market-underreaction claim.
 
@@ -92,27 +92,27 @@ At each rebuild, select only names supporting negative expected excess return ac
 
 ### Managed long
 
-Select longs supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
+Select longs supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the resulting investment implications.
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
 Assess the durability of the development, the observed price response, and remaining prospective excess return over SPY. The 24-hour restriction applies to the qualifying information, not the holding period.
 
-For held positions, monitor follow-up disclosures, operating progress, estimate revisions, valuation, and invalidation. Continued holding depends on the thesis and expected prospective return, not on receiving another disclosure within 24 hours.
+For held positions, monitor follow-up disclosures, operating progress, and invalidation. Continued holding depends on the thesis and expected prospective return, not on receiving another disclosure within 24 hours.
 
 ### Managed short
 
-Select shorts supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
+Select shorts supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the resulting investment implications.
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
 Assess the durability of the development, the observed price response, remaining prospective negative excess return versus SPY, and recovery or squeeze risk. The 24-hour restriction applies to the qualifying information, not the holding period.
 
-For held positions, monitor follow-up disclosures, mitigation, estimate revisions, valuation, recovery risk, and invalidation. Continued holding depends on the thesis and expected prospective downside, not on receiving another disclosure within 24 hours.
+For held positions, monitor follow-up disclosures, mitigation, recovery risk, and invalidation. Continued holding depends on the thesis and expected prospective downside, not on receiving another disclosure within 24 hours.
 
 ### Rebuilt long
 
-Select longs supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
+Select longs supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the resulting investment implications.
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
@@ -122,7 +122,7 @@ At each rebuild, every newly selected name must have qualifying information insi
 
 ### Rebuilt short
 
-Select shorts supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
+Select shorts supported by material company-specific information first made public within the preceding 24 elapsed hours. For each candidate, identify the original disclosure, its verifiable publication timestamp, the economic assumption that changes, and the resulting investment implications.
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
