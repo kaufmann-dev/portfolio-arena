@@ -4,89 +4,89 @@
 
 ### Managed long
 
-Select longs supported by material company-specific information that strengthens or improves the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand. Separate direct evidence from inference, and do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
+Select longs supported by material company-specific information that strengthens or improves the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand. Do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
 
-Assess the financial significance, durability, probability, and timing of the development, current valuation, the observed price response relative to relevant market and sector moves, what appears already reflected in expectations and price, remaining prospective excess return over SPY, and the strongest opposing interpretation and supporting evidence. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business improvement still supports further appreciation; the thesis does not require a market-underreaction claim.
+Assess the financial significance, durability, probability, and timing of the development, current valuation, the observed price response relative to relevant market and sector moves, what appears already reflected in expectations and price, and remaining prospective excess return over SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business improvement still supports further appreciation; the thesis does not require a market-underreaction claim.
 
-Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis, but capital is actively reallocated toward the highest expected risk-adjusted prospective returns. State a plausible return horizon, expected path of realization, base, upside, and downside cases, and explicit thesis invalidation conditions. Select only opportunities whose probability-weighted expected return remains attractive from the current reference price relative to downside risk, SPY, and competing opportunities, and explain why meaningful upside remains after the observed price move.
+Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis. State the expected path of realization and base, upside, and downside cases. Select only opportunities whose probability-weighted expected return remains attractive from the current price relative to downside risk, SPY, and competing opportunities, and explain why meaningful upside remains after the observed price move.
 
-For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, estimate revisions, valuation, price action, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives and periodically refresh expected return from the current price rather than anchoring to the original thesis or entry price. Treat delayed thesis realization, deteriorating reward-to-risk, excessive valuation expansion, weakening catalysts, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
+For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, estimate revisions, valuation, price action, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives. Treat delayed thesis realization, deteriorating reward-to-risk, excessive valuation expansion, weakening catalysts, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
 
-Rank held positions and new candidates on prospective expected return, downside risk, confidence, catalyst strength, and expected time to realization. Allocate capital to the strongest opportunities rather than preserving legacy positions by default. Continue holding only while a position remains competitive with available alternatives; trim or exit when its expected prospective return falls materially below better opportunities, when the thesis is invalidated, or when the expected payoff no longer justifies the capital and time committed.
+Rank held positions and new candidates on prospective expected return, downside risk, confidence, catalyst strength, and expected time to realization.
 
 ### Managed short
 
-Select shorts supported by material company-specific information that weakens or worsens the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand. Separate direct evidence from inference, and do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
+Select shorts supported by material company-specific information that weakens or worsens the company’s economic outlook. For each candidate, identify the original disclosure, publication time, what was known beforehand, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand. Do not treat repeated coverage, commentary, or unsupported claims as substantive evidence.
 
-Assess the financial significance, durability, probability, and timing of the development, current valuation, the observed price response relative to relevant market and sector moves, what appears already reflected in expectations and price, remaining prospective negative excess return versus SPY, and the strongest benign interpretation and supporting evidence. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business deterioration still supports further downside; the thesis does not require a market-underreaction claim.
+Assess the financial significance, durability, probability, and timing of the development, current valuation, the observed price response relative to relevant market and sector moves, what appears already reflected in expectations and price, and remaining prospective negative excess return versus SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business deterioration still supports further downside; the thesis does not require a market-underreaction claim.
 
-Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis, but capital is actively reallocated toward the highest expected risk-adjusted prospective returns. State a plausible return horizon, expected path of realization, base, upside, and downside cases, recovery and squeeze risk, and explicit thesis invalidation conditions. Select only opportunities whose probability-weighted expected downside remains attractive from the current reference price relative to upside risk, SPY, and competing opportunities, and explain why meaningful downside remains after the observed price move.
+Information age is unrestricted provided the information remains economically relevant and has not been superseded, fully realized, or rendered stale by subsequent developments. Holding duration follows the thesis. State the expected path of realization and base, upside, and downside cases, and assess recovery and squeeze risk. Select only opportunities whose probability-weighted expected downside remains attractive from the current price relative to upside risk, SPY, and competing opportunities, and explain why meaningful downside remains after the observed price move.
 
-For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, mitigation, estimate revisions, valuation, price action, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives and periodically refresh expected downside from the current price rather than anchoring to the original thesis or entry price. Treat delayed thesis realization, deteriorating reward-to-risk, downside already largely realized, weakening catalysts, recovery or squeeze risk, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
+For held positions, continuously reassess follow-up disclosures, operating progress against the thesis, mitigation, estimate revisions, valuation, price action, catalyst timing, and the opportunity set. Re-underwrite the position when material new information arrives. Treat delayed thesis realization, deteriorating reward-to-risk, downside already largely realized, weakening catalysts, recovery or squeeze risk, and superior new opportunities as valid reasons to reduce or exit even when the original thesis remains intact.
 
-Rank held positions and new candidates on prospective expected downside, upside risk, confidence, catalyst strength, and expected time to realization. Allocate capital to the strongest opportunities rather than preserving legacy positions by default. Continue holding only while a position remains competitive with available alternatives; trim or exit when its expected prospective downside falls materially below better opportunities, when the thesis is invalidated, or when the expected payoff no longer justifies the capital and time committed.
+Rank held positions and new candidates on prospective expected downside, upside risk, confidence, catalyst strength, and expected time to realization.
 
 ### Rebuilt long
 
 Select longs supported by material company-specific information that strengthens or improves the company’s economic outlook. For each candidate, identify the original disclosure, publication time, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
 
-Assess the financial significance and durability of the development, current valuation, the observed price response, remaining prospective excess return over SPY, and the strongest opposing interpretation. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business improvement still supports further appreciation; the thesis does not require a market-underreaction claim.
+Assess the financial significance and durability of the development, current valuation, the observed price response, and remaining prospective excess return over SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business improvement still supports further appreciation; the thesis does not require a market-underreaction claim.
 
-Information age is unrestricted, and holding duration follows the thesis. State a plausible return horizon and explicit thesis invalidation conditions. Select only opportunities whose expected return remains attractive from the current reference price.
+Information age is unrestricted, and holding duration follows the thesis. Select only opportunities whose expected return remains attractive from the current price.
 
-At each rebuild, evaluate the opportunity set anew from current prices. Evaluate independently of prior inclusion; retain a name only if it still ranks as a qualifying long on the present thesis and return.
+At each rebuild, retain a name only if it still ranks as a qualifying long on the present thesis and return.
 
 ### Rebuilt short
 
 Select shorts supported by material company-specific information that weakens or worsens the company’s economic outlook. For each candidate, identify the original disclosure, publication time, the economic assumption that changes, and the implications for earnings, cash flow, risk, competitive position, capital needs, or investor demand.
 
-Assess the financial significance and durability of the development, current valuation, the observed price response, remaining prospective negative excess return versus SPY, and the strongest benign interpretation. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business deterioration still supports further downside; the thesis does not require a market-underreaction claim.
+Assess the financial significance and durability of the development, current valuation, the observed price response, and remaining prospective negative excess return versus SPY. Distinguish genuinely new information from repeated coverage or commentary. Widely understood developments may qualify when the underlying business deterioration still supports further downside; the thesis does not require a market-underreaction claim.
 
-Information age is unrestricted, and holding duration follows the thesis. State a plausible return horizon, recovery or squeeze risk, and explicit thesis invalidation conditions. Select only opportunities whose expected downside remains attractive from the current reference price.
+Information age is unrestricted, and holding duration follows the thesis. Assess recovery and squeeze risk. Select only opportunities whose expected downside remains attractive from the current price.
 
-At each rebuild, evaluate the opportunity set anew from current prices. Evaluate independently of prior inclusion; retain a name only if it still ranks as a qualifying short on the present thesis and downside.
+At each rebuild, retain a name only if it still ranks as a qualifying short on the present thesis and downside.
 
 ## 2. Next-Session Repricing — `timed-repricing` (Clockwork)
 
 ### Managed long
 
-Select longs supported by material company-specific information with positive expected excess return over SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and reference price. Use one boundary convention per run.
+Select longs supported by material company-specific information with positive expected excess return over SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and price at entry. Use one boundary convention per run.
 
-For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, remaining expected excess return, and the strongest opposing interpretation.
+For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, and remaining expected excess return.
 
-State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing or thesis invalidation conditions. Longer-term value may support the analysis, while selection is determined by expected return over the defined session-to-session interval.
+State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing invalidation conditions. Longer-term value may support the analysis, while selection is determined by expected return over the defined session-to-session interval.
 
-For held positions, reassess at each matching boundary using the new reference price. Continue only while positive expected excess return remains supported across the next full trading session.
+For held positions, reassess at each matching boundary using the price at the new boundary. Continue only while positive expected excess return remains supported across the next full trading session.
 
 ### Managed short
 
-Select shorts supported by material company-specific information with negative expected excess return versus SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and reference price. Use one boundary convention per run.
+Select shorts supported by material company-specific information with negative expected excess return versus SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and price at entry. Use one boundary convention per run.
 
-For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, remaining expected downside, the strongest benign interpretation, and recovery or squeeze risk.
+For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, remaining expected downside, and recovery or squeeze risk.
 
-State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing or thesis invalidation conditions. Longer-term weakness may support the analysis, while selection is determined by expected downside over the defined session-to-session interval.
+State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing invalidation conditions. Longer-term weakness may support the analysis, while selection is determined by expected downside over the defined session-to-session interval.
 
-For held positions, reassess at each matching boundary using the new reference price. Continue only while negative expected excess return remains supported across the next full trading session.
+For held positions, reassess at each matching boundary using the price at the new boundary. Continue only while negative expected excess return remains supported across the next full trading session.
 
 ### Rebuilt long
 
-Select longs supported by material company-specific information with positive expected excess return over SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and reference price. Use one boundary convention per run.
+Select longs supported by material company-specific information with positive expected excess return over SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and price at entry. Use one boundary convention per run.
 
-For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, remaining expected excess return, and the strongest opposing interpretation.
+For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, and remaining expected excess return.
 
-State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing or thesis invalidation conditions. Longer-term value may support the analysis, while selection is determined by expected return over the defined session-to-session interval.
+State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing invalidation conditions. Longer-term value may support the analysis, while selection is determined by expected return over the defined session-to-session interval.
 
-At each rebuild, construct the long set anew from current prices. Evaluate each candidate independently of prior inclusion and select only names supporting positive expected excess return across the newly defined full-session horizon.
+At each rebuild, select only names supporting positive expected excess return across the newly defined full-session horizon.
 
 ### Rebuilt short
 
-Select shorts supported by material company-specific information with negative expected excess return versus SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and reference price. Use one boundary convention per run.
+Select shorts supported by material company-specific information with negative expected excess return versus SPY across the next full trading session. Define the horizon from the entry boundary: open-to-next-open for opening entries and close-to-next-close for closing entries. Respect holidays and shortened sessions. Record the entry boundary, target boundary, and price at entry. Use one boundary convention per run.
 
-For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, remaining expected downside, the strongest benign interpretation, and recovery or squeeze risk.
+For each candidate, identify the relevant disclosure and publication time, the changed economic assumption, and why further price adjustment is plausible over this specific horizon. Assess financial significance, observed price response, current valuation, remaining expected downside, and recovery or squeeze risk.
 
-State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing or thesis invalidation conditions. Longer-term weakness may support the analysis, while selection is determined by expected downside over the defined session-to-session interval.
+State the expected next-session return, the mechanism expected to realize it within the window, and explicit timing invalidation conditions. Longer-term weakness may support the analysis, while selection is determined by expected downside over the defined session-to-session interval.
 
-At each rebuild, construct the short set anew from current prices. Evaluate each candidate independently of prior inclusion and select only names supporting negative expected excess return across the newly defined full-session horizon.
+At each rebuild, select only names supporting negative expected excess return across the newly defined full-session horizon.
 
 ## 3. 24-Hour Information Repricing — `24-hour-information-repricing` (Dispatch)
 
@@ -96,7 +96,7 @@ Select longs supported by material company-specific information first made publi
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
-Assess financial significance, durability, valuation, the observed price response, remaining prospective excess return over SPY, and the strongest opposing interpretation. State a plausible return horizon and explicit invalidation conditions. The 24-hour restriction applies to the qualifying information, not the holding period.
+Assess financial significance, durability, valuation, the observed price response, and remaining prospective excess return over SPY. The 24-hour restriction applies to the qualifying information, not the holding period.
 
 For held positions, monitor follow-up disclosures, operating progress, estimate revisions, valuation, and invalidation. Continued holding depends on the thesis and expected prospective return, not on receiving another disclosure within 24 hours.
 
@@ -106,7 +106,7 @@ Select shorts supported by material company-specific information first made publ
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
-Assess financial significance, durability, valuation, the observed price response, remaining prospective negative excess return versus SPY, the strongest benign interpretation, and recovery or squeeze risk. State a plausible return horizon and explicit invalidation conditions. The 24-hour restriction applies to the qualifying information, not the holding period.
+Assess financial significance, durability, valuation, the observed price response, remaining prospective negative excess return versus SPY, and recovery or squeeze risk. The 24-hour restriction applies to the qualifying information, not the holding period.
 
 For held positions, monitor follow-up disclosures, mitigation, estimate revisions, valuation, recovery risk, and invalidation. Continued holding depends on the thesis and expected prospective downside, not on receiving another disclosure within 24 hours.
 
@@ -116,9 +116,9 @@ Select longs supported by material company-specific information first made publi
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
-Assess financial significance, durability, valuation, the observed price response, remaining prospective excess return over SPY, and the strongest opposing interpretation. State a plausible return horizon and explicit invalidation conditions. The 24-hour restriction applies to the qualifying information, not the holding period.
+Assess financial significance, durability, valuation, the observed price response, and remaining prospective excess return over SPY. The 24-hour restriction applies to the qualifying information, not the holding period.
 
-At each rebuild, evaluate the opportunity set anew. Every newly selected name must have qualifying information inside the current 24-hour window, while prior inclusion creates no presumption of continued selection.
+At each rebuild, every newly selected name must have qualifying information inside the current 24-hour window.
 
 ### Rebuilt short
 
@@ -126,9 +126,9 @@ Select shorts supported by material company-specific information first made publ
 
 Measure the 24-hour window continuously through weekends and holidays, and record the cutoff timestamp used. Repeated coverage or a later page timestamp does not change the information’s age; a follow-up qualifies when it contains material new facts first disclosed inside the window. Older information may be used as context.
 
-Assess financial significance, durability, valuation, the observed price response, remaining prospective negative excess return versus SPY, the strongest benign interpretation, and recovery or squeeze risk. State a plausible return horizon and explicit invalidation conditions. The 24-hour restriction applies to the qualifying information, not the holding period.
+Assess financial significance, durability, valuation, the observed price response, remaining prospective negative excess return versus SPY, and recovery or squeeze risk. The 24-hour restriction applies to the qualifying information, not the holding period.
 
-At each rebuild, evaluate the opportunity set anew. Every newly selected name must have qualifying information inside the current 24-hour window, while prior inclusion creates no presumption of continued selection.
+At each rebuild, every newly selected name must have qualifying information inside the current 24-hour window.
 
 ## 4. Overreaction Reversal — `overreaction-reversal` (Boomerang)
 
@@ -138,7 +138,7 @@ Select longs where a recent selloff appears materially larger than the deteriora
 
 For each candidate, identify the selloff period, apparent trigger, and evidence connecting the price move to that trigger. Determine which economic assumption the market appears to have marked down and test whether the available evidence supports a smaller, more temporary, or less company-specific impairment. Compare the price reaction with changes in expected earnings, cash flow, competitive position, capital needs, or long-term growth.
 
-Assess the magnitude and speed of the decline, valuation reset, relevant peer performance, positioning or forced-selling evidence, subsequent disclosures, and current price behavior. Estimate remaining expected excess return over SPY from the current price, state a plausible reversal horizon, and give the strongest opposing interpretation and explicit invalidation conditions.
+Assess the magnitude and speed of the decline, valuation reset, relevant peer performance, positioning or forced-selling evidence, subsequent disclosures, and current price behavior. Estimate remaining expected excess return over SPY from the current price and state a plausible reversal horizon.
 
 For held positions, monitor trigger resolution, fundamental evidence, reversal progress, valuation, and invalidation. Continue only while an excessive markdown and attractive prospective recovery remain supported.
 
@@ -148,7 +148,7 @@ Select shorts where a recent rally appears materially larger than the improvemen
 
 For each candidate, identify the rally period, apparent trigger, and evidence connecting the price move to that trigger. Determine which economic assumption the market appears to have marked up and test whether the available evidence supports a smaller, more temporary, or less company-specific improvement. Compare the price reaction with changes in expected earnings, cash flow, competitive position, capital needs, or long-term growth.
 
-Assess the magnitude and speed of the advance, valuation reset, peer performance, positioning or chasing evidence, subsequent disclosures, and price behavior. Estimate remaining expected negative excess return versus SPY from the current price, state a plausible fade horizon, and give the strongest benign interpretation, squeeze risk, and explicit invalidation conditions.
+Assess the magnitude and speed of the advance, valuation reset, relevant peer performance, positioning or chasing evidence, subsequent disclosures, and current price behavior. Estimate remaining expected negative excess return versus SPY from the current price, state a plausible fade horizon, and assess squeeze risk.
 
 For held positions, monitor trigger resolution, fundamental evidence, reversal progress, valuation, squeeze risk, and invalidation. Continue only while an excessive markup and attractive prospective downside remain supported.
 
@@ -158,9 +158,9 @@ Select longs where a recent selloff appears materially larger than the deteriora
 
 For each candidate, identify the selloff period, apparent trigger, and evidence connecting the price move to that trigger. Determine which economic assumption the market appears to have marked down and test whether the available evidence supports a smaller, more temporary, or less company-specific impairment. Compare the price reaction with changes in expected earnings, cash flow, competitive position, capital needs, or long-term growth.
 
-Assess the magnitude and speed of the decline, valuation reset, relevant peer performance, positioning or forced-selling evidence, subsequent disclosures, and current price behavior. Estimate remaining expected excess return over SPY from the current price, state a plausible reversal horizon, and give the strongest opposing interpretation and explicit invalidation conditions.
+Assess the magnitude and speed of the decline, valuation reset, relevant peer performance, positioning or forced-selling evidence, subsequent disclosures, and current price behavior. Estimate remaining expected excess return over SPY from the current price and state a plausible reversal horizon.
 
-At each rebuild, evaluate reversal candidates from current prices independently of prior inclusion. Select names where the excessive-markdown thesis still exists and substantial prospective recovery remains unrealized.
+At each rebuild, select names where the excessive-markdown thesis still exists and substantial prospective recovery remains unrealized.
 
 ### Rebuilt short
 
@@ -168,6 +168,6 @@ Select shorts where a recent rally appears materially larger than the improvemen
 
 For each candidate, identify the rally period, apparent trigger, and evidence connecting the price move to that trigger. Determine which economic assumption the market appears to have marked up and test whether the available evidence supports a smaller, more temporary, or less company-specific improvement. Compare the price reaction with changes in expected earnings, cash flow, competitive position, capital needs, or long-term growth.
 
-Assess the magnitude and speed of the advance, valuation reset, relevant peer performance, positioning or chasing evidence, subsequent disclosures, and current price behavior. Estimate remaining expected negative excess return versus SPY from the current price, state a plausible fade horizon, and give the strongest benign interpretation, squeeze risk, and explicit invalidation conditions.
+Assess the magnitude and speed of the advance, valuation reset, relevant peer performance, positioning or chasing evidence, subsequent disclosures, and current price behavior. Estimate remaining expected negative excess return versus SPY from the current price, state a plausible fade horizon, and assess squeeze risk.
 
-At each rebuild, evaluate reversal candidates from current prices independently of prior inclusion. Select names where the excessive-markup thesis still exists and substantial prospective downside remains unrealized.
+At each rebuild, select names where the excessive-markup thesis still exists and substantial prospective downside remains unrealized.
