@@ -128,15 +128,17 @@ def test_short_basket_liquidation_is_permanent():
     assert result.active_cohorts == []
 
 
-def test_missing_open_is_invalid_direct_evidence_and_unavailable_policy():
+def test_missing_open_uses_provisional_prior_mark_in_evidence_and_policy():
     days, data, calendar = market()
     del data["AAPL"][1]["open"]
     signals = [signal(1, days[0])]
     result = signal_horizon_statistics(signals, data, calendar, 0.5)
-    assert result["invalid_count"] == 1
+    assert result["invalid_count"] == 0
+    assert result["complete_count"] == 1
     assert result["eligible"] is False
-    with pytest.raises(ValuationError, match="Missing open price"):
-        construct_policy(signals, data, calendar, 0.5)
+    policy = construct_policy(signals, data, calendar, 0.5)
+    assert policy.series[-1]["nav"] == 100
+    assert policy.series[-1]["timestamp"] == calendar[-1]["timestamp"]
 
 
 def test_grid_has_exactly_forty_horizons_and_search_correction():

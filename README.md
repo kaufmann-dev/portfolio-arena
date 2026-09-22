@@ -36,9 +36,14 @@ expand the note controls in holdings, active cohorts, or decision history to ins
   Opening and closing observations are separate
   UTC timestamp/phase events. API boundaries use `{timestamp, phase}` and chart points add `nav`.
 - **Publication:** prices become eligible 15 minutes after their boundary. Reads perform no provider
-  I/O and retain the latest complete boundary while new data is `updating`. After ten minutes of
-  publication lag it is `stale`; missing required history is `unavailable`. Missing openings are
-  never replaced with closing prices. Paused versions continue receiving market data.
+  I/O and advance valuations to SPY's latest observed boundary. Missing ticker prices use the
+  last earlier observation provisionally, preserving exposure and prior gains/losses while other
+  holdings and portfolios continue updating. A future print is never used to fill an earlier gap;
+  SPY and tickers with no prior price cannot be estimated. Affected results are labeled provisional,
+  including historical gaps, and recompute when actual prices arrive. These estimates do not imply
+  executable trades or a verified delisting settlement. After ten minutes of publication lag the
+  source data is `stale`; missing required history is `unavailable`. Paused versions continue
+  receiving market data.
 - **Browsing:** the SPA retains up to 64 public ranking, detail, comparison, and version responses
   in browser memory across navigation. Visited views display immediately; responses older than
   five minutes refresh in the background when revisited or focused. Visible analysis pages also
@@ -165,8 +170,9 @@ shown once and only SHA-256 hashes are stored.
 - Model, agent, prompt and portfolio tools expose administration with reference-aware deletion.
   Prompt revision history/restore and API-key management remain browser-only.
 - `get_market_data_diagnostics(version_id, track, direction)` identifies lagging tickers and
-  missing history using the selected arena's readiness rules. It returns the common and expected
-  market boundaries, each required symbol's latest cached boundary and fetch timestamp, and
+  missing history using the selected arena's readiness rules. It returns the valuation and expected
+  market boundaries (valuation uses SPY's latest boundary), each required symbol's latest cached
+  boundary and fetch timestamp, and
   history/target coverage. It reads the cache without downloading prices. The same diagnostic
   response is available at `GET /api/market-data/diagnostics` with those three query parameters;
   `/api/market-data` remains the lightweight version-wide polling endpoint.

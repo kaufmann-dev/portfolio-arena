@@ -156,7 +156,7 @@ def test_diagnostics_isolate_short_lag_and_expose_cached_boundaries(monkeypatch,
         long = market_refresh.market_data_diagnostics(session, 3, "rebuilt", "long", now)
 
     assert short["market_data_status"] == status
-    assert short["as_of"] == boundary_value(PRIOR, "close")
+    assert short["as_of"] == boundary_value(TARGET, "close")
     assert short["target_as_of"] == boundary_value(TARGET, "close")
     assert short["lagging_symbols"] == ["AAPL"]
     assert short["unavailable_symbols"] == []

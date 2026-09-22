@@ -56,7 +56,7 @@ export function marketDataWarning(
     return {
       title: targetAsOf ? `Updating ${fmtDate(targetAsOf)}` : "Updating latest prices",
       message: asOf
-        ? `Valuations remain on the complete ${fmtDate(asOf)} snapshot and will refresh automatically.`
+        ? `Valuations run through ${fmtDate(asOf)}. Missing ticker prices use earlier observations provisionally and will refresh automatically.`
         : "Valuations will appear automatically as soon as the complete snapshot is ready.",
       role: "status",
     };

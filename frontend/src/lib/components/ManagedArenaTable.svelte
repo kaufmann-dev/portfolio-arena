@@ -134,7 +134,14 @@
         liquidated
       </span>
     {/if}
-    {#if row.stale_data}<span class="badge warn">stale data</span>{/if}
+    {#if row.stale_data}
+      <span
+        class="badge warn"
+        title={`Missing prices use earlier observations: ${row.frozen_symbols.join(", ")}`}
+      >
+        provisional prices
+      </span>
+    {/if}
     {#if row.error}<span class="badge neg" title={row.error}>error</span>{/if}
   </span>
 {/snippet}

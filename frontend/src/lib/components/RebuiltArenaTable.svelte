@@ -149,10 +149,12 @@
     {#if !row.completion.eligible}
       <span class="badge">Evidence pending</span>
     {/if}
-    {#if row.stale_data}<span class="badge warn">stale data</span>{/if}
     {#if row.frozen_symbols.length}
-      <span class="badge neg" title="Prices frozen at their last known values">
-        frozen: {row.frozen_symbols.join(", ")}
+      <span
+        class="badge warn"
+        title="Missing prices use the last earlier observation; performance is provisional"
+      >
+        provisional: {row.frozen_symbols.join(", ")}
       </span>
     {/if}
     {#if row.error}<span class="badge neg" title={row.error}>error</span>{/if}
