@@ -1,7 +1,9 @@
 """Cache-only reads and atomic background market-data publication."""
 
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from app.db import session_factory
@@ -120,6 +122,74 @@ def test_missing_history_is_unavailable_without_provider_io(monkeypatch):
 
     assert loaded.status == "unavailable"
     assert loaded.unavailable_symbols == {"AAPL"}
+
+
+@pytest.mark.parametrize("now,status", [(UPDATING_NOW, "updating"), (STALE_NOW, "stale")])
+def test_diagnostics_isolate_short_lag_and_expose_cached_boundaries(monkeypatch, now, status):
+    _seed("SPY", series=NEW_SERIES)
+    _seed("MSFT", series=NEW_SERIES)
+    _seed("AAPL")
+
+    def portfolios(_session, version_id, *, prompt_mode, direction):
+        assert version_id == 3
+        assert prompt_mode == "rebuilt"
+        return [
+            SimpleNamespace(
+                prompt_mode="rebuilt",
+                signals=[
+                    SimpleNamespace(
+                        effective_date=REQUIRED_START,
+                        positions=[SimpleNamespace(symbol="AAPL" if direction == "short" else "MSFT")],
+                    )
+                ],
+            )
+        ]
+
+    monkeypatch.setattr(arena, "load_portfolios", portfolios)
+    monkeypatch.setattr(
+        massive,
+        "download_prices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("diagnostics performed I/O")),
+    )
+    with session_factory()() as session:
+        short = market_refresh.market_data_diagnostics(session, 3, "rebuilt", "short", now)
+        long = market_refresh.market_data_diagnostics(session, 3, "rebuilt", "long", now)
+
+    assert short["market_data_status"] == status
+    assert short["as_of"] == boundary_value(PRIOR, "close")
+    assert short["target_as_of"] == boundary_value(TARGET, "close")
+    assert short["lagging_symbols"] == ["AAPL"]
+    assert short["unavailable_symbols"] == []
+    assert short["symbols"][0] == {
+        "symbol": "AAPL",
+        "required_start": REQUIRED_START.isoformat(),
+        "required_for_latest_boundary": True,
+        "history_available": True,
+        "target_boundary_available": False,
+        "latest_available_boundary": boundary_value(PRIOR, "close"),
+        "fetched_at": UPDATING_NOW.isoformat(),
+        "lagging": True,
+    }
+    assert long["market_data_status"] == "fresh"
+    assert long["as_of"] == boundary_value(TARGET, "close")
+    assert long["lagging_symbols"] == []
+    assert {item["symbol"] for item in long["symbols"]} == {"MSFT", "SPY"}
+
+
+def test_diagnostics_distinguish_missing_history_from_missing_latest_boundary():
+    _seed("SPY", series=NEW_SERIES)
+    _seed("AAPL", series=_series(start=date(2026, 7, 15)))
+    with session_factory()() as session:
+        loaded = arena.load_price_series(session, _requirements("SPY", "AAPL", "MSFT"), now=STALE_NOW)
+    rows = {item["symbol"]: item for item in loaded.symbol_diagnostics}
+    assert loaded.status == "unavailable"
+    assert loaded.unavailable_symbols == {"AAPL", "MSFT"}
+    assert rows["AAPL"]["history_available"] is False
+    assert rows["AAPL"]["target_boundary_available"] is True
+    assert rows["AAPL"]["lagging"] is False
+    assert rows["MSFT"]["latest_available_boundary"] is None
+    assert rows["MSFT"]["fetched_at"] is None
+    assert rows["MSFT"]["lagging"] is True
 
 
 def test_background_refresh_publishes_grouped_progress_without_waiting_for_every_symbol(monkeypatch):

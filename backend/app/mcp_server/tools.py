@@ -11,6 +11,7 @@ Each tool opens its own session in a worker thread via ``threaded_tool``.
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from ..services import admin_ops, evaluator
 from ..services.admin_ops import AdminOpError
 from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
 from ..services.harnesses import harnesses_out
+from ..services.market_refresh import market_data_diagnostics
 from ..services.model_catalog import agent_out
 from ..services.rebuilt import HorizonObjective
 from ..services.serialize import (
@@ -237,6 +239,19 @@ def get_rebuilt_analysis(
 
 
 # --- Supporting reads -------------------------------------------------------
+
+
+@threaded_tool
+def get_market_data_diagnostics(
+    version_id: int, track: Literal["managed", "rebuilt"], direction: Literal["long", "short"]
+) -> dict:
+    """Diagnose stale arena data: expected/common boundaries, lagging or missing-history
+    tickers, latest cached boundaries and fetch timestamps. Cache-only; does not refresh prices.
+    Scope matches the selected arena version, track and direction.
+    """
+    with _session() as session:
+        _guard(admin_ops._version, session, version_id)
+        return market_data_diagnostics(session, version_id, track, direction)
 
 
 def _portfolio_prompt_out(

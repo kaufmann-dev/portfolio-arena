@@ -164,6 +164,12 @@ shown once and only SHA-256 hashes are stored.
   `sharpe`, `mean_daily_alpha`, or `hit_rate`. Rebuilt analysis includes the forty-column signal matrix.
 - Model, agent, prompt and portfolio tools expose administration with reference-aware deletion.
   Prompt revision history/restore and API-key management remain browser-only.
+- `get_market_data_diagnostics(version_id, track, direction)` identifies lagging tickers and
+  missing history using the selected arena's readiness rules. It returns the common and expected
+  market boundaries, each required symbol's latest cached boundary and fetch timestamp, and
+  history/target coverage. It reads the cache without downloading prices. The same diagnostic
+  response is available at `GET /api/market-data/diagnostics` with those three query parameters;
+  `/api/market-data` remains the lightweight version-wide polling endpoint.
 - `get_settings` / `update_settings` manage allocation policies and every shared research/submission
   prompt block: mode wrappers, direction instructions, `allocation_policy_instructions`,
   `automated_submission_instructions`, `managed_manual_submission_instructions`, and
