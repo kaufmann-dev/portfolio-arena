@@ -254,7 +254,11 @@ Codex runs with a read-only sandbox and read-only Portfolio Arena MCP tools. It 
 the Codex CLI's persisted ChatGPT login, not an OpenAI API key. Muse Code runs via `muse exec`
 with web tools enabled and shell/file writes disabled. It uses the same read-only Arena MCP token
 and Massive MCP server. Muse returns JSON in its root terminal event; the worker validates the
-structured response before submission. All four harnesses return `proposal` for full or partial selections,
+structured response before submission. Muse's `--json` flag records its event stream; it does not
+constrain the model's response shape. Muse and OpenCode receive the proposal schema in their prompts,
+so the worker supplies omitted `error: ""` and `blocked_reason: null` fields for successful responses
+before applying the existing strict validation. Blocked responses still require an explicit error and
+reason. All four harnesses return `proposal` for full or partial selections,
 `abstained` for completed research with no qualifying securities, or `blocked` only when portfolio
 context or required research is unavailable. The latter requires `blocked_reason` of
 `portfolio_unavailable` or `research_unavailable`. Partial allocations and abstentions require a note
