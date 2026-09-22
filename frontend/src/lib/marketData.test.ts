@@ -57,7 +57,8 @@ describe("marketDataWarning", () => {
 
     expect(warning?.role).toBe("status");
     expect(warning?.title).toBe("Updating 2026-07-29 close");
-    expect(warning?.message).toContain("complete 2026-07-28 close snapshot");
+    expect(warning?.message).toContain("Valuations run through 2026-07-28 close");
+    expect(warning?.message).toContain("provisionally");
   });
 
   it("warns that unavailable prices make valuations incomplete", () => {

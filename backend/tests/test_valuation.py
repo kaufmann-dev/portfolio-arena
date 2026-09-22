@@ -119,11 +119,36 @@ def test_short_reference_resets_only_at_close():
     assert [point["nav"] for point in result] == pytest.approx([100, 90, 81, 72, 72, 72])
 
 
-def test_missing_open_is_not_replaced_by_close():
+def test_missing_open_uses_prior_price_not_future_close():
     data = prices([(100, 100), (110, 120), (110, 100)])
     del data[1]["open"]
-    with pytest.raises(ValuationError, match="Missing open price"):
-        value([AllocationInput(DAYS[0], (position(),))], {"AAPL": data})
+    result = value([AllocationInput(DAYS[0], (position(),))], {"AAPL": data})
+    assert result.series[1]["nav"] == 100
+    assert result.series[2]["nav"] == 120
+    assert result.frozen_symbols == ["AAPL"]
+    assert result.stale_days == {"AAPL": [boundary(DAYS[1], "open")["timestamp"]]}
+
+
+@pytest.mark.parametrize("direction,expected", [("long", 120), ("short", 80)])
+def test_missing_ticker_preserves_exposure_while_other_holdings_advance(direction, expected):
+    data = {
+        "AAPL": prices([(100, 100), (80, 80), (80, 80)])[:2],
+        "MSFT": prices([(100, 100), (120, 120), (160, 160)]),
+    }
+    allocation = AllocationInput(DAYS[0], (position("AAPL", 50), position("MSFT", 50)))
+    result = value([allocation], data, direction=direction)
+    assert result.series[-1]["nav"] == expected
+    assert result.series[-1]["timestamp"] == boundary(DAYS[-1])["timestamp"]
+    assert result.frozen_symbols == ["AAPL"]
+    data["AAPL"] = prices([(100, 100), (80, 80), (60, 60)])
+    repaired = value([allocation], data, direction=direction)
+    assert repaired.frozen_symbols == []
+    assert repaired.series[-1]["nav"] == (110 if direction == "long" else 90)
+
+
+def test_missing_entry_cannot_use_future_prices():
+    with pytest.raises(ValuationError, match="Missing close price"):
+        value([AllocationInput(DAYS[0], (position(),))], {"AAPL": SPY[1:]})
 
 
 def test_calendar_preserves_missing_open_for_horizon_accounting():

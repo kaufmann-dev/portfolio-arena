@@ -73,6 +73,7 @@ class PreparedMarket:
     prices: dict[str, Series]
     calendar: list[Boundary]
     lookups: dict[str, PriceLookup]
+    provisional_symbols: set[str] = field(default_factory=set)
 
     @cached_property
     def reference(self) -> PreparedReference:
@@ -82,7 +83,10 @@ class PreparedMarket:
         lookup = self.lookups.get(symbol)
         if lookup is None:
             raise RebuiltValuationError(f"Missing price series for {symbol}.")
-        return lookup.require(event, symbol)
+        value = lookup.mark(event, symbol)
+        if lookup.at(event) is None:
+            self.provisional_symbols.add(symbol)
+        return value
 
 
 def prepare_market(prices: dict[str, Series], calendar: list[Boundary]) -> PreparedMarket:

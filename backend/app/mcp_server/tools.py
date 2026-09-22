@@ -245,7 +245,7 @@ def get_rebuilt_analysis(
 def get_market_data_diagnostics(
     version_id: int, track: Literal["managed", "rebuilt"], direction: Literal["long", "short"]
 ) -> dict:
-    """Diagnose stale arena data: expected/common boundaries, lagging or missing-history
+    """Diagnose stale arena data: expected/valuation boundaries, lagging or missing-history
     tickers, latest cached boundaries and fetch timestamps. Cache-only; does not refresh prices.
     Scope matches the selected arena version, track and direction.
     """

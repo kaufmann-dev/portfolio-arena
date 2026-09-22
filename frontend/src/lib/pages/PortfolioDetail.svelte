@@ -247,9 +247,8 @@
         <span class="badge">{portfolio.execution_boundary === "open" ? "Open" : "Close"}</span>
         <span class="badge">{portfolio.version.name}</span>
         <EvidenceBadge state={portfolio.evidence} />
-        {#if portfolio.stale_data}<span class="badge warn">stale data</span>{/if}
         {#if portfolio.frozen_symbols.length}
-          <span class="badge neg">{portfolio.frozen_symbols.length} frozen</span>
+          <span class="badge warn">provisional prices</span>
         {/if}
         {#if portfolio.is_liquidated}
           <span class="badge neg">{data.track === "rebuilt" ? "policy liquidated" : "liquidated"}</span>
@@ -278,8 +277,10 @@
 
     {#if portfolio.frozen_symbols.length}
       <div class="error-box" role="alert">
-        <strong>Frozen positions:</strong>
-        {portfolio.frozen_symbols.join(", ")} stopped returning prices and remain at their last known values.
+        <strong>Provisional performance:</strong>
+        Missing prices for {portfolio.frozen_symbols.join(", ")} use their last earlier observations. Performance
+        continues updating and is recalculated when prices become available. These marks do not establish that a
+        position could be traded at that price.
       </div>
     {/if}
 

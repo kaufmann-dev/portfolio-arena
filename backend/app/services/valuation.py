@@ -15,7 +15,6 @@ from typing import Literal
 from .trading_calendar import boundary_value, is_trading_day
 
 TRADING_DAYS_PER_YEAR = 252
-FROZEN_AFTER_TRADING_DAYS = 5
 Series = list[dict]
 Direction = Literal["long", "short"]
 Boundary = dict[str, str]
@@ -90,6 +89,19 @@ class PriceLookup:
             for phase in ("open", "close")
             if point.get(phase) is not None and math.isfinite(float(point[phase])) and float(point[phase]) > 0
         }
+        self.ordered = sorted((day, 0 if phase == "open" else 1) for day, phase in self.values)
+
+    def mark(self, boundary: Boundary, symbol: str) -> float:
+        """Provisional mark from the latest earlier print, never a future observation."""
+        exact = self.at(boundary)
+        if exact is not None or symbol == "SPY":
+            return self.require(boundary, symbol)
+        key = (boundary_date(boundary), 0 if boundary["phase"] == "open" else 1)
+        index = bisect_right(self.ordered, key) - 1
+        if index < 0:
+            return self.require(boundary, symbol)
+        day, phase = self.ordered[index]
+        return self.values[day, "open" if phase == 0 else "close"]
 
     def at(self, boundary: Boundary) -> float | None:
         return self.values.get((boundary_date(boundary), boundary["phase"]))
@@ -174,6 +186,7 @@ def value_portfolio(
     liquidated_at = None
     reference_units = 0.0
     reference_target = 0.0
+    stale_days: dict[str, list[str]] = {}
     needs_reference = any(
         sum(p.weight_pct for p in allocation.positions) < 100
         for scheduled in schedule.values()
@@ -199,7 +212,12 @@ def value_portfolio(
     def price(symbol: str, event: Boundary) -> float:
         if symbol not in lookups:
             raise ValuationError(f"Missing price series for {symbol}.")
-        return lookups[symbol].require(event, symbol)
+        value = lookups[symbol].mark(event, symbol)
+        if lookups[symbol].at(event) is None:
+            missing = stale_days.setdefault(symbol, [])
+            if event["timestamp"] not in missing:
+                missing.append(event["timestamp"])
+        return value
 
     def equity(event: Boundary) -> float:
         if direction == "long":
@@ -305,6 +323,8 @@ def value_portfolio(
         series,
         sorted(applied, key=lambda item: item.effective_date),
         holdings,
+        stale_days=stale_days,
+        frozen_symbols=sorted(stale_days),
         cumulative_turnover_pct=turnover_total,
         liquidated_at=liquidated_at,
         reference_holding={

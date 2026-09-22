@@ -44,7 +44,7 @@ from .valuation import (
 
 SPY_SYMBOL = "SPY"
 MarketDataStatus = Literal["fresh", "updating", "stale", "unavailable"]
-ANALYTICS_ENGINE_VERSION = 4
+ANALYTICS_ENGINE_VERSION = 5
 
 
 @dataclass
@@ -199,7 +199,7 @@ def load_price_series(
     readiness_symbols: set[str] | None = None,
     now: datetime | None = None,
 ) -> PriceSeriesLoad:
-    """Read a coherent version-local boundary watermark without provider I/O."""
+    """Advance on SPY's observed boundary; report individual price gaps separately."""
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
@@ -223,8 +223,7 @@ def load_price_series(
             <= target["timestamp"]
         }
     lagging = {symbol for symbol in readiness if target["timestamp"] not in observed[symbol]}
-    common = set.intersection(*(set(observed[symbol]) for symbol in readiness))
-    latest = max(common, default=None)
+    latest = max(observed[SPY_SYMBOL], default=None)
     as_of = observed[SPY_SYMBOL].get(latest) if latest else None
     deadline = boundary_at(date.fromisoformat(boundary_date(target)), target["phase"]) + timedelta(
         minutes=MASSIVE_DATA_DELAY_MINUTES + MARKET_DATA_UPDATE_GRACE_MINUTES
@@ -448,6 +447,7 @@ def compute_rebuilt_arena(
             continue
 
         def build(portfolio=portfolio):
+            market.provisional_symbols.clear()
             try:
                 inputs = [
                     SignalInput(item.id, **payload)
@@ -461,16 +461,21 @@ def compute_rebuilt_arena(
                     portfolio.execution_boundary,
                     prepared_market=market,
                 )
-                return horizons, {policy.horizon: policy for policy in policies}, None
+                return (
+                    horizons,
+                    {policy.horizon: policy for policy in policies},
+                    None,
+                    sorted(market.provisional_symbols),
+                )
             except ValuationError as exc:
-                return [], {}, str(exc)
+                return [], {}, str(exc), sorted(market.provisional_symbols)
 
-        horizons, policies, error = _rebuilt_cache.get_or_compute(
+        horizons, policies, error, provisional_symbols = _rebuilt_cache.get_or_compute(
             _cache_key(portfolio, portfolio.signals, loaded.series, calendar, loaded.as_of), build
         )
         selected = select_policy(list(policies.values()), objective)
         arena.by_portfolio_id[portfolio.id] = RebuiltPortfolioAnalysis(
-            portfolio, horizons, policies, selected, error, loaded.status == "stale"
+            portfolio, horizons, policies, selected, error, bool(provisional_symbols), provisional_symbols
         )
         if error:
             arena.market_data_status = "unavailable"
