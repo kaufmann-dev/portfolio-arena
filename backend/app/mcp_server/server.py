@@ -47,6 +47,8 @@ instructions: automated workers return structured results; manual evaluations su
 mode-specific write tool.
 
 `get_arena_overview` and `get_rebuilt_analysis` provide version- and direction-scoped results.
+Use `get_market_data_diagnostics` to identify lagging tickers and missing cached history
+for a version, track and direction without triggering price downloads.
 """
 
 mcp = FastMCP(

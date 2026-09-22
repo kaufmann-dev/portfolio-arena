@@ -73,6 +73,7 @@ class PriceSeriesLoad:
     target_as_of: Boundary
     stale_symbols: set[str] = field(default_factory=set)
     unavailable_symbols: set[str] = field(default_factory=set)
+    symbol_diagnostics: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -212,7 +213,7 @@ def load_price_series(
     }
     readiness = set(readiness_symbols if readiness_symbols is not None else required_starts) | {SPY_SYMBOL}
     observed: dict[str, dict[str, Boundary]] = {}
-    for symbol in readiness:
+    for symbol in set(required_starts) | readiness:
         observed[symbol] = {
             event["timestamp"]: event
             for point in series.get(symbol, [])
@@ -222,7 +223,7 @@ def load_price_series(
             <= target["timestamp"]
         }
     lagging = {symbol for symbol in readiness if target["timestamp"] not in observed[symbol]}
-    common = set.intersection(*(set(points) for points in observed.values())) if observed else set()
+    common = set.intersection(*(set(observed[symbol]) for symbol in readiness))
     latest = max(common, default=None)
     as_of = observed[SPY_SYMBOL].get(latest) if latest else None
     deadline = boundary_at(date.fromisoformat(boundary_date(target)), target["phase"]) + timedelta(
@@ -237,8 +238,26 @@ def load_price_series(
         if now < deadline
         else "stale"
     )
+    diagnostics = []
+    for symbol in sorted(set(required_starts) | readiness):
+        entry = entries.get(symbol)
+        boundaries = observed.get(symbol, {})
+        diagnostics.append(
+            {
+                "symbol": symbol,
+                "required_start": required_starts[symbol].isoformat() if symbol in required_starts else None,
+                "required_for_latest_boundary": symbol in readiness,
+                "history_available": symbol not in unavailable,
+                "target_boundary_available": target["timestamp"] in boundaries
+                if symbol in readiness
+                else None,
+                "latest_available_boundary": boundaries[max(boundaries)] if boundaries else None,
+                "fetched_at": entry.fetched_at.isoformat() if entry else None,
+                "lagging": symbol in lagging,
+            }
+        )
     return PriceSeriesLoad(
-        series, status, as_of, target, lagging if status == "stale" else set(), unavailable
+        series, status, as_of, target, lagging if status == "stale" else set(), unavailable, diagnostics
     )
 
 

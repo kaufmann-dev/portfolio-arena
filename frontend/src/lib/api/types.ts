@@ -61,6 +61,24 @@ export interface MarketDataSnapshot {
   market_data_status: MarketDataStatus;
 }
 
+export interface MarketDataDiagnostics extends MarketDataSnapshot {
+  version_id: number;
+  track: ArenaTrack;
+  direction: Direction;
+  lagging_symbols: string[];
+  unavailable_symbols: string[];
+  symbols: {
+    symbol: string;
+    required_start: string | null;
+    required_for_latest_boundary: boolean;
+    history_available: boolean;
+    target_boundary_available: boolean | null;
+    latest_available_boundary: Boundary | null;
+    fetched_at: string | null;
+    lagging: boolean;
+  }[];
+}
+
 export interface AppSettings {
   managed_allocation_policy: AllocationPolicy;
   rebuilt_allocation_policy: AllocationPolicy;

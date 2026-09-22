@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -45,6 +46,36 @@ def market_snapshot(session: Session, now: datetime | None = None, *, version_id
         portfolios, target, target_phase=price_cache.latest_available_boundary(now)["phase"]
     )
     return load_price_series(session, requirements, readiness, now)
+
+
+def market_data_diagnostics(
+    session: Session,
+    version_id: int,
+    track: Literal["managed", "rebuilt"],
+    direction: Literal["long", "short"],
+    now: datetime | None = None,
+) -> dict:
+    """Inspect cached prices using the same scope and readiness rules as the arena."""
+    from .arena import global_pricing_requirements, load_portfolios, load_price_series
+
+    now = _aware(now or datetime.now(UTC))
+    target = price_cache.latest_available_session(now)
+    portfolios = load_portfolios(session, version_id, prompt_mode=track, direction=direction)
+    requirements, readiness = global_pricing_requirements(
+        portfolios, target, target_phase=price_cache.latest_available_boundary(now)["phase"]
+    )
+    snapshot = load_price_series(session, requirements, readiness, now)
+    return {
+        "version_id": version_id,
+        "track": track,
+        "direction": direction,
+        "as_of": snapshot.as_of,
+        "target_as_of": snapshot.target_as_of,
+        "market_data_status": snapshot.status,
+        "lagging_symbols": [item["symbol"] for item in snapshot.symbol_diagnostics if item["lagging"]],
+        "unavailable_symbols": sorted(snapshot.unavailable_symbols),
+        "symbols": snapshot.symbol_diagnostics,
+    }
 
 
 def refresh_market_data_once(now: datetime | None = None) -> RefreshOutcome:

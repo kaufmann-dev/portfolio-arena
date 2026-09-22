@@ -74,6 +74,24 @@ class TestMcpAuth:
 
 
 class TestMcpTools:
+    def test_market_diagnostics_matches_api_and_validates_scope(self, client, mcp_headers):
+        args = {"version_id": 1, "track": "rebuilt", "direction": "short"}
+        data = _call_tool(client, mcp_headers, "get_market_data_diagnostics", args)
+        response = client.get("/api/market-data/diagnostics", params=args)
+        assert response.status_code == 200
+        assert data == response.json()
+        assert {item["symbol"] for item in data["symbols"]} == {"SPY"}
+        for key, value in (("track", "invalid"), ("direction", "invalid"), ("version_id", 999999)):
+            invalid = {**args, key: value}
+            assert client.get("/api/market-data/diagnostics", params=invalid).status_code in {404, 422}
+            result = _rpc(
+                client,
+                mcp_headers,
+                "tools/call",
+                {"name": "get_market_data_diagnostics", "arguments": invalid},
+            ).json()["result"]
+            assert result["isError"]
+
     def test_harness_registry_matches_api_with_opencode(self, client, mcp_headers, admin_headers):
         registry = _call_tool(client, mcp_headers, "list_harnesses")
         assert registry == client.get("/api/harnesses", headers=admin_headers).json()
@@ -98,6 +116,7 @@ class TestMcpTools:
             "list_portfolios",
             "get_arena_overview",
             "get_rebuilt_analysis",
+            "get_market_data_diagnostics",
             "list_harnesses",
             "list_models",
             "create_model",

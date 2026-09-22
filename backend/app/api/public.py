@@ -13,7 +13,7 @@ from ..models import Agent, ArenaVersion, ModelDefinition, Portfolio, Prompt, Si
 from ..ratelimit import limiter
 from ..services import admin_ops
 from ..services.arena import compute_rebuilt_arena, compute_valuations, load_portfolios
-from ..services.market_refresh import market_snapshot
+from ..services.market_refresh import market_data_diagnostics, market_snapshot
 from ..services.model_catalog import agent_out
 from ..services.prompt_policy import allocation_policies_out, allocation_policy_out
 from ..services.rebuilt import HorizonObjective
@@ -70,6 +70,19 @@ def market_data(request: Request, version_id: int, session: Session = Depends(ge
         "target_as_of": snapshot.target_as_of,
         "market_data_status": snapshot.status,
     }
+
+
+@router.get("/market-data/diagnostics")
+@limiter.limit("30/minute")
+def get_market_data_diagnostics(
+    request: Request,
+    version_id: int,
+    track: Track,
+    direction: Direction,
+    session: Session = Depends(get_session),
+):
+    _version(session, version_id)
+    return market_data_diagnostics(session, version_id, track, direction)
 
 
 @router.get("/arena/managed")
