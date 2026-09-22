@@ -90,6 +90,19 @@ class Proposal(BaseModel):
         return self
 
 
+def _proposal_from_prompt_guided_json(raw: str) -> Proposal:
+    """Validate prompt-guided output, filling only status-implied success fields."""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return Proposal.model_validate_json(raw)
+
+    if isinstance(payload, dict) and payload.get("status") in {"proposal", "abstained"}:
+        payload.setdefault("error", "")
+        payload.setdefault("blocked_reason", None)
+    return Proposal.model_validate(payload)
+
+
 class PortfolioRef(BaseModel):
     id: int
     slug: str
@@ -513,7 +526,7 @@ async def run_muse(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Propo
                 raise RuntimeError(detail[-4000:]) from exc
             detail = stderr.decode(errors="replace")[-4000:] or f"Muse exited with {process.returncode}"
             raise RuntimeError(detail)
-        return Proposal.model_validate_json(muse_result(stdout))
+        return _proposal_from_prompt_guided_json(muse_result(stdout))
 
 
 async def run_opencode(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> Proposal:
@@ -552,7 +565,7 @@ async def run_opencode(settings: EvaluatorRuntimeSettings, run: ClaimedRun) -> P
                         stderr.decode(errors="replace")[-4000:]
                         or f"OpenCode exited with {process.returncode}"
                     )
-                return Proposal.model_validate_json(opencode_result(stdout))
+                return _proposal_from_prompt_guided_json(opencode_result(stdout))
     except TimeoutError:
         raise RuntimeError(f"opencode attempt exceeded {run.timeout_seconds} seconds") from None
 
