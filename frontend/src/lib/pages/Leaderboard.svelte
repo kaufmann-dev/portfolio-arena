@@ -10,6 +10,7 @@
     VersionsResponse,
     CompareResponse,
     Direction,
+    ExecutionBoundary,
     HorizonObjective,
     ManagedArenaPortfolio,
     ManagedArenaResponse,
@@ -82,6 +83,7 @@
   const version = $derived(versions.find((item) => item.id === versionId));
   let agentFilter = $state("all");
   let promptFilter = $state("all");
+  let executionFilter = $state<ExecutionBoundary | "all">("all");
   const arenaQuery = $derived(
     versionId === null
       ? null
@@ -134,6 +136,11 @@
   });
   const agentOptions = $derived([{ value: "all", label: "All agents" }, ...agents]);
   const promptOptions = $derived([{ value: "all", label: "All prompts" }, ...prompts]);
+  const executionOptions = [
+    { value: "all", label: "All portfolios" },
+    { value: "open", label: "Market open" },
+    { value: "close", label: "Market close" },
+  ];
   const rebuiltBenchmarkName = $derived(
     rebuiltData?.portfolios.find((row) => row.kind === "benchmark")?.name ??
       (direction === "short" ? "Short SPY" : "SPY"),
@@ -142,7 +149,8 @@
     allRealRows.filter(
       (row) =>
         (agentFilter === "all" || row.agent.slug === agentFilter) &&
-        (promptFilter === "all" || row.prompt.slug === promptFilter),
+        (promptFilter === "all" || row.prompt.slug === promptFilter) &&
+        (executionFilter === "all" || row.execution_boundary === executionFilter),
     ),
   );
   const managedRows = $derived.by((): ManagedArenaResponse["portfolios"] => {
@@ -231,6 +239,7 @@
   function resetFilters(): void {
     agentFilter = "all";
     promptFilter = "all";
+    executionFilter = "all";
   }
 
   function changeObjective(value: string): void {
@@ -424,6 +433,13 @@
           label="Prompt"
           options={promptOptions}
           bind:value={promptFilter}
+          compact
+        />
+        <SelectField
+          id="arena-execution"
+          label="Execution timing"
+          options={executionOptions}
+          bind:value={executionFilter}
           compact
         />
       </div>
