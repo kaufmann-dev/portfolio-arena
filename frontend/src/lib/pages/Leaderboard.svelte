@@ -649,7 +649,7 @@
   }
 
   .filter-controls {
-    grid-template-columns: repeat(2, minmax(160px, 220px)) auto;
+    grid-template-columns: repeat(3, minmax(160px, 220px));
   }
 
   .filter-context,
