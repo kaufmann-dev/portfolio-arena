@@ -181,7 +181,9 @@
         ? `Could not refresh; showing saved results. ${analysisQuery.error}`
         : analysisQuery.error}</span
     >
-    <button class="btn small" type="button" onclick={() => void analysisQuery.load(true)}>Retry</button>
+    {#if analysisQuery.errorStatus !== 404}
+      <button class="btn small" type="button" onclick={() => void analysisQuery.load(true)}>Retry</button>
+    {/if}
   </div>
 {/if}
 {#if !analysisQuery.data && !analysisQuery.error}

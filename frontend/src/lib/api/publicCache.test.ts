@@ -83,9 +83,11 @@ describe("public display snapshots", () => {
     await query.load();
     expect(query.data).toEqual({ revision: 1 });
     expect(query.error).toBe("Temporarily unavailable");
+    expect(query.errorStatus).toBe(503);
     await query.load();
     expect(query.data).toEqual({ revision: 2 });
     expect(query.error).toBe("");
+    expect(query.errorStatus).toBeNull();
   });
   it("removes a deleted portfolio's snapshot", async () => {
     vi.stubGlobal(
@@ -100,6 +102,7 @@ describe("public display snapshots", () => {
     await query.load(true);
     expect(query.data).toBeNull();
     expect(query.error).toBe("Portfolio not found");
+    expect(query.errorStatus).toBe(404);
   });
   it("prevents a late pre-edit request from restoring an invalidated snapshot", async () => {
     const old = deferred();

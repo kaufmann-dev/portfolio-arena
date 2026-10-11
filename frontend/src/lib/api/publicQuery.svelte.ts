@@ -6,6 +6,8 @@ export class PublicQuery<T> {
   data = $state.raw<T | null>(null);
   loading = $state(false);
   error = $state("");
+  /** HTTP status of the last failed load, or null when it succeeded or failed without a response. */
+  errorStatus = $state<number | null>(null);
   private updatedAt = Number.NEGATIVE_INFINITY;
   private generation = 0;
   private pending: Promise<void> | null = null;
@@ -24,6 +26,7 @@ export class PublicQuery<T> {
     const generation = this.generation;
     this.loading = true;
     this.error = "";
+    this.errorStatus = null;
     this.pending = apiJson<T>(this.url)
       .then((data) => {
         if (generation !== this.generation) return;
@@ -33,6 +36,7 @@ export class PublicQuery<T> {
       .catch((error: unknown) => {
         if (generation !== this.generation) return;
         this.error = error instanceof Error ? error.message : "Could not load results.";
+        this.errorStatus = error instanceof ApiError ? error.status : null;
         if (error instanceof ApiError && [401, 403, 404].includes(error.status)) this.data = null;
       })
       .finally(() => {
@@ -49,6 +53,7 @@ export class PublicQuery<T> {
     this.pending = null;
     this.data = null;
     this.error = "";
+    this.errorStatus = null;
     this.loading = false;
   }
 }
