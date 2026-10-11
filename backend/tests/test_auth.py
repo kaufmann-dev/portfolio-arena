@@ -4,9 +4,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
 import pytest
-import respx
 from authlib.integrations.base_client import OAuthError
 from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
@@ -204,9 +202,14 @@ class TestWriteBoundaries:
 
 
 def test_oidc_login_uses_authorization_code_pkce_and_nonce(client):
-    with respx.mock(assert_all_called=True) as mock:
-        mock.get(DISCOVERY_URL).mock(return_value=httpx.Response(200, json=_metadata()))
-        response = client.get("/api/auth/login", follow_redirects=False)
+    from app.oidc import get_oidc_client
+
+    # Authlib fetches discovery metadata through httpx2, which respx cannot intercept;
+    # preloading it skips the network fetch.
+    oidc = get_oidc_client()
+    assert oidc._server_metadata_url == DISCOVERY_URL
+    oidc.server_metadata.update(_metadata(), _loaded_at=0)
+    response = client.get("/api/auth/login", follow_redirects=False)
 
     assert response.status_code == 302
     query = parse_qs(urlsplit(response.headers["location"]).query)

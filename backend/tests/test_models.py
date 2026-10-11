@@ -124,8 +124,8 @@ def test_harness_registry_exposes_harness_reasoning_vocabularies(client, admin_h
                     {"id": "medium", "name": "Medium"},
                     {"id": "high", "name": "High"},
                     {"id": "xhigh", "name": "Extra high"},
-                    {"id": "ultra", "name": "Ultra"},
                     {"id": "max", "name": "Max"},
+                    {"id": "ultra", "name": "Ultra"},
                 ],
             },
             {
