@@ -8,6 +8,7 @@
   import Admin from "./lib/pages/Admin.svelte";
   import AgentDetail from "./lib/pages/AgentDetail.svelte";
   import Leaderboard from "./lib/pages/Leaderboard.svelte";
+  import NotFound from "./lib/pages/NotFound.svelte";
   import PortfolioDetail from "./lib/pages/PortfolioDetail.svelte";
   import PromptDetail from "./lib/pages/PromptDetail.svelte";
   import { auth } from "./lib/stores/auth.svelte";
@@ -40,6 +41,8 @@
         return "Admin";
       case "about":
         return "About";
+      case "notFound":
+        return "Page not found";
     }
   });
   const pageTitle = $derived(`${routeLabel} · Portfolio Arena`);
@@ -256,8 +259,10 @@
           <AgentDetail slug={router.route.params.slug} />
         {:else if router.route.name === "admin"}
           <Admin />
-        {:else}
+        {:else if router.route.name === "about"}
           <About />
+        {:else}
+          <NotFound />
         {/if}
       </main>
     {/key}

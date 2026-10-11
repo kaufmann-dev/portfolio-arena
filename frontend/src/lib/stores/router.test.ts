@@ -13,7 +13,10 @@ describe("application routes", () => {
     expect(parsePath("/admin")).toEqual({ name: "admin", params: {} });
     expect(parsePath("/prompt/daily%20signal")).toEqual({ name: "prompt", params: { slug: "daily signal" } });
   });
-  it("uses the Arena for unknown paths", () => {
-    expect(parsePath("/unknown")).toEqual({ name: "home", params: {} });
+  it("routes the root to the Arena and unknown paths to the not-found page", () => {
+    expect(parsePath("/")).toEqual({ name: "home", params: {} });
+    expect(parsePath("/unknown")).toEqual({ name: "notFound", params: {} });
+    expect(parsePath("/admin/extra")).toEqual({ name: "notFound", params: {} });
+    expect(parsePath("/p/example/extra")).toEqual({ name: "notFound", params: {} });
   });
 });

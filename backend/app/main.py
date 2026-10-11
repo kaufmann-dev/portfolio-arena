@@ -2,24 +2,20 @@
 
 import asyncio
 import logging
-import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlalchemy import text
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .api import api_router
 from .config import OIDC_FLOW_COOKIE, get_settings
 from .db import dispose_engine, session_factory
-from .error_pages import render_error_page
 from .log import setup_logging
 from .mcp_server import build_mcp_asgi_app, mcp
 from .migrate import run_migrations
@@ -29,14 +25,6 @@ from .services.market_refresh import run_market_refresh_loop
 from .static_files import static_cache_headers
 
 logger = logging.getLogger(__name__)
-
-# Paths the SPA router renders (see frontend/src/lib/stores/router.svelte.ts).
-CLIENT_ROUTE = re.compile(r"(?:(?:p|prompt|agent)/[^/]+|admin|about)?/?")
-
-
-def _wants_json(request: Request) -> bool:
-    path = request.url.path
-    return path in ("/api", "/mcp") or path.startswith(("/api/", "/mcp/"))
 
 
 class McpTrailingSlash:
@@ -98,21 +86,6 @@ def create_app() -> FastAPI:
             headers={"Retry-After": "60"},
         )
 
-    # API and MCP clients keep FastAPI's JSON errors; browser navigations get an HTML page.
-    @app.exception_handler(StarletteHTTPException)
-    async def http_error_handler(request: Request, exc: StarletteHTTPException):
-        if _wants_json(request):
-            return await http_exception_handler(request, exc)
-        return HTMLResponse(
-            render_error_page(exc.status_code), status_code=exc.status_code, headers=exc.headers
-        )
-
-    @app.exception_handler(Exception)
-    async def server_error_handler(request: Request, exc: Exception):
-        if _wants_json(request):
-            return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
-        return HTMLResponse(render_error_page(500), status_code=500)
-
     app.include_router(api_router)
 
     @app.get("/api/health")
@@ -131,7 +104,7 @@ def create_app() -> FastAPI:
     def serve_static(path: str):
         if path == "api" or path.startswith("api/"):
             raise HTTPException(404, "Not found")
-        if CLIENT_ROUTE.fullmatch(path):
+        if not path or path == "/":
             return FileResponse(static_dir / "index.html", headers=static_cache_headers(path, spa=True))
 
         try:
@@ -142,7 +115,7 @@ def create_app() -> FastAPI:
 
         if file_path.is_file():
             return FileResponse(file_path, headers=static_cache_headers(path))
-        raise HTTPException(404, "Not found")
+        return FileResponse(static_dir / "index.html", headers=static_cache_headers(path, spa=True))
 
     return app
 

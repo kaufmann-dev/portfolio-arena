@@ -4,7 +4,8 @@ export type Route =
   | { name: "prompt"; params: { slug: string } }
   | { name: "agent"; params: { slug: string } }
   | { name: "admin"; params: Record<string, never> }
-  | { name: "about"; params: Record<string, never> };
+  | { name: "about"; params: Record<string, never> }
+  | { name: "notFound"; params: Record<string, never> };
 
 function decodePart(value: string): string {
   try {
@@ -16,6 +17,12 @@ function decodePart(value: string): string {
 
 export function parsePath(pathname: string): Route {
   const parts = pathname.split("/").filter(Boolean);
+  if (parts.length === 0) {
+    return { name: "home", params: {} };
+  }
+  if (parts.length > 2) {
+    return { name: "notFound", params: {} };
+  }
   if (parts[0] === "p" && parts[1]) {
     return { name: "portfolio", params: { slug: decodePart(parts[1]) } };
   }
@@ -25,13 +32,13 @@ export function parsePath(pathname: string): Route {
   if (parts[0] === "agent" && parts[1]) {
     return { name: "agent", params: { slug: decodePart(parts[1]) } };
   }
-  if (parts[0] === "admin") {
+  if (parts[0] === "admin" && parts.length === 1) {
     return { name: "admin", params: {} };
   }
-  if (parts[0] === "about") {
+  if (parts[0] === "about" && parts.length === 1) {
     return { name: "about", params: {} };
   }
-  return { name: "home", params: {} };
+  return { name: "notFound", params: {} };
 }
 
 class RouterStore {

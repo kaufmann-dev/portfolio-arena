@@ -25,9 +25,6 @@ Portfolio Arena: a FastAPI + SQLAlchemy backend (`backend/`, PostgreSQL) serving
   `backend/app/api/admin.py` (writes, guarded by `Depends(require_admin)`), `auth.py`,
   `keys.py` (API-key management, browser-admin-session only). Response shaping is shared in
   `backend/app/services/serialize.py`.
-- `backend/app/main.py` serves `index.html` only for SPA routes matched by `CLIENT_ROUTE`; other
-  non-API paths get the HTML pages in `backend/app/error_pages.py`. Extend `CLIENT_ROUTE` when
-  adding a route to `frontend/src/lib/stores/router.svelte.ts`.
 - Allocation and core admin write/integrity logic lives in `backend/app/services/admin_ops.py`
   (raising `AdminOpError`); the admin router and MCP tools are thin callers. Evaluator
   configuration, scheduling, queue, lease, and run lifecycle logic lives in
